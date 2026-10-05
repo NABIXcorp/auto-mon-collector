@@ -531,3 +531,77 @@ func TestApplyAdoptsACLsFromAnOlderInstaller(t *testing.T) {
 		t.Error("readable file must not get a new ACL")
 	}
 }
+
+func runWithSecretsInput(t *testing.T, h host, r *fakeRunner, apply bool, in map[string]string, answers []byte) (Result, string) {
+	t.Helper()
+	var out bytes.Buffer
+	d := desired()
+	d.Answers = answers
+	res, err := Run(context.Background(), Options{
+		Root: h.root, Apply: apply, Arch: "amd64", SkipRootCheck: true, RootUID: os.Getuid(), StartWait: time.Millisecond,
+		Out: &out, Runner: r, SecretsInput: in,
+		Now:   func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) },
+		Chown: func(string, int, int) error { return nil },
+	}, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res, out.String()
+}
+
+var typed = map[string]string{"OO_ENDPOINT": "https://backend.example.com", "OO_AUTH": "Basic dHlwZWQ=",
+	"ORACLE_MON_PASSWORD": "typed123", "UNRELATED": "dropped"}
+
+func TestTypedSecretsStayInMemoryInCheckMode(t *testing.T) {
+	h := newHost(t)
+	h.write("/opt/monitoring/bin/otelcol-contrib", "BIN", 0o755)
+	r := &fakeRunner{version: collector.Version, readable: true}
+	res, out := runWithSecretsInput(t, h, r, false, typed, []byte("services: {}\n"))
+	if res.Failures != 0 || !strings.Contains(out, "would: write /opt/monitoring/secrets/collector.env (3 keys, root 600)") {
+		t.Fatalf("%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "opt/monitoring/secrets/collector.env")); err == nil {
+		t.Error("check mode wrote the secrets file")
+	}
+	if !strings.Contains(strings.Join(r.envSeen, " "), "ORACLE_MON_PASSWORD=typed123") {
+		t.Error("validate must get the typed secrets")
+	}
+	if strings.Contains(out, "typed123") || strings.Contains(out, "dHlwZWQ=") {
+		t.Errorf("a typed secret was printed:\n%s", out)
+	}
+	if !strings.Contains(out, "NEW    answers.yaml") {
+		t.Errorf("answers.yaml must be a managed file:\n%s", out)
+	}
+}
+
+func TestTypedSecretsWrittenRoot600OnApply(t *testing.T) {
+	needSymlinks(t)
+	h := newHost(t)
+	h.write("/opt/monitoring/bin/otelcol-contrib", "BIN", 0o755)
+	r := &fakeRunner{version: collector.Version, readable: true}
+	if res, out := runWithSecretsInput(t, h, r, true, typed, []byte("services: {}\n")); res.Failures != 0 {
+		t.Fatalf("%s", out)
+	}
+	p := filepath.Join(h.root, "opt/monitoring/secrets/collector.env")
+	fi, err := os.Stat(p)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("secrets file: %v %v", fi, err)
+	}
+	b, _ := os.ReadFile(p)
+	want := "OO_ENDPOINT='https://backend.example.com'\nOO_AUTH='Basic dHlwZWQ='\nORACLE_MON_PASSWORD='typed123'\n"
+	if string(b) != want {
+		t.Errorf("secrets file = %q (only the wanted keys, in order)", b)
+	}
+	if h.read("/opt/monitoring/answers.yaml") != "services: {}\n" {
+		t.Error("answers.yaml not written")
+	}
+}
+
+func TestTypedSecretsMissingKeyFails(t *testing.T) {
+	h := newHost(t)
+	r := &fakeRunner{version: collector.Version}
+	res, out := runWithSecretsInput(t, h, r, false, map[string]string{"OO_ENDPOINT": "x"}, nil)
+	if res.Failures == 0 || !strings.Contains(out, "key OO_AUTH missing") {
+		t.Errorf("%s", out)
+	}
+}

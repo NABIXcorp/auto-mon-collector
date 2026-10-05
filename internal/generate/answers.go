@@ -14,23 +14,23 @@ import (
 
 // Answers is everything a scan cannot know (docs/design.md, section 9). No secrets in here.
 type Answers struct {
-	Services map[string]Service `yaml:"services"`
+	Services map[string]Service `yaml:"services,omitempty"`
 	Checks   struct {
-		HTTP []HTTPCheck `yaml:"http"`
-	} `yaml:"checks"`
+		HTTP []HTTPCheck `yaml:"http,omitempty"`
+	} `yaml:"checks,omitempty"`
 }
 
 // Service is one service's answers. Enabled nil = default (on when detected and amc has a profile).
 type Service struct {
-	Enabled *bool  `yaml:"enabled"`
-	Service string `yaml:"service"` // oracle: service name (ORACLE_SERVICE), e.g. the PDB
-	User    string `yaml:"user"`    // oracle: monitoring user (ORACLE_MON_USER)
+	Enabled *bool  `yaml:"enabled,omitempty"`
+	Service string `yaml:"service,omitempty"` // oracle: service name (ORACLE_SERVICE), e.g. the PDB
+	User    string `yaml:"user,omitempty"`    // oracle: monitoring user (ORACLE_MON_USER)
 }
 
 // HTTPCheck is one up check. URLs are labels used by alerts and dashboards: keep them stable.
 type HTTPCheck struct {
 	URL     string `yaml:"url"`
-	Comment string `yaml:"comment"`
+	Comment string `yaml:"comment,omitempty"`
 }
 
 // LoadAnswers reads an answers file (unknown keys are an error: a typo must not be ignored silently).
@@ -45,10 +45,11 @@ func LoadAnswers(path string) (Answers, error) {
 	if err := dec.Decode(&a); err != nil {
 		return a, fmt.Errorf("%s: %w", path, err)
 	}
-	return a, a.check()
+	return a, a.Validate()
 }
 
-func (a Answers) check() error {
+// Validate rejects unknown services, non-http(s) URLs and URLs with credentials.
+func (a Answers) Validate() error {
 	for _, c := range a.Checks.HTTP {
 		u, err := url.Parse(c.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -66,4 +67,17 @@ func (a Answers) check() error {
 		}
 	}
 	return nil
+}
+
+// Marshal writes the answers as YAML for <prefix>/answers.yaml (the defaults of the next run). No secrets.
+func (a Answers) Marshal() ([]byte, error) {
+	b, err := yaml.Marshal(a)
+	if err != nil {
+		return nil, err
+	}
+	head := "# amc answers: what a scan cannot know (no secrets). Written by amc; the next run uses them as defaults.\n"
+	if string(b) == "{}\n" {
+		b = nil
+	}
+	return append([]byte(head), b...), nil
 }

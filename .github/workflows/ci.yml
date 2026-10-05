@@ -84,6 +84,18 @@ jobs:
           must 'monitoring: oracle, tomcat' plan-gen.txt
           must 'validate: VALID' plan-gen.txt
           must 'no load / start errors' plan-gen.txt
+          # Interactive on a REAL terminal (script = pseudo-tty, so /dev/tty works as over SSH): Enter for the
+          # service list, a PDB name, Enter for user + HTTP checks, then "n" for "Apply now?".
+          echo "::group::interactive plan (pseudo-terminal)"
+          printf '\napppdb\n\n\nn\n' | sudo script -qec "$amc plan --detect-json examples/app-host/detect.json" /dev/null | tee interactive.txt
+          echo "::endgroup::"
+          must 'Monitor \[oracle, redis, tomcat\]?' interactive.txt
+          must 'Oracle service name \[orcl\]' interactive.txt
+          must 'NEW    answers.yaml' interactive.txt
+          must 'CHECK done: 0 failures' interactive.txt
+          must 'Apply now?' interactive.txt
+          if grep -q '^DONE:' interactive.txt; then die "answered n to Apply now, but it applied"; fi
+          [ ! -e /opt/monitoring/answers.yaml ] || die "plan wrote answers.yaml"
           echo "::group::apply --start"
           sudo $amc apply --host-dir examples/oracle-db --start | tee apply.txt
           echo "::endgroup::"

@@ -53,6 +53,9 @@ type Options struct {
 	// Rollback: with Start, if a unit is not active afterwards, go back to the state before this apply
 	// (backup + previous collector binary); a first install is stopped + disabled instead.
 	Rollback bool
+	// SecretsInput: values typed by the operator, used ONLY when secrets/collector.env is missing. Check mode
+	// keeps them in memory (validate + smoke run); apply writes the file (root 600). Never printed.
+	SecretsInput map[string]string
 
 	SkipRootCheck bool          // tests only
 	RootUID       int           // uid that must own the secrets file; 0 = root (tests use their own uid)
@@ -74,6 +77,7 @@ type Desired struct {
 	ReadFiles  []string          // files the collector must read (ACL u:<user>:r, traverse on parents)
 	Groups     []string          // extra groups for the collector user (e.g. the Tomcat group for its logs)
 	Version    []byte            // VERSION file content
+	Answers    []byte            // <prefix>/answers.yaml (the operator's answers, no secrets); nil = not managed
 }
 
 // Result of a run.
@@ -410,6 +414,9 @@ func (e *eng) desiredFiles() ([]file, error) {
 	files = append(files,
 		file{"netconn/otel-netconn.sh", assets.Netconn(), 0o755},
 		file{"VERSION", e.d.Version, 0o644})
+	if e.d.Answers != nil {
+		files = append(files, file{"answers.yaml", e.d.Answers, 0o644})
+	}
 	return files, nil
 }
 
@@ -470,13 +477,43 @@ func (e *eng) nologin() string {
 
 // ---- 3. secrets -----------------------------------------------------------------------------------------
 
+// secretsFromInput uses typed values when the secrets file does not exist yet: in memory in check mode,
+// written root 600 in apply mode. Only the wanted keys are kept and written.
+func (e *eng) secretsFromInput(p string) bool {
+	in := map[string]string{}
+	missing := false
+	for _, k := range e.d.SecretKeys {
+		if v := e.o.SecretsInput[k]; v != "" {
+			in[k] = v
+			e.r.ok("key %s given (typed, not shown)", k)
+		} else {
+			e.r.fail("key %s missing", k)
+			missing = true
+		}
+	}
+	if missing {
+		return true
+	}
+	b, err := envfile.Format(e.d.SecretKeys, in)
+	if err != nil {
+		e.r.fail("secrets: %v", err) // the error names the key, never the value
+		return true
+	}
+	e.secrets = in
+	e.do(fmt.Sprintf("write %s (%d keys, root 600)", p, len(in)), func() error { return e.writeFile(p, b, 0o600) })
+	return true
+}
+
 func (e *eng) checkSecrets(context.Context, string) bool {
 	e.r.step("3. secrets (keys only, values are never shown)")
 	p := e.pre("secrets/collector.env")
 	fi, err := os.Stat(e.fs(p))
 	if err != nil || fi.Size() == 0 {
-		e.r.fail("%s missing: needs %s (root, mode 600)", p, strings.Join(e.d.SecretKeys, " "))
-		return true
+		if len(e.o.SecretsInput) == 0 {
+			e.r.fail("%s missing: needs %s (root, mode 600)", p, strings.Join(e.d.SecretKeys, " "))
+			return true
+		}
+		return e.secretsFromInput(p)
 	}
 	if ok, is := rootOnly600(fi, e.o.RootUID); ok {
 		e.r.ok("%s root 600", p)

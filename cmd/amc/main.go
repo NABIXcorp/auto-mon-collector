@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/NABIXcorp/auto-mon-collector/internal/ask"
 	"github.com/NABIXcorp/auto-mon-collector/internal/detect"
 	"github.com/NABIXcorp/auto-mon-collector/internal/engine"
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
@@ -125,27 +126,37 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if (*hostDir == "") == (*answers == "") {
-		fmt.Fprintln(stderr, "amc: give --answers FILE (detect + generate) or --host-dir DIR (prepared host part)")
+	if *hostDir != "" && *answers != "" {
+		fmt.Fprintln(stderr, "amc: give --answers FILE or --host-dir DIR, not both")
 		return exitUsage
 	}
 	if *start && !apply {
 		fmt.Fprintln(stderr, "amc: --start only works with apply")
 		return exitUsage
 	}
-	var d engine.Desired
-	var err error
-	if *hostDir != "" {
+	var (
+		d       engine.Desired
+		secrets map[string]string
+		p       ask.Prompter // set = interactive
+		err     error
+	)
+	switch {
+	case *hostDir != "":
 		d, err = hostdir.Load(*hostDir)
-	} else {
-		var g generate.Output
-		if g, err = hostPart(*answers, *detectFile); err == nil {
-			printGenerated(stdout, g)
-			var site map[string][]byte
-			if site, err = hostdir.LoadSite(*siteDir); err == nil {
-				d, err = hostdir.Build(g.HostYAML, g.HostEnv, site, "generated")
-			}
+	case *answers != "":
+		var a generate.Answers
+		if a, err = generate.LoadAnswers(*answers); err == nil {
+			d, err = desiredFrom(stdout, a, *detectFile, *siteDir)
 		}
+	default: // no answers file: ask on the terminal (previous answers are the defaults)
+		tty, terr := openPrompter()
+		if terr != nil {
+			fmt.Fprintf(stderr, "amc: %v (example: examples/app-host/answers.yaml)\n", terr)
+			return exitUsage
+		}
+		defer tty.Close()
+		p = tty
+		d, secrets, err = interview(stdout, p, *prefix, *detectFile, *siteDir)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "amc: %v\n", err)
@@ -153,11 +164,21 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	res, err := runEngine(ctx, engine.Options{
+	opts := engine.Options{
 		Prefix: *prefix, User: *user, Apply: apply, Start: *start, Fetch: !*noFetch, Smoke: !*noSmoke,
-		Rollback: !*noRollback,
-		Out:      stdout, Runner: sysexec.Runner{},
-	}, d)
+		Rollback: !*noRollback, SecretsInput: secrets,
+		Out: stdout, Runner: sysexec.Runner{},
+	}
+	res, err := runEngine(ctx, opts, d)
+	if err == nil && p != nil && !apply && res.Failures == 0 {
+		// docs/design.md 6a: finish in one run, but only after a clean plan, the diff shown first
+		yes, aerr := p.YesNo("\nApply now? (backup first, start, automatic rollback if it does not start)", true)
+		if aerr == nil && yes {
+			opts.Apply, opts.Start, opts.Rollback = true, true, true
+			opts.Smoke = false // the identical configuration passed the smoke run seconds ago
+			res, err = runEngine(ctx, opts, d)
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "amc: %v\n", err)
 		if errors.Is(err, context.Canceled) {
@@ -169,6 +190,90 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		return exitPlan
 	}
 	return exitOK
+}
+
+// promptCloser is a Prompter on a terminal.
+type promptCloser interface {
+	ask.Prompter
+	Close() error
+}
+
+// openPrompter is replaced in tests.
+var openPrompter = func() (promptCloser, error) { return ask.OpenTTY() }
+
+// scan detects live, or reads a saved "amc detect --json".
+func scan(detectPath string) (generate.Host, error) {
+	if detectPath == "" {
+		snap := detect.Collect(detectSource)
+		return generate.Host{Findings: detect.Detect(snap, detectSource), TimeZone: snap.TimeZone}, nil
+	}
+	b, err := os.ReadFile(detectPath)
+	if err != nil {
+		return generate.Host{}, err
+	}
+	var dj detectJSON
+	if err := json.Unmarshal(b, &dj); err != nil {
+		return generate.Host{}, fmt.Errorf("%s: %w", detectPath, err)
+	}
+	return generate.Host{Findings: dj.Findings, TimeZone: dj.TimeZone}, nil
+}
+
+// desiredFrom generates the host part from answers and builds what the engine installs, incl. answers.yaml.
+func desiredFrom(w io.Writer, a generate.Answers, detectPath, siteDir string) (engine.Desired, error) {
+	h, err := scan(detectPath)
+	if err != nil {
+		return engine.Desired{}, err
+	}
+	return build(w, h, a, siteDir)
+}
+
+func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string) (engine.Desired, error) {
+	g, err := generate.Generate(h, a)
+	if err != nil {
+		return engine.Desired{}, err
+	}
+	printGenerated(w, g)
+	site, err := hostdir.LoadSite(siteDir)
+	if err != nil {
+		return engine.Desired{}, err
+	}
+	d, err := hostdir.Build(g.HostYAML, g.HostEnv, site, "generated")
+	if err != nil {
+		return d, err
+	}
+	d.Answers, err = a.Marshal()
+	return d, err
+}
+
+// interview: scan, ask (saved answers = defaults), generate; ask for secrets when the secrets file is missing.
+func interview(w io.Writer, p ask.Prompter, prefix, detectPath, siteDir string) (engine.Desired, map[string]string, error) {
+	h, err := scan(detectPath)
+	if err != nil {
+		return engine.Desired{}, nil, err
+	}
+	var prev generate.Answers
+	saved := filepath.Join(prefix, "answers.yaml")
+	if _, err := os.Stat(saved); err == nil {
+		if prev, err = generate.LoadAnswers(saved); err != nil {
+			return engine.Desired{}, nil, err
+		}
+		p.Say("defaults from %s\n", saved)
+	}
+	a, err := ask.Interview(h.Findings, prev, p)
+	if err != nil {
+		return engine.Desired{}, nil, err
+	}
+	d, err := build(w, h, a, siteDir)
+	if err != nil {
+		return d, nil, err
+	}
+	var secrets map[string]string
+	if fi, err := os.Stat(filepath.Join(prefix, "secrets", "collector.env")); err != nil || fi.Size() == 0 {
+		if secrets, err = ask.Secrets(p, d.SecretKeys, ""); err != nil {
+			return d, nil, err
+		}
+	}
+	return d, secrets, nil
 }
 
 // detectSource is replaced in tests.
@@ -183,26 +288,15 @@ type detectJSON struct {
 	Findings []detect.Finding `json:"findings"`
 }
 
-// hostPart detects (live, or from a saved `amc detect --json`) and generates host.yaml + host.env.
+// hostPart detects (live, or from a saved "amc detect --json") and generates host.yaml + host.env.
 func hostPart(answersPath, detectPath string) (generate.Output, error) {
 	a, err := generate.LoadAnswers(answersPath)
 	if err != nil {
 		return generate.Output{}, err
 	}
-	var h generate.Host
-	if detectPath != "" {
-		b, err := os.ReadFile(detectPath)
-		if err != nil {
-			return generate.Output{}, err
-		}
-		var dj detectJSON
-		if err := json.Unmarshal(b, &dj); err != nil {
-			return generate.Output{}, fmt.Errorf("%s: %w", detectPath, err)
-		}
-		h = generate.Host{Findings: dj.Findings, TimeZone: dj.TimeZone}
-	} else {
-		snap := detect.Collect(detectSource)
-		h = generate.Host{Findings: detect.Detect(snap, detectSource), TimeZone: snap.TimeZone}
+	h, err := scan(detectPath)
+	if err != nil {
+		return generate.Output{}, err
 	}
 	return generate.Generate(h, a)
 }
