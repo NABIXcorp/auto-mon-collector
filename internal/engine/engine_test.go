@@ -185,10 +185,11 @@ func TestApplyStartAndIdempotent(t *testing.T) {
 	if !strings.Contains(joined, "ORACLE_MON_PASSWORD=123456") || r.has("123456") {
 		t.Errorf("secrets must reach validate only via env; env=%v", r.envSeen)
 	}
-	// second run: nothing to change
+	// second run: no file changes (the fake runner does not edit /etc/group, so "would: usermod" may remain)
 	r2 := &fakeRunner{version: collector.Version, readable: true}
 	_, out2 := run(t, h, r2, false, false, true)
-	if strings.Contains(out2, "CHANGE") || strings.Contains(out2, "NEW ") || !strings.Contains(out2, "CHECK done: 0 failures") {
+	if strings.Contains(out2, "\n  CHANGE ") || strings.Contains(out2, "\n  NEW    ") ||
+		!strings.Contains(out2, "CHECK done: 0 failures") {
 		t.Errorf("second run is not clean:\n%s", out2)
 	}
 }
