@@ -3,8 +3,8 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: early development (phase 2).** The install engine works with a prepared host directory
-> (`amc plan|apply --host-dir DIR`); host detection and questions come next. Design: [docs/design.md](docs/design.md).
+> **Status: early development (phase 3 done).** Detection, generator, interactive questions and the install
+> engine work and are tested on real hosts; signed releases and the one-liner come next. Design: [docs/design.md](docs/design.md).
 
 ## What it will do
 
@@ -30,15 +30,17 @@ Data goes over OTLP to any backend (OpenObserve first).
 - Every value has a sensible default: a normal install is Enter, Enter, password.
 - The same answers file installs the same configuration without questions (`--answers … --yes`).
 
-## Try it now (phase 2)
+## Try it now (build from source, as root)
 
 ```bash
-# host part: host.yaml + host.env (+ optional site.d/*.yaml), see examples/oracle-db
-# secrets:   /opt/monitoring/secrets/collector.env (root 600): OO_ENDPOINT, OO_AUTH[, ORACLE_MON_PASSWORD]
-sudo amc plan  --host-dir examples/oracle-db            # check mode: diff + validate, changes nothing
-sudo amc apply --host-dir examples/oracle-db --start    # backup, install, smoke run, start, check, rollback on failure
-sudo amc uninstall                                       # check mode; --yes removes (secrets / data / user kept unless --purge*)
+sudo amc detect                       # read-only: what runs on this host
+sudo amc                              # asks what a scan cannot know, then a full plan; "Apply now?" at the end
+sudo amc plan --answers answers.yaml  # the same without questions (automation), see examples/app-host
+sudo amc uninstall                    # check mode; --yes removes (secrets / data / user kept unless --purge*)
 ```
+
+Secrets (backend auth header, database password) are typed hidden or come from
+`/opt/monitoring/secrets/collector.env` (root 600); they are never shown, logged or stored in `answers.yaml`.
 
 ## Building
 
