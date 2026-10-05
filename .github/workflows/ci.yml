@@ -92,6 +92,20 @@ jobs:
           # plan2 ran its smoke collector NEXT TO the live one: no port conflict, live collector untouched
           must 'no load / start errors' plan2.txt
           systemctl is-active monitoring-otelcol || die "the smoke run disturbed the live collector"
+          # Broken update: OTLP on 1521 (held by the fake listener). validate passes (it binds nothing), the
+          # smoke run is skipped -> the collector really fails to start -> amc must roll back.
+          echo "::group::broken update (must roll back)"
+          cp -r examples/oracle-db broken && mkdir -p broken/site.d
+          printf 'receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 127.0.0.1:1521\n' > broken/site.d/99-broken.yaml
+          set +e; sudo $amc apply --host-dir broken --start --no-smoke | tee broken.txt; rc=${PIPESTATUS[0]}; set -e
+          echo "::endgroup::"
+          [ "$rc" -eq 1 ] || die "a rolled-back apply must exit 1 (got $rc)"
+          must 'ROLLED BACK' broken.txt
+          must 'rolled back: the previous state runs again' broken.txt
+          systemctl is-active monitoring-otelcol || die "previous state not running after the rollback"
+          [ ! -e /opt/monitoring/config/site.d/99-broken.yaml ] || die "the broken file survived the rollback"
+          sudo $amc plan --host-dir examples/oracle-db --no-smoke | tee plan3.txt
+          if grep -E '^  (CHANGE|NEW|REMOVE) ' plan3.txt; then die "after the rollback the host is not back to the good state"; fi
       - name: No secrets (gitleaks, full history)
         run: |
           v=8.18.4; b=https://github.com/gitleaks/gitleaks/releases/download/v$v

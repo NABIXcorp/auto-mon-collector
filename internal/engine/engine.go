@@ -50,6 +50,9 @@ type Options struct {
 	Start bool // with Apply: (re)start the units and check them
 	Fetch bool // download the pinned collector if missing / other version
 	Smoke bool // after validate: run the new config for SmokeTime against a local sink
+	// Rollback: with Start, if a unit is not active afterwards, go back to the state before this apply
+	// (backup + previous collector binary); a first install is stopped + disabled instead.
+	Rollback bool
 
 	SkipRootCheck bool          // tests only
 	RootUID       int           // uid that must own the secrets file; 0 = root (tests use their own uid)
@@ -77,6 +80,7 @@ type Desired struct {
 type Result struct {
 	Failures, Warnings int
 	Applied            bool
+	RolledBack         bool // the units did not start; the previous state was restored (or a first install stopped)
 }
 
 type file struct {
@@ -91,7 +95,13 @@ type eng struct {
 	r       report
 	secrets map[string]string // values: never printed
 	bin     string            // collector binary usable for validate ("" = none)
-	files   []file
+
+	// what this apply changed, for the rollback
+	firstInstall bool   // there was no config.yaml before
+	backupDir    string // backup of the files before this apply ("" = files unchanged)
+	binReplaced  bool   // the previous binary is in bin/otelcol-contrib.previous
+	rolledBack   bool
+	files        []file
 }
 
 const backupsKept = 10
@@ -171,7 +181,12 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	if o.Start && e.r.failures == 0 {
 		e.start(ctx)
 	}
-	res = Result{Failures: e.r.failures, Warnings: e.r.warnings, Applied: true}
+	res = Result{Failures: e.r.failures, Warnings: e.r.warnings, Applied: true, RolledBack: e.rolledBack}
+	if e.rolledBack {
+		fmt.Fprintf(o.Out, "\nROLLED BACK: %d failure(s), %d warning(s). The new configuration is NOT active.\n",
+			res.Failures, res.Warnings)
+		return res, nil
+	}
 	ver := strings.ReplaceAll(strings.TrimSpace(string(d.Version)), "\n", " ")
 	fmt.Fprintf(o.Out, "\nDONE: %d failure(s), %d warning(s). Installed: %s\n", res.Failures, res.Warnings, ver)
 	return res, nil
@@ -498,6 +513,13 @@ func (e *eng) collectorBinary(ctx context.Context, tmp string) bool {
 		if err != nil {
 			return err
 		}
+		// keep the binary that worked until now, once (a backup per apply would cost ~300 MB each)
+		if _, err := os.Stat(e.fs(bin)); err == nil {
+			if err := os.Rename(e.fs(bin), e.fs(bin+".previous")); err != nil {
+				return err
+			}
+			e.binReplaced = true
+		}
 		if err := e.writeFile(bin, data, 0o755); err != nil {
 			return err
 		}
@@ -537,12 +559,15 @@ func (e *eng) installFiles(context.Context, string) bool {
 		return true
 	}
 	if _, err := os.Stat(e.fs(e.pre("config/config.yaml"))); err == nil {
-		if b, err := e.backup(); err != nil {
+		b, err := e.backup()
+		if err != nil {
 			e.r.fail("backup: %v", err)
 			return false
-		} else {
-			e.r.ok("backup -> %s", b)
 		}
+		e.backupDir = b
+		e.r.ok("backup -> %s", b)
+	} else {
+		e.firstInstall = true
 	}
 	for _, f := range e.files {
 		if err := e.writeFile(e.pre(f.rel), f.data, f.mode); err != nil {
@@ -599,7 +624,11 @@ func copyTree(src, dst string) error {
 		return err
 	}
 	if fi.IsDir() {
-		if err := os.MkdirAll(dst, 0o700); err != nil {
+		// keep the directory mode: a restored config/ must stay readable for the collector user
+		if err := os.MkdirAll(dst, fi.Mode().Perm()); err != nil {
+			return err
+		}
+		if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
 			return err
 		}
 		entries, err := os.ReadDir(src)
@@ -810,28 +839,52 @@ func (e *eng) units() {
 	e.r.ok("linked + enabled: %s", strings.Join(names, " "))
 }
 
-func (e *eng) start(ctx context.Context) {
-	e.r.step("10. restart + check")
+func unitFiles() []string {
 	var names []string
 	for _, u := range assets.UnitNames {
 		names = append(names, u+".service")
 	}
-	if err := e.o.Runner.Run("systemctl", append([]string{"restart"}, names...)...); err != nil {
+	return names
+}
+
+func (e *eng) start(ctx context.Context) {
+	e.r.step("10. restart + check")
+	if e.restartAndCheck(ctx, false) || !e.o.Rollback || ctx.Err() != nil {
+		return
+	}
+	e.rollback(ctx)
+}
+
+// restartAndCheck restarts the units, waits, and reports. quiet = rollback check (no failure counted again).
+func (e *eng) restartAndCheck(ctx context.Context, quiet bool) bool {
+	names := unitFiles()
+	if err := e.o.Runner.Run("systemctl", append([]string{"restart"}, names...)...); err != nil && !quiet {
 		e.r.fail("systemctl restart: %v", err)
 	}
 	select {
 	case <-ctx.Done():
-		return
+		return false
 	case <-time.After(e.o.StartWait):
 	}
+	all := true
 	for _, n := range names {
-		if e.o.Runner.Run("systemctl", "is-active", "-q", n) == nil {
+		switch {
+		case e.o.Runner.Run("systemctl", "is-active", "-q", n) == nil:
 			e.r.ok("%s active", n)
-		} else {
+		case quiet:
+			all = false
+			e.r.line("still NOT active: %s", n)
+		default:
+			all = false
 			e.r.fail("%s NOT active: journalctl -u %s", n, n)
 		}
 	}
-	out, _ := e.o.Runner.Output(nil, "journalctl", "-u", names[0], "--since", "-1min", "--no-pager", "-o", "cat")
+	e.journalErrors(names[0])
+	return all
+}
+
+func (e *eng) journalErrors(unit string) {
+	out, _ := e.o.Runner.Output(nil, "journalctl", "-u", unit, "--since", "-1min", "--no-pager", "-o", "cat")
 	var bad []string
 	for _, l := range strings.Split(string(out), "\n") {
 		ll := strings.ToLower(l)

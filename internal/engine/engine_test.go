@@ -26,6 +26,7 @@ type fakeRunner struct {
 	smokeEnv []string
 	smokeErr error
 	stopped  bool // the stop callback asked for an early stop
+	inactive int  // the next N `systemctl is-active` calls report "not active"
 }
 
 func (f *fakeRunner) Timed(_ context.Context, env []string, _ time.Duration, stop func(string) bool,
@@ -51,6 +52,9 @@ func (f *fakeRunner) Run(name string, args ...string) error {
 		return os.ErrNotExist
 	case name == "runuser" && !f.readable:
 		return os.ErrPermission
+	case name == "systemctl" && args[0] == "is-active" && f.inactive > 0:
+		f.inactive--
+		return os.ErrProcessDone
 	}
 	return nil
 }
@@ -358,5 +362,86 @@ func TestLineDiff(t *testing.T) {
 	d, add, del := lineDiff("a\nb\nc\nd\n", "a\nB\nc\nd\ne\n")
 	if add != 2 || del != 1 || !strings.Contains(d, "-b\n+B\n") || !strings.Contains(d, "+e\n") {
 		t.Errorf("diff (+%d -%d):\n%s", add, del, d)
+	}
+}
+
+// installed writes a previous, working installation.
+func installed(t *testing.T) host {
+	h := smokeHost(t)
+	for _, f := range []string{"config/config.yaml", "config/host.yaml", "systemd/monitoring-otelcol.service", "VERSION"} {
+		h.write("/opt/monitoring/"+f, "old "+f+"\n", 0o644)
+	}
+	h.write("/opt/monitoring/bin/otelcol-contrib", "OLD-BIN", 0o755)
+	return h
+}
+
+func TestRollbackRestoresFilesWhenAUnitDoesNotStart(t *testing.T) {
+	needSymlinks(t)
+	h := installed(t)
+	r := &fakeRunner{version: collector.Version, readable: true, inactive: 1}
+	res, out := run(t, h, r, true, true, false)
+	if !res.RolledBack || res.Failures == 0 {
+		t.Fatalf("want a rollback with a failure:\n%s", out)
+	}
+	if got := h.read("/opt/monitoring/config/config.yaml"); got != "old config/config.yaml\n" {
+		t.Errorf("config.yaml not restored: %q", got)
+	}
+	if got := h.read("/opt/monitoring/VERSION"); got != "old VERSION\n" {
+		t.Errorf("VERSION not restored: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "opt/monitoring/config/site.d/10-site.yaml")); err == nil {
+		t.Error("a file added by the failed apply survived the rollback")
+	}
+	fi, err := os.Stat(filepath.Join(h.root, "opt/monitoring/config"))
+	if err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("restored config/ must stay 755 (collector reads it): %v %v", fi.Mode(), err)
+	}
+	for _, want := range []string{"10b. rollback", "files restored from", "rolled back: the previous state runs again",
+		"ROLLED BACK:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRollbackRestoresThePreviousBinary(t *testing.T) {
+	needSymlinks(t)
+	h := installed(t)
+	r := &fakeRunner{version: "0.159.0", readable: true, inactive: 1} // installed binary is older -> replaced
+	res, out := run(t, h, r, true, true, true)
+	if !res.RolledBack {
+		t.Fatalf("%s", out)
+	}
+	if got := h.read("/opt/monitoring/bin/otelcol-contrib"); got != "OLD-BIN" {
+		t.Errorf("binary not restored: %q", got)
+	}
+}
+
+func TestRollbackFirstInstallStopsAndDisables(t *testing.T) {
+	needSymlinks(t)
+	h := smokeHost(t)
+	r := &fakeRunner{version: collector.Version, readable: true, inactive: 99}
+	res, out := run(t, h, r, true, true, false)
+	if !res.RolledBack || !r.has("systemctl stop") || !r.has("systemctl disable") {
+		t.Fatalf("first install must be stopped + disabled:\n%s", out)
+	}
+	if r.has("systemctl daemon-reload") && strings.Count(strings.Join(r.cmds, "\n"), "systemctl restart") > 1 {
+		t.Error("first install must not be restarted again")
+	}
+}
+
+func TestNoRollbackWhenNothingChanged(t *testing.T) {
+	needSymlinks(t)
+	h := smokeHost(t)
+	if res, out := run(t, h, &fakeRunner{version: collector.Version, readable: true}, true, true, false); res.Failures != 0 {
+		t.Fatalf("first apply: %s", out)
+	}
+	r := &fakeRunner{version: collector.Version, readable: true, inactive: 99}
+	res, out := run(t, h, r, true, true, false)
+	if res.RolledBack || !strings.Contains(out, "nothing to undo") {
+		t.Errorf("unchanged apply must not roll back:\n%s", out)
+	}
+	if r.has("systemctl disable") {
+		t.Error("a working installation must never be disabled by a rollback")
 	}
 }

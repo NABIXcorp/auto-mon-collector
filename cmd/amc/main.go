@@ -31,6 +31,7 @@ Flags (plan / apply):
   --user NAME      collector user (default otelcol-contrib)
   --no-fetch       do not download the pinned collector when it is missing or another version
   --no-smoke       skip the 25 s test run of the new config (local sink, nothing sent to the backend)
+  --no-rollback    (apply --start) keep the new state even when a unit does not start
   --start          (apply) restart the units and check them
 
 Not yet available: detect, sql, uninstall, interactive questions (see docs/design.md, section 14).
@@ -77,6 +78,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	user := fs.String("user", "otelcol-contrib", "")
 	noFetch := fs.Bool("no-fetch", false, "")
 	noSmoke := fs.Bool("no-smoke", false, "")
+	noRollback := fs.Bool("no-rollback", false, "")
 	start := fs.Bool("start", false, "")
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	if err := fs.Parse(args); err != nil {
@@ -99,7 +101,8 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	res, err := runEngine(ctx, engine.Options{
 		Prefix: *prefix, User: *user, Apply: apply, Start: *start, Fetch: !*noFetch, Smoke: !*noSmoke,
-		Out: stdout, Runner: sysexec.Runner{},
+		Rollback: !*noRollback,
+		Out:      stdout, Runner: sysexec.Runner{},
 	}, d)
 	if err != nil {
 		fmt.Fprintf(stderr, "amc: %v\n", err)
