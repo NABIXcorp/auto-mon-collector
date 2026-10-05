@@ -38,6 +38,34 @@ jobs:
           done
           file dist/*
           ./dist/amc-linux-amd64 version
+      - name: End to end on this runner (real collector, systemd, ACLs; fake backend and secrets)
+        run: |
+          sudo apt-get install -y -qq acl > /dev/null
+          alert=/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log
+          sudo install -d -m 750 "$(dirname "$alert")" && echo "2026-10-05T10:00:00.000000+00:00" | sudo tee "$alert" > /dev/null
+          sudo chmod 640 "$alert"                         # root only: amc must grant the collector an ACL
+          sudo install -d -m 700 /opt/monitoring/secrets
+          printf "OO_ENDPOINT='http://127.0.0.1:9'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n" \
+            | sudo tee /opt/monitoring/secrets/collector.env > /dev/null
+          sudo chmod 600 /opt/monitoring/secrets/collector.env
+          amc=./dist/amc-linux-amd64
+          echo "::group::plan (check mode)"
+          sudo $amc plan --host-dir examples/oracle-db | tee plan1.txt
+          echo "::endgroup::"
+          grep -q 'validate: VALID' plan1.txt && grep -q 'CHECK done: 0 failures' plan1.txt
+          [ ! -e /etc/systemd/system/monitoring-otelcol.service ] || { echo "plan changed the system"; exit 1; }
+          echo "::group::apply --start"
+          sudo $amc apply --host-dir examples/oracle-db --start | tee apply.txt
+          echo "::endgroup::"
+          grep -q 'monitoring-otelcol.service active' apply.txt
+          systemctl is-active monitoring-otelcol monitoring-netconn
+          sudo runuser -u otelcol-contrib -- test -r "$alert" && echo "alert log readable via ACL"
+          ! id -nG otelcol-contrib | grep -qwE 'root|sudo|adm' || { echo "collector user in an admin group"; exit 1; }
+          echo "::group::plan again (must be unchanged)"
+          sudo $amc plan --host-dir examples/oracle-db | tee plan2.txt
+          echo "::endgroup::"
+          ! grep -E '^  (CHANGE|NEW|REMOVE) ' plan2.txt | grep -v ' VERSION' || { echo "second plan is not clean"; exit 1; }
+          grep -q 'CHECK done: 0 failures' plan2.txt
       - name: No secrets (gitleaks, full history)
         run: |
           v=8.18.4; b=https://github.com/gitleaks/gitleaks/releases/download/v$v

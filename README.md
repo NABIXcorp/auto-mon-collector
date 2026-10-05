@@ -3,7 +3,8 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: early development.** Nothing is usable yet. The design is in [docs/design.md](docs/design.md).
+> **Status: early development (phase 2).** The install engine works with a prepared host directory
+> (`amc plan|apply --host-dir DIR`); host detection and questions come next. Design: [docs/design.md](docs/design.md).
 
 ## What it will do
 
@@ -28,6 +29,15 @@ Data goes over OTLP to any backend (OpenObserve first).
 - The collector runs as its own user with read access to single files only.
 - Every value has a sensible default: a normal install is Enter, Enter, password.
 - The same answers file installs the same configuration without questions (`--answers … --yes`).
+
+## Try it now (phase 2)
+
+```bash
+# host part: host.yaml + host.env (+ optional site.d/*.yaml), see examples/oracle-db
+# secrets:   /opt/monitoring/secrets/collector.env (root 600): OO_ENDPOINT, OO_AUTH[, ORACLE_MON_PASSWORD]
+sudo amc plan  --host-dir examples/oracle-db            # check mode: diff + validate, changes nothing
+sudo amc apply --host-dir examples/oracle-db --start    # backup, install, start, check
+```
 
 ## Building
 
