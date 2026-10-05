@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# get.sh: download, VERIFY and start amc (auto-mon-collector).
+#
+#   curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh | sudo bash
+#   ... | sudo bash -s -- plan --answers answers.yaml        (arguments go to amc; default: interactive plan)
+#   AMC_VERSION=v0.1.0 ... (pin a release instead of latest)
+#
+# Trust: SHA256SUMS is signed (ECDSA P-256, openssl). The public key is embedded below. The binary runs only
+# if the signature AND its sha256 match. Without openssl this script stops: it never skips the check.
+# Prefer to read it first: curl -fsSLO .../get.sh && less get.sh && sudo bash get.sh
+set -euo pipefail
+
+main() {
+  local repo="https://github.com/NABIXcorp/auto-mon-collector/releases"
+  local base="$repo/latest/download"
+  if [ -n "${AMC_VERSION:-}" ]; then base="$repo/download/$AMC_VERSION"; fi
+  base="${AMC_BASE_URL_FOR_TESTS:-$base}"
+
+  local arch
+  case "$(uname -m)" in
+    x86_64) arch=amd64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) echo "amc: unsupported CPU $(uname -m) (amd64, arm64)" >&2; exit 1 ;;
+  esac
+  for tool in openssl sha256sum; do
+    command -v "$tool" > /dev/null || { echo "amc: $tool is needed to verify the download; install it first" >&2; exit 1; }
+  done
+  local get
+  if command -v curl > /dev/null; then get="curl -fsSL --retry 2 -o"
+  elif command -v wget > /dev/null; then get="wget -q -O"
+  else echo "amc: curl or wget is needed" >&2; exit 1; fi
+
+  local tmp
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  cat > "$tmp/release.pub" <<'PUBKEY'
+@AMC_PUBKEY@
+PUBKEY
+
+  echo "amc: downloading amc-linux-$arch from $base" >&2
+  $get "$tmp/SHA256SUMS" "$base/SHA256SUMS"
+  $get "$tmp/SHA256SUMS.sig" "$base/SHA256SUMS.sig"
+  $get "$tmp/amc-linux-$arch" "$base/amc-linux-$arch"
+
+  if ! openssl dgst -sha256 -verify "$tmp/release.pub" -signature "$tmp/SHA256SUMS.sig" "$tmp/SHA256SUMS" > /dev/null 2>&1; then
+    echo "amc: SIGNATURE CHECK FAILED: SHA256SUMS is not signed by the auto-mon-collector key. Nothing was run." >&2
+    exit 3
+  fi
+  if ! (cd "$tmp" && grep " amc-linux-$arch\$" SHA256SUMS | sha256sum -c --quiet - > /dev/null 2>&1); then
+    echo "amc: CHECKSUM MISMATCH for amc-linux-$arch. Nothing was run." >&2
+    exit 3
+  fi
+  echo "amc: signature and sha256 verified" >&2
+  chmod 755 "$tmp/amc-linux-$arch"
+  "$tmp/amc-linux-$arch" "$@"
+}
+
+main "$@"   # the whole script is inside main(): a partly downloaded script never runs

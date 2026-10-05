@@ -318,7 +318,7 @@ checks:
 
 | Threat | Control |
 |---|---|
-| Tampered download (mirror, CDN, MITM) | minisign signature over `SHA256SUMS`, public key embedded in `get.sh`; sha256 per asset |
+| Tampered download (mirror, CDN, MITM) | ECDSA P-256 signature over `SHA256SUMS` (openssl: present on every target incl. CentOS 7 / OpenSSL 1.0.2; minisign is not installed on RHEL-family hosts), public key embedded in `get.sh`, checked against the committed key before each release; sha256 per asset; no openssl = no run |
 | Compromised release pipeline | signing key outside CI (or keyless cosign + transparency log as an option); reproducible builds |
 | Truncated `curl \| bash` | `main()` wrapper; documented alternative: download, read, run |
 | Secrets leaking | section 10; collector logs never contain secrets; `--verbose` redacts known keys |
@@ -381,7 +381,7 @@ Existing installations keep running unchanged until phase 5.
 | 1 | Project / repository name | **decided**: `auto-mon-collector`, binary `amc` (alias), env prefix `AMC_` |
 | 2 | License | Apache-2.0 (same as OpenTelemetry) |
 | 3 | Ownership | approved by the owner of the original setup (2026-10-05) |
-| 4 | Signing | minisign (small, offline verify); cosign keyless as an option |
+| 4 | Signing | **decided**: ECDSA P-256 with openssl (no extra tool on the hosts); key in the GitHub Actions secret AMC_SIGNING_KEY (option A, 2026-10-05); public key keys/amc-release.pub |
 | 5 | Go version | latest stable, `CGO_ENABLED=0`; check the minimum kernel for CentOS 7 (3.10) before release (unverified) |
 | 6 | Docker containers | after v1 (`docker_observer`) |
 | 7 | Backend presets | OpenObserve first; generic OTLP; others by contribution |

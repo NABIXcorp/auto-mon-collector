@@ -1,0 +1,61 @@
+# Release: push a tag v*  ->  all CI checks  ->  static amc binaries + get.sh + SHA256SUMS + signature.
+#   git tag -a v0.1.0 -m "..." && git push origin v0.1.0
+# The tag must be on main. SHA256SUMS is signed with the key in the secret AMC_SIGNING_KEY (ECDSA P-256 PEM) and
+# checked against keys/amc-release.pub BEFORE anything is published: a wrong or swapped secret = no release.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Tag must be on main
+        run: |
+          git fetch -q origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+      - name: Build
+        run: |
+          set -euo pipefail
+          pkg=github.com/NABIXcorp/auto-mon-collector/internal/version
+          ld="-s -w -X $pkg.Version=$GITHUB_REF_NAME -X $pkg.Commit=$(git rev-parse --short HEAD) -X $pkg.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "$ld" -o "dist/amc-linux-$arch" ./cmd/amc
+          done
+          scripts/render-get.sh keys/amc-release.pub dist/get.sh
+          (cd dist && sha256sum amc-linux-amd64 amc-linux-arm64 get.sh > SHA256SUMS && cat SHA256SUMS)
+          ./dist/amc-linux-amd64 version
+      - name: Sign SHA256SUMS and verify against the committed public key
+        env:
+          AMC_SIGNING_KEY: ${{ secrets.AMC_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$AMC_SIGNING_KEY" ] || { echo "::error::secret AMC_SIGNING_KEY is not set"; exit 1; }
+          umask 077
+          key=$(mktemp); trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$AMC_SIGNING_KEY" > "$key"
+          openssl dgst -sha256 -sign "$key" -out dist/SHA256SUMS.sig dist/SHA256SUMS
+          openssl dgst -sha256 -verify keys/amc-release.pub -signature dist/SHA256SUMS.sig dist/SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/amc-linux-amd64 dist/amc-linux-arm64 dist/get.sh dist/SHA256SUMS dist/SHA256SUMS.sig \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

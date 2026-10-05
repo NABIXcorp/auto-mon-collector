@@ -5,6 +5,7 @@ on:
     branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call: # release.yml runs every check before a release
 permissions:
   contents: read
 
@@ -38,6 +39,37 @@ jobs:
           done
           file dist/*
           ./dist/amc-linux-amd64 version
+      - name: get.sh trust chain (throwaway key; good / tampered binary / tampered sums / other key)
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*"; exit 1; }
+          k=$RUNNER_TEMP/keys; mkdir -p "$k"
+          openssl ecparam -name prime256v1 -genkey -noout -out "$k/test.pem"
+          openssl ec -in "$k/test.pem" -pubout -out "$k/test.pub" 2> /dev/null
+          openssl ecparam -name prime256v1 -genkey -noout -out "$k/other.pem"
+          release() { # release DIR SIGNKEY: a local "GitHub release"
+            mkdir -p "$1"; cp dist/amc-linux-amd64 dist/amc-linux-arm64 "$1/"
+            scripts/render-get.sh "$k/test.pub" "$1/get.sh"
+            (cd "$1" && sha256sum amc-linux-amd64 amc-linux-arm64 get.sh > SHA256SUMS)
+            openssl dgst -sha256 -sign "$2" -out "$1/SHA256SUMS.sig" "$1/SHA256SUMS"
+          }
+          w=$RUNNER_TEMP/www
+          release "$w/good" "$k/test.pem"
+          release "$w/bin" "$k/test.pem";   echo x >> "$w/bin/amc-linux-amd64"         # binary changed after signing
+          release "$w/sums" "$k/test.pem";  echo x >> "$w/sums/amc-linux-amd64"
+          (cd "$w/sums" && sha256sum amc-linux-amd64 amc-linux-arm64 get.sh > SHA256SUMS)      # sums re-made, old signature
+          release "$w/other" "$k/other.pem"                                                    # signed by somebody else
+          python3 -m http.server 8098 -d "$w" -b 127.0.0.1 > /dev/null 2>&1 &
+          sleep 1
+          shellcheck --severity=warning "$w/good/get.sh"
+          out=$(AMC_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/good bash "$w/good/get.sh" version 2>&1)
+          echo "$out"; grep -q 'signature and sha256 verified' <<< "$out" && grep -q '^auto-mon-collector ' <<< "$out" || die "good release did not run"
+          for case in bin:"CHECKSUM MISMATCH" sums:"SIGNATURE CHECK FAILED" other:"SIGNATURE CHECK FAILED"; do
+            set +e; out=$(AMC_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/${case%%:*} bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
+            echo "${case%%:*}: rc=$rc $out"
+            [ "$rc" -eq 3 ] && grep -q "${case#*:}" <<< "$out" || die "${case%%:*}: tampered release not refused"
+            ! grep -q '^auto-mon-collector ' <<< "$out" || die "${case%%:*}: amc ran although the check failed"
+          done
       - name: End to end on this runner (real collector, systemd, ACLs; fake backend and secrets)
         run: |
           sudo apt-get install -y -qq acl > /dev/null
