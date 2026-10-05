@@ -22,6 +22,25 @@ type fakeRunner struct {
 	version  string // output of otelcol-contrib --version
 	validate error
 	envSeen  []string
+	smokeOut string // collector output during the smoke run
+	smokeEnv []string
+	smokeErr error
+	stopped  bool // the stop callback asked for an early stop
+}
+
+func (f *fakeRunner) Timed(_ context.Context, env []string, _ time.Duration, stop func(string) bool,
+	name string, args ...string) ([]byte, error) {
+	f.cmds = append(f.cmds, "TIMED "+filepath.Base(name)+" "+strings.Join(args, " "))
+	f.smokeEnv = env
+	var out []string
+	for _, l := range strings.Split(f.smokeOut, "\n") {
+		out = append(out, l)
+		if stop(l) {
+			f.stopped = true
+			break
+		}
+	}
+	return []byte(strings.Join(out, "\n")), f.smokeErr
 }
 
 func (f *fakeRunner) Run(name string, args ...string) error {
@@ -112,10 +131,14 @@ func desired() Desired {
 }
 
 func run(t *testing.T, h host, r *fakeRunner, apply, start, fetch bool) (Result, string) {
+	return runSmoke(t, h, r, apply, start, fetch, false)
+}
+
+func runSmoke(t *testing.T, h host, r *fakeRunner, apply, start, fetch, smoke bool) (Result, string) {
 	t.Helper()
 	var out bytes.Buffer
 	res, err := Run(context.Background(), Options{
-		Root: h.root, Apply: apply, Start: start, Fetch: fetch, Arch: "amd64",
+		Root: h.root, Apply: apply, Start: start, Fetch: fetch, Smoke: smoke, Arch: "amd64",
 		SkipRootCheck: true, RootUID: os.Getuid(), StartWait: time.Millisecond, Out: &out, Runner: r,
 		Now:   func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) },
 		Chown: func(string, int, int) error { return nil },
@@ -251,6 +274,62 @@ func TestCheckModeNewHostValidatesWithTempData(t *testing.T) {
 	}
 	if data == "" || strings.HasPrefix(data, h.root) {
 		t.Errorf("MONITORING_DATA = %q, want a temp dir outside the host", data)
+	}
+}
+
+func smokeHost(t *testing.T) host {
+	h := newHost(t)
+	h.write("/opt/monitoring/secrets/collector.env",
+		"OO_ENDPOINT='https://backend.example.com'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n", 0o600)
+	h.write("/opt/monitoring/bin/otelcol-contrib", "BIN", 0o755)
+	return h
+}
+
+func TestSmokeRunClean(t *testing.T) {
+	r := &fakeRunner{version: collector.Version, readable: true,
+		smokeOut: "info starting receiver oracledb\ninfo starting receiver sql_query/oracle\n"}
+	res, out := runSmoke(t, smokeHost(t), r, false, false, false, true)
+	if res.Failures != 0 || !strings.Contains(out, "2 discovered receivers, no load / start errors") {
+		t.Fatalf("%s", out)
+	}
+	// never the real backend, never the real data dir
+	env := strings.Join(r.smokeEnv, " ")
+	if strings.Contains(env, "backend.example.com") || !strings.Contains(env, "OO_ENDPOINT=http://127.0.0.1:") ||
+		strings.Contains(env, "MONITORING_DATA=/opt/monitoring") {
+		t.Errorf("smoke env: %v", r.smokeEnv)
+	}
+	if !r.has("zz-smoke.yaml") {
+		t.Error("smoke overlay (own ports, no telemetry) not passed")
+	}
+}
+
+func TestSmokeRunCatchesTemplateError(t *testing.T) {
+	r := &fakeRunner{version: collector.Version, readable: true, smokeOut: "info starting receiver\n" +
+		`error failed to start receiver {"error": "failed to load \"oracledb\" template config: got unconvertible type 'int'"}` + "\n"}
+	res, out := runSmoke(t, smokeHost(t), r, false, false, false, true)
+	if res.Failures == 0 || !strings.Contains(out, "1 error line(s) in the smoke run") {
+		t.Fatalf("%s", out)
+	}
+}
+
+func TestSmokeRunStopsAtOracleLoginError(t *testing.T) {
+	r := &fakeRunner{version: collector.Version, readable: true,
+		smokeOut: "info starting receiver\nerror ORA-01017: invalid username/password; logon denied\nerror retry again\n"}
+	res, out := runSmoke(t, smokeHost(t), r, false, false, false, true)
+	if !r.stopped || res.Failures == 0 || !strings.Contains(out, "Oracle rejected the monitoring login") {
+		t.Fatalf("stopped=%v\n%s", r.stopped, out)
+	}
+	if strings.Contains(out, "retry again") {
+		t.Error("output after the early stop must not be read")
+	}
+}
+
+func TestSmokeRunCollectorExits(t *testing.T) {
+	r := &fakeRunner{version: collector.Version, readable: true, smokeOut: "Error: cannot start pipelines\n",
+		smokeErr: os.ErrClosed}
+	res, out := runSmoke(t, smokeHost(t), r, false, false, false, true)
+	if res.Failures == 0 || !strings.Contains(out, "the collector stopped during the smoke run") {
+		t.Fatalf("%s", out)
 	}
 }
 

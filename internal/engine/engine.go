@@ -30,11 +30,13 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/envfile"
 )
 
-// Runner runs system tools. Run = exit status only; Output = combined output (read-only tools, validate).
+// Runner runs system tools. Run = exit status only; Output = combined output (read-only tools, validate);
+// Timed = a long-running program for at most d, stopped early when stop(line) is true (smoke run).
 type Runner interface {
 	Run(name string, args ...string) error
 	Output(env []string, name string, args ...string) ([]byte, error)
 	LookPath(name string) bool
+	Timed(ctx context.Context, env []string, d time.Duration, stop func(string) bool, name string, args ...string) ([]byte, error)
 }
 
 // Options control one engine run.
@@ -47,10 +49,12 @@ type Options struct {
 	Apply bool // change the system (otherwise check mode)
 	Start bool // with Apply: (re)start the units and check them
 	Fetch bool // download the pinned collector if missing / other version
+	Smoke bool // after validate: run the new config for SmokeTime against a local sink
 
 	SkipRootCheck bool          // tests only
 	RootUID       int           // uid that must own the secrets file; 0 = root (tests use their own uid)
 	StartWait     time.Duration // default 20 s
+	SmokeTime     time.Duration // default 25 s
 	Out           io.Writer
 	Runner        Runner
 	Now           func() time.Time
@@ -105,6 +109,9 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	}
 	if o.StartWait == 0 {
 		o.StartWait = 20 * time.Second
+	}
+	if o.SmokeTime == 0 {
+		o.SmokeTime = 25 * time.Second
 	}
 	if o.Out == nil {
 		o.Out = os.Stdout
@@ -713,7 +720,7 @@ func (e *eng) readAccess(context.Context, string) bool {
 
 // ---- 8. validate ----------------------------------------------------------------------------------------
 
-func (e *eng) validate(_ context.Context, tmp string) bool {
+func (e *eng) validate(ctx context.Context, tmp string) bool {
 	e.r.step("8. validate the NEW config (collector binary %s)", collector.Version)
 	if e.bin == "" || e.secrets == nil {
 		e.r.warn("validate skipped (collector binary or secrets missing)")
@@ -763,6 +770,9 @@ func (e *eng) validate(_ context.Context, tmp string) bool {
 		return false
 	}
 	e.r.ok("otelcol-contrib validate: VALID")
+	if e.o.Smoke {
+		return e.smoke(ctx, tmp, args[1:], env)
+	}
 	return true
 }
 
