@@ -46,6 +46,9 @@ func TestFirstRunAsksAndSecondRunIsEnterEnter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(b), "\nservices:\n  oracle:\n    enabled: true\n") {
+		t.Errorf("answers.yaml must use 2-space indentation:\n%s", b)
+	}
 	p := filepath.Join(t.TempDir(), "answers.yaml")
 	os.WriteFile(p, b, 0o644)
 	prev, err := generate.LoadAnswers(p)

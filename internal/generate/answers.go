@@ -4,6 +4,7 @@
 package generate
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"os"
@@ -71,10 +72,16 @@ func (a Answers) Validate() error {
 
 // Marshal writes the answers as YAML for <prefix>/answers.yaml (the defaults of the next run). No secrets.
 func (a Answers) Marshal() ([]byte, error) {
-	b, err := yaml.Marshal(a)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2) // yaml.v3 defaults to 4
+	if err := enc.Encode(a); err != nil {
 		return nil, err
 	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	b := buf.Bytes()
 	head := "# amc answers: what a scan cannot know (no secrets). Written by amc; the next run uses them as defaults.\n"
 	if string(b) == "{}\n" {
 		b = nil

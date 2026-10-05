@@ -524,6 +524,9 @@ func TestApplyAdoptsACLsFromAnOlderInstaller(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 	st := h.read("/opt/monitoring/amc-state.json")
+	if !strings.Contains(st, `"selinux_fcontext": []`) || strings.Contains(st, "null") {
+		t.Errorf("empty lists must be [] not null:\n%s", st)
+	}
 	if !strings.Contains(st, `"/var/log/app/alert.log"`) || !strings.Contains(st, `"user_created": true`) {
 		t.Errorf("existing ACL / user (home = prefix/data) not adopted:\n%s", st)
 	}

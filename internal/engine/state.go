@@ -55,6 +55,12 @@ func (e *eng) saveState() error {
 	if e.st == nil || !e.st.Changed {
 		return nil
 	}
+	// empty lists as [] (not null): clearer for people reading the file
+	for _, l := range []*[]string{&e.st.ACLFiles, &e.st.ACLDirs, &e.st.Groups, &e.st.FContexts, &e.st.Units} {
+		if *l == nil {
+			*l = []string{}
+		}
+	}
 	b, err := json.MarshalIndent(e.st, "", "  ")
 	if err != nil {
 		return err

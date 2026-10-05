@@ -374,7 +374,7 @@ func detectCmd(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 	detect.Print(stdout, snap, found)
-	fmt.Fprintln(stdout, "\nRead-only: nothing was changed. (Generating the host config from this comes next.)")
+	fmt.Fprintln(stdout, "\nRead-only: nothing was changed. Next: `sudo amc` (asks, then plans) or `sudo amc plan --answers FILE`.")
 	return exitOK
 }
 
