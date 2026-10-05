@@ -1,0 +1,47 @@
+# CI: every push and pull request. No secrets needed.
+name: ci
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: No CRLF (scripts and configs go to Linux servers)
+        run: |
+          bad=$(git ls-files --eol | awk '$1 ~ /crlf/ || $2 ~ /crlf/ {print $NF}')
+          [ -z "$bad" ] || { echo "CRLF in: $bad"; exit 1; }
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          [ -z "$out" ] || { echo "run gofmt on: $out"; exit 1; }
+      - name: vet + test
+        run: |
+          go vet ./...
+          go test -race ./...
+      - name: Build static binaries (linux amd64 + arm64)
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "dist/amc-linux-$arch" ./cmd/amc
+          done
+          file dist/*
+          ./dist/amc-linux-amd64 version
+      - name: No secrets (gitleaks, full history)
+        run: |
+          v=8.18.4; b=https://github.com/gitleaks/gitleaks/releases/download/v$v
+          curl -fsSLO "$b/gitleaks_${v}_linux_x64.tar.gz" -fsSLO "$b/gitleaks_${v}_checksums.txt"
+          grep " gitleaks_${v}_linux_x64.tar.gz$" "gitleaks_${v}_checksums.txt" | sha256sum -c -
+          tar -xzf "gitleaks_${v}_linux_x64.tar.gz" gitleaks
+          ./gitleaks detect --source . --no-banner --redact -v

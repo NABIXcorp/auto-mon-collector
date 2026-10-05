@@ -1,0 +1,2 @@
+# Files go to Linux servers: always LF
+* text=auto eol=lf

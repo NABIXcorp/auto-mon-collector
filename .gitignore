@@ -1,0 +1,5 @@
+/dist/
+/amc
+/amc.exe
+*.secrets
+.env
