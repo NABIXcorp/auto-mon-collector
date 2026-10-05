@@ -30,9 +30,10 @@ main() {
   elif command -v wget > /dev/null; then get="wget -q -O"
   else echo "amc: curl or wget is needed" >&2; exit 1; fi
 
-  local tmp
-  tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  # global, not local: the EXIT trap runs after main() has returned (a local would be unset -> set -u error)
+  AMC_GET_TMP=$(mktemp -d)
+  trap 'rm -rf "$AMC_GET_TMP"' EXIT
+  local tmp=$AMC_GET_TMP
   cat > "$tmp/release.pub" <<'PUBKEY'
 @AMC_PUBKEY@
 PUBKEY
@@ -46,7 +47,7 @@ PUBKEY
     echo "amc: SIGNATURE CHECK FAILED: SHA256SUMS is not signed by the auto-mon-collector key. Nothing was run." >&2
     exit 3
   fi
-  if ! (cd "$tmp" && grep " amc-linux-$arch\$" SHA256SUMS | sha256sum -c --quiet - > /dev/null 2>&1); then
+  if ! (cd "$tmp" && grep -E "^[0-9a-f]{64} [ *]amc-linux-$arch$" SHA256SUMS | sha256sum -c --quiet - > /dev/null 2>&1); then
     echo "amc: CHECKSUM MISMATCH for amc-linux-$arch. Nothing was run." >&2
     exit 3
   fi
