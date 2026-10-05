@@ -54,11 +54,26 @@ jobs:
           die()  { echo "::error::$*"; exit 1; }
           must() { grep -q -- "$1" "$2" || die "missing '$1' in $2"; }
           amc=./dist/amc-linux-amd64
+          # Fake services on the discovery ports, so receiver_creator really builds its templates in the smoke
+          # run (with the digits-only test password: the int bug that validate cannot see). Accept + close at
+          # once: a listener that never answers can hang a collector's shutdown.
+          python3 - <<'PY' &
+          import select, socket
+          socks = []
+          for p in (1521, 9404, 2019, 6379):
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("127.0.0.1", p)); s.listen(16); socks.append(s)
+          while True:
+              for s in select.select(socks, [], [], 60)[0]:
+                  s.accept()[0].close()
+          PY
+          sleep 2
           echo "::group::plan (check mode)"
           sudo $amc plan --host-dir examples/oracle-db | tee plan1.txt   # pipefail: amc's exit code counts
           echo "::endgroup::"
           must 'validate: VALID' plan1.txt
           must 'no load / start errors' plan1.txt
+          must '[1-9][0-9]* discovered receivers' plan1.txt    # the templates were really built
           must 'CHECK done: 0 failures' plan1.txt
           if [ -e /etc/systemd/system/monitoring-otelcol.service ] || [ -e /opt/monitoring/config ]; then die "plan changed the system"; fi
           echo "::group::apply --start"
