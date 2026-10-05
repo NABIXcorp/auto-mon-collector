@@ -45,6 +45,9 @@ func (Runner) Timed(ctx context.Context, env []string, d time.Duration, stop fun
 	name string, args ...string) ([]byte, error) {
 	c := exec.Command(name, args...)
 	c.Env = env
+	// A child of the program can keep the output pipe open after the program itself is gone; Wait would
+	// then block until that child ends (CI test: 30 s instead of 0.5 s). WaitDelay bounds that wait.
+	c.WaitDelay = 2 * time.Second
 	pr, pw := io.Pipe()
 	c.Stdout, c.Stderr = pw, pw
 	if err := c.Start(); err != nil {
