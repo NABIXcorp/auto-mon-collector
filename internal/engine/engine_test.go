@@ -254,6 +254,18 @@ func TestCheckModeNewHostValidatesWithTempData(t *testing.T) {
 	}
 }
 
+func TestSELinuxNothingToDoWhenLabelsAreRight(t *testing.T) {
+	if !allBinT([]byte("system_u:object_r:bin_t:s0\nsystem_u:object_r:bin_t:s0\n"), 2) {
+		t.Error("two bin_t labels must be ok")
+	}
+	if allBinT([]byte("system_u:object_r:bin_t:s0\nsystem_u:object_r:usr_t:s0\n"), 2) {
+		t.Error("usr_t must need a relabel")
+	}
+	if allBinT([]byte("system_u:object_r:bin_t:s0\n"), 2) {
+		t.Error("a missing file must need a relabel")
+	}
+}
+
 func TestSELinuxWithoutSemanageWarns(t *testing.T) {
 	h := newHost(t)
 	r := &fakeRunner{selinux: true}

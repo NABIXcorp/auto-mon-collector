@@ -628,20 +628,50 @@ func (e *eng) selinux(context.Context, string) bool {
 		return true
 	}
 	dirs := []string{e.pre("bin"), e.pre("netconn")}
+	// Only act when something is wrong, so a repeated plan shows nothing to do (seen on a real host: a
+	// "would: chcon" on every run).
 	if e.o.Runner.LookPath("semanage") {
 		list, _ := e.o.Runner.Output(nil, "semanage", "fcontext", "-l")
+		added := false
 		for _, d := range dirs {
 			pattern := d + "(/.*)?"
 			if bytes.Contains(list, []byte(pattern)) {
 				e.r.ok("fcontext %s", pattern)
 			} else {
 				e.doCmd("semanage", "fcontext", "-a", "-t", "bin_t", pattern)
+				added = true
 			}
 		}
-		e.doCmd("restorecon", append([]string{"-R"}, dirs...)...)
+		// restorecon -n -v lists what it would relabel; empty = labels already match the rules
+		out, err := e.o.Runner.Output(nil, "restorecon", append([]string{"-R", "-n", "-v"}, dirs...)...)
+		if !added && err == nil && len(bytes.TrimSpace(out)) == 0 {
+			e.r.ok("labels match the fcontext rules")
+		} else {
+			e.doCmd("restorecon", append([]string{"-R"}, dirs...)...)
+		}
+		return true
+	}
+	e.r.warn("semanage not installed -> chcon (lost on a full relabel; install policycoreutils-python-utils)")
+	paths := append(append([]string{}, dirs...), e.pre("bin/otelcol-contrib"), e.pre("netconn/otel-netconn.sh"))
+	out, err := e.o.Runner.Output(nil, "stat", append([]string{"-c", "%C"}, paths...)...)
+	if err == nil && allBinT(out, len(paths)) {
+		e.r.ok("labels are bin_t")
 	} else {
-		e.r.warn("semanage not installed -> chcon (lost on a full relabel; install policycoreutils-python-utils)")
 		e.doCmd("chcon", append([]string{"-R", "-t", "bin_t"}, dirs...)...)
+	}
+	return true
+}
+
+// allBinT reports whether stat -c %C printed n contexts and every one has the type bin_t.
+func allBinT(out []byte, n int) bool {
+	lines := strings.Fields(string(out))
+	if len(lines) != n {
+		return false
+	}
+	for _, l := range lines {
+		if !strings.Contains(l, ":bin_t:") {
+			return false
+		}
 	}
 	return true
 }
