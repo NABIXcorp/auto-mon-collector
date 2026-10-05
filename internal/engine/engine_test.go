@@ -27,6 +27,7 @@ type fakeRunner struct {
 	smokeErr error
 	stopped  bool // the stop callback asked for an early stop
 	inactive int  // the next N `systemctl is-active` calls report "not active"
+	acl      bool // getfacl shows an entry for the collector user
 }
 
 func (f *fakeRunner) Timed(_ context.Context, env []string, _ time.Duration, stop func(string) bool,
@@ -64,6 +65,11 @@ func (f *fakeRunner) Output(env []string, name string, args ...string) ([]byte, 
 	switch {
 	case len(args) == 1 && args[0] == "--version":
 		return []byte("otelcol-contrib version " + f.version + "\n"), nil
+	case name == "getfacl":
+		if f.acl {
+			return []byte("user::rw-\nuser:otelcol-contrib:r--\n"), nil
+		}
+		return []byte("user::rw-\n"), nil
 	case len(args) > 0 && args[0] == "validate":
 		f.envSeen = env
 		if f.validate != nil {
@@ -443,5 +449,85 @@ func TestNoRollbackWhenNothingChanged(t *testing.T) {
 	}
 	if r.has("systemctl disable") {
 		t.Error("a working installation must never be disabled by a rollback")
+	}
+}
+
+func uninstallRun(t *testing.T, h host, r *fakeRunner, apply bool, u UninstallOptions) (Result, string) {
+	t.Helper()
+	var out bytes.Buffer
+	res, err := Uninstall(Options{Root: h.root, Apply: apply, SkipRootCheck: true, Out: &out, Runner: r}, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res, out.String()
+}
+
+func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
+	needSymlinks(t)
+	h := smokeHost(t)
+	// a fresh user: drop it from passwd so apply creates it (and records user_created)
+	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\n", 0o644)
+	r := &fakeRunner{version: collector.Version}
+	if res, out := run(t, h, r, true, false, false); res.Failures != 0 {
+		// useradd is faked, so the user does not appear: data dirs fail. Re-add the user and apply again.
+		h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\notelcol-contrib:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
+		if res, out = run(t, h, r, true, false, false); res.Failures != 0 {
+			t.Fatalf("apply: %s", out)
+		}
+	}
+	st := h.read("/opt/monitoring/amc-state.json")
+	for _, want := range []string{`"user_created": true`, `"/var/log/app/alert.log"`, `"/var/log/app"`, `"tomcat"`,
+		`"monitoring-otelcol.service"`} {
+		if !strings.Contains(st, want) {
+			t.Errorf("state lacks %s:\n%s", want, st)
+		}
+	}
+	// check mode changes nothing
+	rc := &fakeRunner{}
+	if _, out := uninstallRun(t, h, rc, false, UninstallOptions{}); !strings.Contains(out, "would: setfacl -x u:otelcol-contrib /var/log/app/alert.log") {
+		t.Errorf("check mode output:\n%s", out)
+	}
+	if rc.has("systemctl stop") || h.read("/opt/monitoring/VERSION") == "" {
+		t.Error("check mode changed something")
+	}
+	// real uninstall, defaults: keep secrets, data, backup, user
+	ru := &fakeRunner{}
+	res, out := uninstallRun(t, h, ru, true, UninstallOptions{})
+	if res.Failures != 0 {
+		t.Fatalf("%s", out)
+	}
+	for _, c := range []string{"systemctl stop", "systemctl disable", "setfacl -x u:otelcol-contrib /var/log/app/alert.log",
+		"setfacl -x u:otelcol-contrib /var/log/app", "gpasswd -d otelcol-contrib tomcat"} {
+		if !ru.has(c) {
+			t.Errorf("missing %q in %v", c, ru.cmds)
+		}
+	}
+	if ru.has("userdel") {
+		t.Error("user removed without --purge")
+	}
+	for _, gone := range []string{"opt/monitoring/bin", "opt/monitoring/config", "opt/monitoring/amc-state.json",
+		"etc/systemd/system/monitoring-otelcol.service"} {
+		if _, err := os.Lstat(filepath.Join(h.root, gone)); err == nil {
+			t.Errorf("%s still there", gone)
+		}
+	}
+	if h.read("/opt/monitoring/secrets/collector.env") == "" {
+		t.Error("secrets removed without --purge-secrets")
+	}
+}
+
+func TestApplyAdoptsACLsFromAnOlderInstaller(t *testing.T) {
+	needSymlinks(t)
+	h := smokeHost(t)
+	r := &fakeRunner{version: collector.Version, readable: true, acl: true} // readable via an existing ACL
+	if res, out := run(t, h, r, true, false, false); res.Failures != 0 {
+		t.Fatalf("%s", out)
+	}
+	st := h.read("/opt/monitoring/amc-state.json")
+	if !strings.Contains(st, `"/var/log/app/alert.log"`) || !strings.Contains(st, `"user_created": true`) {
+		t.Errorf("existing ACL / user (home = prefix/data) not adopted:\n%s", st)
+	}
+	if r.has("setfacl -m") {
+		t.Error("readable file must not get a new ACL")
 	}
 }

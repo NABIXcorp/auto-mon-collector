@@ -106,6 +106,23 @@ jobs:
           [ ! -e /opt/monitoring/config/site.d/99-broken.yaml ] || die "the broken file survived the rollback"
           sudo $amc plan --host-dir examples/oracle-db --no-smoke | tee plan3.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' plan3.txt; then die "after the rollback the host is not back to the good state"; fi
+          # Uninstall: check mode first (must change nothing), then everything; afterwards nothing of amc is left.
+          echo "::group::uninstall"
+          grep -q '"/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log"' /opt/monitoring/amc-state.json || die "ACL not recorded"
+          sudo $amc uninstall | tee un1.txt
+          must 'CHECK done' un1.txt
+          systemctl is-active monitoring-otelcol || die "uninstall check mode stopped the collector"
+          sudo $amc uninstall --yes --purge-data --purge-secrets --purge < /dev/null | tee un2.txt  # no tty: flags confirm
+          echo "::endgroup::"
+          must 'UNINSTALLED: 0 failure' un2.txt
+          if systemctl is-active -q monitoring-otelcol; then die "collector still running"; fi
+          [ ! -e /etc/systemd/system/monitoring-otelcol.service ] || die "unit link left"
+          [ ! -e /opt/monitoring ] || die "/opt/monitoring left"
+          if id otelcol-contrib 2>/dev/null; then die "collector user left"; fi
+          for p in "$alert" /u01 /u01/app/oracle/diag/rdbms/orcl/ORCL/trace; do
+            if sudo getfacl -p --omit-header "$p" | grep -E '^user:[^:]+:'; then die "ACL entry left on $p"; fi
+          done
+          [ "$(sudo stat -c %a "$alert")" = 640 ] || die "file mode of the alert log changed"
       - name: No secrets (gitleaks, full history)
         run: |
           v=8.18.4; b=https://github.com/gitleaks/gitleaks/releases/download/v$v

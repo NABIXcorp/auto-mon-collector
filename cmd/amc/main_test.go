@@ -55,3 +55,37 @@ func TestPlanApplyPassesOptions(t *testing.T) {
 		t.Errorf("options = %+v", got)
 	}
 }
+
+func TestUninstallPurgeSecretsNeedsATypedYes(t *testing.T) {
+	called := false
+	runUninstall = func(engine.Options, engine.UninstallOptions) (engine.Result, error) {
+		called = true
+		return engine.Result{}, nil
+	}
+	defer func() { runUninstall, confirm = engine.Uninstall, confirmTTY }()
+
+	confirm = func(string) (string, bool) { return "no", true } // a terminal, answer is not "yes"
+	var out, errb bytes.Buffer
+	if code := run([]string{"uninstall", "--yes", "--purge-secrets"}, &out, &errb); code != exitPlan || called {
+		t.Errorf("must stop without a typed yes: code %d called %v", code, called)
+	}
+	confirm = func(string) (string, bool) { return "", false } // no terminal: the two flags are the confirmation
+	if code := run([]string{"uninstall", "--yes", "--purge-secrets"}, &out, &errb); code != exitOK || !called {
+		t.Errorf("automation path: code %d called %v", code, called)
+	}
+}
+
+func TestUninstallDefaultIsCheckMode(t *testing.T) {
+	var got engine.Options
+	var gotU engine.UninstallOptions
+	runUninstall = func(o engine.Options, u engine.UninstallOptions) (engine.Result, error) {
+		got, gotU = o, u
+		return engine.Result{}, nil
+	}
+	defer func() { runUninstall = engine.Uninstall }()
+	var out, errb bytes.Buffer
+	run([]string{"uninstall", "--purge-data"}, &out, &errb)
+	if got.Apply || !gotU.PurgeData || gotU.PurgeSecrets || gotU.PurgeUser {
+		t.Errorf("options %+v %+v", got, gotU)
+	}
+}

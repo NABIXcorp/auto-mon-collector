@@ -101,7 +101,9 @@ type eng struct {
 	backupDir    string // backup of the files before this apply ("" = files unchanged)
 	binReplaced  bool   // the previous binary is in bin/otelcol-contrib.previous
 	rolledBack   bool
-	files        []file
+
+	st    *state // what amc changed outside <prefix> (amc-state.json), for uninstall
+	files []file
 }
 
 const backupsKept = 10
@@ -145,6 +147,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 		return Result{}, errors.New("run as root (sudo)")
 	}
 	e := &eng{o: o, d: d, r: report{w: o.Out}}
+	e.st, _ = e.loadState()
 	mode := "CHECK only (nothing is changed)"
 	if o.Apply {
 		mode = "apply"
@@ -168,6 +171,8 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 			break
 		}
 	}
+	// ACLs / groups / labels set above stay even if a later step fails: record them for uninstall now.
+	e.persistState()
 	res := Result{Failures: e.r.failures, Warnings: e.r.warnings}
 	if e.r.failures > 0 {
 		fmt.Fprintf(o.Out, "\nSTOP: %d failure(s), %d warning(s). Nothing restarted.\n", e.r.failures, e.r.warnings)
@@ -178,6 +183,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 		return res, nil
 	}
 	e.units()
+	e.persistState()
 	if o.Start && e.r.failures == 0 {
 		e.start(ctx)
 	}
@@ -238,6 +244,29 @@ func (e *eng) lookupUser(name string) (uid, gid int, ok bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// userHome returns the home directory of name from <root>/etc/passwd ("" if unknown).
+func (e *eng) userHome(name string) string {
+	b, _ := os.ReadFile(e.fs("/etc/passwd"))
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Split(l, ":"); len(f) >= 6 && f[0] == name {
+			return f[5]
+		}
+	}
+	return ""
+}
+
+// persistState records amc-state.json in apply mode (no-op when nothing new was recorded).
+func (e *eng) persistState() {
+	if !e.o.Apply {
+		return
+	}
+	if err := e.saveState(); err != nil {
+		e.r.fail("write %s: %v", StateFile, err)
+		return
+	}
+	e.st.Changed = false
 }
 
 // groupMembers returns the groups (from <root>/etc/group) that list user as a member.
@@ -399,9 +428,13 @@ func (e *eng) userAndDirs(context.Context, string) bool {
 			extra = strings.Join(gs, ",")
 		}
 		e.r.ok("user %s exists (uid=%d gid=%d, extra groups: %s)", e.o.User, uid, gid, extra)
-	} else {
-		e.doCmd("useradd", "--system", "--user-group", "--no-create-home", "--home-dir", e.pre("data"),
-			"--shell", e.nologin(), e.o.User)
+		// adopt a user an earlier installer of this layout created (home = <prefix>/data): uninstall may remove it
+		if !e.st.UserCreated && e.userHome(e.o.User) == e.pre("data") {
+			e.st.UserCreated, e.st.Changed = true, true
+		}
+	} else if e.doCmd("useradd", "--system", "--user-group", "--no-create-home", "--home-dir", e.pre("data"),
+		"--shell", e.nologin(), e.o.User) && e.o.Apply {
+		e.st.UserCreated, e.st.Changed = true, true
 	}
 	uid, gid, haveUser := e.lookupUser(e.o.User)
 	for _, d := range []string{"", "bin", "config", "config/site.d", "systemd", "netconn", "backup"} {
@@ -673,8 +706,11 @@ func (e *eng) selinux(context.Context, string) bool {
 			pattern := d + "(/.*)?"
 			if bytes.Contains(list, []byte(pattern)) {
 				e.r.ok("fcontext %s", pattern)
+				e.st.add(&e.st.FContexts, pattern) // our prefix: ours to remove on uninstall
 			} else {
-				e.doCmd("semanage", "fcontext", "-a", "-t", "bin_t", pattern)
+				if e.doCmd("semanage", "fcontext", "-a", "-t", "bin_t", pattern) && e.o.Apply {
+					e.st.add(&e.st.FContexts, pattern)
+				}
 				added = true
 			}
 		}
@@ -722,26 +758,40 @@ func (e *eng) readAccess(context.Context, string) bool {
 			e.r.fail("not found: %s", f)
 			continue
 		}
-		if haveUser && e.o.Runner.Run("runuser", "-u", e.o.User, "--", "test", "-r", f) == nil {
-			e.r.ok("readable: %s", f)
-			continue
-		}
-		// traverse (x) on every parent directory, read (r) on this one file only: never admin groups
 		var parents []string
 		for d := path.Dir(f); d != "/" && d != "."; d = path.Dir(d) {
 			parents = append([]string{d}, parents...)
 		}
-		for _, d := range parents {
-			e.doCmd("setfacl", "-m", "u:"+e.o.User+":--x", d)
+		if haveUser && e.o.Runner.Run("runuser", "-u", e.o.User, "--", "test", "-r", f) == nil {
+			e.r.ok("readable: %s", f)
+			// adopt ACL entries for our user that an earlier installer set (getfacl is read-only)
+			if e.hasUserACL(f) {
+				e.st.add(&e.st.ACLFiles, f)
+			}
+			for _, d := range parents {
+				if e.hasUserACL(d) {
+					e.st.add(&e.st.ACLDirs, d)
+				}
+			}
+			continue
 		}
-		e.doCmd("setfacl", "-m", "u:"+e.o.User+":r", f)
+		// traverse (x) on every parent directory, read (r) on this one file only: never admin groups
+		for _, d := range parents {
+			if e.doCmd("setfacl", "-m", "u:"+e.o.User+":--x", d) && e.o.Apply {
+				e.st.add(&e.st.ACLDirs, d)
+			}
+		}
+		if e.doCmd("setfacl", "-m", "u:"+e.o.User+":r", f) && e.o.Apply {
+			e.st.add(&e.st.ACLFiles, f)
+		}
 	}
 	member := e.groupMembers(e.o.User)
 	for _, g := range e.d.Groups {
 		if member[g] {
 			e.r.ok("%s in group %s", e.o.User, g)
-		} else {
-			e.doCmd("usermod", "-aG", g, e.o.User)
+			e.st.add(&e.st.Groups, g) // a monitoring-only group membership: ours to remove
+		} else if e.doCmd("usermod", "-aG", g, e.o.User) && e.o.Apply {
+			e.st.add(&e.st.Groups, g)
 		}
 	}
 	return true
@@ -813,6 +863,7 @@ func (e *eng) units() {
 	for _, u := range assets.UnitNames {
 		name := u + ".service"
 		names = append(names, name)
+		e.st.add(&e.st.Units, name)
 		link := e.fs("/etc/systemd/system/" + name)
 		target := e.pre("systemd", name)
 		if cur, err := os.Readlink(link); err == nil && cur == target {

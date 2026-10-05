@@ -36,7 +36,8 @@ Data goes over OTLP to any backend (OpenObserve first).
 # host part: host.yaml + host.env (+ optional site.d/*.yaml), see examples/oracle-db
 # secrets:   /opt/monitoring/secrets/collector.env (root 600): OO_ENDPOINT, OO_AUTH[, ORACLE_MON_PASSWORD]
 sudo amc plan  --host-dir examples/oracle-db            # check mode: diff + validate, changes nothing
-sudo amc apply --host-dir examples/oracle-db --start    # backup, install, start, check
+sudo amc apply --host-dir examples/oracle-db --start    # backup, install, smoke run, start, check, rollback on failure
+sudo amc uninstall                                       # check mode; --yes removes (secrets / data / user kept unless --purge*)
 ```
 
 ## Building
