@@ -97,14 +97,19 @@ func TestTomcatAndOracleHost(t *testing.T) {
 		"-javaagent:/opt/otel/opentelemetry-javaagent-2.31.1.jar", "-Dcatalina.base=/opt/tomcat", "-Dcatalina.home=/opt/tomcat",
 		"org.apache.catalina.startup.Bootstrap", "start"}, nil, 8080, 8005, 9404)
 	h.m.Files["/opt/tomcat/logs/localhost_access_log.2026-10-05.txt"] = "x"
+	h.m.Files["/opt/tomcat/logs/catalina.out"] = "x"
+	h.m.Links["/etc/localtime"] = "../usr/share/zoneinfo/Asia/Tashkent"
 	h.m.Groups["/opt/tomcat/logs"] = "tomcat"
-	_, fs := h.snap()
+	snap, fs := h.snap()
+	if snap.TimeZone != "Asia/Tashkent" {
+		t.Errorf("TimeZone = %q", snap.TimeZone)
+	}
 	tc := find(fs, "tomcat")
 	if tc == nil {
 		t.Fatalf("tomcat not found: %+v", fs)
 	}
 	for k, v := range map[string]string{"TOMCAT_BASE": "/opt/tomcat", "TOMCAT_JMX_PORT": "9404", "TOMCAT_HTTP_PORT": "8080",
-		"TOMCAT_GROUP": "tomcat", "TOMCAT_ACCESS_LOG_DIR": "/opt/tomcat/logs"} {
+		"TOMCAT_GROUP": "tomcat", "TOMCAT_ACCESS_LOG_DIR": "/opt/tomcat/logs", "TOMCAT_CATALINA_OUT": "/opt/tomcat/logs/catalina.out"} {
 		if tc.Values[k] != v {
 			t.Errorf("%s = %q, want %q", k, tc.Values[k], v)
 		}

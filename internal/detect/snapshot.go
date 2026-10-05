@@ -29,10 +29,11 @@ type Proc struct {
 
 // Snapshot is what detection reads from the host, once.
 type Snapshot struct {
-	OS      string
-	Listens []Listen
-	Procs   []Proc
-	Notes   []string // e.g. "not root: process details incomplete"
+	OS       string
+	TimeZone string // from the /etc/localtime link, e.g. Asia/Tashkent ("" = unknown)
+	Listens  []Listen
+	Procs    []Proc
+	Notes    []string // e.g. "not root: process details incomplete"
 }
 
 var envKeys = map[string]bool{"ORACLE_BASE": true, "ORACLE_HOME": true, "ORACLE_SID": true,
@@ -46,6 +47,12 @@ func Collect(s Source) Snapshot {
 			if v, ok := strings.CutPrefix(l, "PRETTY_NAME="); ok {
 				snap.OS = strings.Trim(v, `"'`)
 			}
+		}
+	}
+	// Tomcat's catalina.out has local time without an offset: the log parser needs the host's zone.
+	if t, err := s.Readlink("/etc/localtime"); err == nil {
+		if _, zone, ok := strings.Cut(t, "zoneinfo/"); ok {
+			snap.TimeZone = zone
 		}
 	}
 	for _, f := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {

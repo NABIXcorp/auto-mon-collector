@@ -11,10 +11,13 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/detect"
 	"github.com/NABIXcorp/auto-mon-collector/internal/engine"
+	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 	"github.com/NABIXcorp/auto-mon-collector/internal/hostdir"
 	"github.com/NABIXcorp/auto-mon-collector/internal/sysexec"
 	"github.com/NABIXcorp/auto-mon-collector/internal/version"
@@ -23,26 +26,30 @@ import (
 const usage = `auto-mon-collector (amc): host discovery installer for otelcol-contrib
 
 Usage:
-  amc plan  --host-dir DIR [flags]          check mode: diff + validate, changes nothing (default command)
-  amc apply --host-dir DIR [--start] [flags] install (backup first), optionally (re)start the collector
+  amc plan  --answers FILE [flags]           detect + generate + diff + validate + smoke run; changes nothing
+  amc apply --answers FILE [--start] [flags] the same, then install (backup first), optionally (re)start
+  amc generate --answers FILE [--out DIR]    only write host.yaml + host.env (nothing installed)
+  amc detect [--json]                        read-only: which services this host runs (needs root)
   amc uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]   check mode unless --yes
-  amc detect [--json]                      read-only: which services this host runs (needs root)
   amc version
 
-Flags (plan / apply):
-  --host-dir DIR   host.yaml, host.env, optional site.d/*.yaml (phase 2; detection replaces it later)
-  --prefix DIR     install root (default /opt/monitoring)
-  --user NAME      collector user (default otelcol-contrib)
-  --no-fetch       do not download the pinned collector when it is missing or another version
-  --no-smoke       skip the 25 s test run of the new config (local sink, nothing sent to the backend)
-  --no-rollback    (apply --start) keep the new state even when a unit does not start
-  --start          (apply) restart the units and check them
+Flags (plan / apply / generate):
+  --answers FILE      what a scan cannot know: Oracle service name + user, HTTP checks, services on/off
+  --detect-json FILE  use a saved "amc detect --json" instead of scanning (offline / review)
+  --site-dir DIR      operator overlay *.yaml, installed as config/site.d/ (plan / apply)
+  --host-dir DIR      instead of --answers: a prepared host part (host.yaml, host.env, site.d/)
+  --prefix DIR        install root (default /opt/monitoring)
+  --user NAME         collector user (default otelcol-contrib)
+  --no-fetch          do not download the pinned collector when it is missing or another version
+  --no-smoke          skip the 25 s test run of the new config (local sink, nothing sent to the backend)
+  --no-rollback       (apply --start) keep the new state even when a unit does not start
+  --start             (apply) restart the units and check them
 
 Flags (uninstall): removes units, files and what amc recorded in <prefix>/amc-state.json (ACLs, groups,
 SELinux rules). Kept unless asked: data/ + backup/ (--purge-data), secrets/ (--purge-secrets: you type
 "yes"; without a terminal --yes counts), the collector user (--purge, only if amc created it).
 
-Not yet available: sql, generating the host config from detect, interactive questions (see docs/design.md, section 14).
+Not yet available: sql, interactive questions (see docs/design.md, section 14).
 `
 
 // Exit codes (docs/design.md, section 8).
@@ -90,6 +97,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return uninstall(args, stdout, stderr)
 	case "detect":
 		return detectCmd(args, stdout, stderr)
+	case "generate":
+		return generateCmd(args, stdout, stderr)
 	case "sql":
 		fmt.Fprintf(stderr, "amc %s: not implemented yet (see docs/design.md, section 14)\n", cmd)
 		return exitPlan
@@ -103,6 +112,9 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("amc", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	hostDir := fs.String("host-dir", "", "")
+	answers := fs.String("answers", "", "")
+	detectFile := fs.String("detect-json", "", "")
+	siteDir := fs.String("site-dir", "", "")
 	prefix := fs.String("prefix", "/opt/monitoring", "")
 	user := fs.String("user", "otelcol-contrib", "")
 	noFetch := fs.Bool("no-fetch", false, "")
@@ -113,15 +125,28 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if *hostDir == "" {
-		fmt.Fprintln(stderr, "amc: --host-dir is required (detection comes in a later version)")
+	if (*hostDir == "") == (*answers == "") {
+		fmt.Fprintln(stderr, "amc: give --answers FILE (detect + generate) or --host-dir DIR (prepared host part)")
 		return exitUsage
 	}
 	if *start && !apply {
 		fmt.Fprintln(stderr, "amc: --start only works with apply")
 		return exitUsage
 	}
-	d, err := hostdir.Load(*hostDir)
+	var d engine.Desired
+	var err error
+	if *hostDir != "" {
+		d, err = hostdir.Load(*hostDir)
+	} else {
+		var g generate.Output
+		if g, err = hostPart(*answers, *detectFile); err == nil {
+			printGenerated(stdout, g)
+			var site map[string][]byte
+			if site, err = hostdir.LoadSite(*siteDir); err == nil {
+				d, err = hostdir.Build(g.HostYAML, g.HostEnv, site, "generated")
+			}
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "amc: %v\n", err)
 		return exitUsage
@@ -149,6 +174,92 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 // detectSource is replaced in tests.
 var detectSource detect.Source = detect.OS{}
 
+// detectJSON is the `amc detect --json` format; `--detect-json FILE` reads it back (offline generation).
+type detectJSON struct {
+	OS       string           `json:"os"`
+	TimeZone string           `json:"time_zone"`
+	Ports    []int            `json:"listening_ports"`
+	Notes    []string         `json:"notes,omitempty"`
+	Findings []detect.Finding `json:"findings"`
+}
+
+// hostPart detects (live, or from a saved `amc detect --json`) and generates host.yaml + host.env.
+func hostPart(answersPath, detectPath string) (generate.Output, error) {
+	a, err := generate.LoadAnswers(answersPath)
+	if err != nil {
+		return generate.Output{}, err
+	}
+	var h generate.Host
+	if detectPath != "" {
+		b, err := os.ReadFile(detectPath)
+		if err != nil {
+			return generate.Output{}, err
+		}
+		var dj detectJSON
+		if err := json.Unmarshal(b, &dj); err != nil {
+			return generate.Output{}, fmt.Errorf("%s: %w", detectPath, err)
+		}
+		h = generate.Host{Findings: dj.Findings, TimeZone: dj.TimeZone}
+	} else {
+		snap := detect.Collect(detectSource)
+		h = generate.Host{Findings: detect.Detect(snap, detectSource), TimeZone: snap.TimeZone}
+	}
+	return generate.Generate(h, a)
+}
+
+func printGenerated(w io.Writer, g generate.Output) {
+	fmt.Fprintf(w, "== 0. detect + generate\n  ok    monitoring: %s\n", orNone(g.Enabled))
+	for _, d := range g.Defaults {
+		fmt.Fprintf(w, "  DEFAULT %s  (set it in the answers file to silence this)\n", d)
+	}
+}
+
+func orNone(xs []string) string {
+	if len(xs) == 0 {
+		return "host metrics only (no known service found)"
+	}
+	return strings.Join(xs, ", ")
+}
+
+func generateCmd(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("amc generate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	answers := fs.String("answers", "", "")
+	detectFile := fs.String("detect-json", "", "")
+	out := fs.String("out", "", "")
+	fs.Usage = func() { fmt.Fprint(stderr, usage) }
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *answers == "" {
+		fmt.Fprintln(stderr, "amc generate: --answers FILE is required")
+		return exitUsage
+	}
+	g, err := hostPart(*answers, *detectFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "amc: %v\n", err)
+		return exitUsage
+	}
+	if *out == "" {
+		fmt.Fprintf(stdout, "# ---- host.yaml\n%s\n# ---- host.env\n%s", g.HostYAML, g.HostEnv)
+		printGenerated(stderr, g)
+		return exitOK
+	}
+	if err := os.MkdirAll(*out, 0o755); err != nil {
+		fmt.Fprintf(stderr, "amc: %v\n", err)
+		return exitUsage
+	}
+	for name, b := range map[string][]byte{"host.yaml": g.HostYAML, "host.env": g.HostEnv} {
+		if err := os.WriteFile(filepath.Join(*out, name), b, 0o644); err != nil {
+			fmt.Fprintf(stderr, "amc: %v\n", err)
+			return exitUsage
+		}
+	}
+	printGenerated(stdout, g)
+	fmt.Fprintf(stdout, "  ok    written to %s (host.yaml, host.env). Nothing installed.\n", *out)
+	return exitOK
+}
+
 func detectCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("amc detect", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -162,12 +273,7 @@ func detectCmd(args []string, stdout, stderr io.Writer) int {
 	if *asJSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(struct {
-			OS       string           `json:"os"`
-			Ports    []int            `json:"listening_ports"`
-			Notes    []string         `json:"notes,omitempty"`
-			Findings []detect.Finding `json:"findings"`
-		}{snap.OS, snap.PortsListening(), snap.Notes, found}); err != nil {
+		if err := enc.Encode(detectJSON{snap.OS, snap.TimeZone, snap.PortsListening(), snap.Notes, found}); err != nil {
 			fmt.Fprintf(stderr, "amc: %v\n", err)
 			return exitUsage
 		}

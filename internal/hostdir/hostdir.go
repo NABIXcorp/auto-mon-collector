@@ -1,5 +1,6 @@
-// Package hostdir reads a host configuration directory (host.yaml, host.env, optional site.d/*.yaml) into
-// an engine.Desired. Phase 2 input; from phase 3 the detector generates the same content.
+// Package hostdir turns a host part (host.yaml, host.env, optional site.d/*.yaml) into an engine.Desired.
+// The host part comes from a directory (--host-dir) or from the generator (--answers); both use Build, so
+// both paths install exactly the same way.
 //
 // host.env switches that the engine needs:
 //
@@ -21,17 +22,57 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/version"
 )
 
-// Load reads dir. host.yaml and host.env are required.
+// Load reads dir: host.yaml and host.env are required, site.d/ is optional.
 func Load(dir string) (engine.Desired, error) {
-	var d engine.Desired
-	var err error
-	if d.HostYAML, err = os.ReadFile(filepath.Join(dir, "host.yaml")); err != nil {
-		return d, err
+	hy, err := os.ReadFile(filepath.Join(dir, "host.yaml"))
+	if err != nil {
+		return engine.Desired{}, err
 	}
-	if d.HostEnv, err = os.ReadFile(filepath.Join(dir, "host.env")); err != nil {
-		return d, err
+	he, err := os.ReadFile(filepath.Join(dir, "host.env"))
+	if err != nil {
+		return engine.Desired{}, err
 	}
-	env, err := envfile.Parse(d.HostEnv)
+	site, err := LoadSite(filepath.Join(dir, "site.d"))
+	if err != nil {
+		return engine.Desired{}, err
+	}
+	return Build(hy, he, site, "host-dir")
+}
+
+// LoadSite reads *.yaml / *.yml from dir ("" or a missing dir = no overlay).
+func LoadSite(dir string) (map[string][]byte, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var site map[string][]byte
+	for _, en := range entries {
+		n := en.Name()
+		if en.IsDir() || strings.HasPrefix(n, ".") || !(strings.HasSuffix(n, ".yaml") || strings.HasSuffix(n, ".yml")) {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, n))
+		if err != nil {
+			return nil, err
+		}
+		if site == nil {
+			site = map[string][]byte{}
+		}
+		site[n] = b
+	}
+	return site, nil
+}
+
+// Build derives what the engine needs from the host part. source goes into VERSION (host-dir / generated).
+func Build(hostYAML, hostEnv []byte, site map[string][]byte, source string) (engine.Desired, error) {
+	d := engine.Desired{HostYAML: hostYAML, HostEnv: hostEnv, Site: site}
+	env, err := envfile.Parse(hostEnv)
 	if err != nil {
 		return d, fmt.Errorf("host.env: %w", err)
 	}
@@ -45,30 +86,12 @@ func Load(dir string) (engine.Desired, error) {
 	if g := env["TOMCAT_GROUP"]; g != "" {
 		d.Groups = append(d.Groups, g)
 	}
-	entries, err := os.ReadDir(filepath.Join(dir, "site.d"))
-	if err != nil && !os.IsNotExist(err) {
-		return d, err
+	var names []string
+	for n := range site {
+		names = append(names, n)
 	}
-	for _, en := range entries {
-		n := en.Name()
-		if en.IsDir() || strings.HasPrefix(n, ".") || !(strings.HasSuffix(n, ".yaml") || strings.HasSuffix(n, ".yml")) {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Join(dir, "site.d", n))
-		if err != nil {
-			return d, err
-		}
-		if d.Site == nil {
-			d.Site = map[string][]byte{}
-		}
-		d.Site[n] = b
-	}
-	var site []string
-	for n := range d.Site {
-		site = append(site, n)
-	}
-	sort.Strings(site)
+	sort.Strings(names)
 	d.Version = []byte(fmt.Sprintf("installer=amc %s\ncommit=%s\ncollector=%s\nsource=%s\nsite.d=%s\n",
-		version.Version, version.Commit, collector.Version, "host-dir", strings.Join(site, ",")))
+		version.Version, version.Commit, collector.Version, source, strings.Join(names, ",")))
 	return d, nil
 }

@@ -20,7 +20,7 @@ func TestRun(t *testing.T) {
 	}{
 		{[]string{"version"}, exitOK, "auto-mon-collector", ""},
 		{[]string{"help"}, exitOK, "Usage:", ""},
-		{nil, exitUsage, "", "--host-dir is required"}, // default command = plan
+		{nil, exitUsage, "", "give --answers FILE"}, // default command = plan
 		{[]string{"plan", "--start", "--host-dir", "x"}, exitUsage, "", "only works with apply"},
 		{[]string{"sql"}, exitPlan, "", "not implemented"},
 		{[]string{"nope"}, exitUsage, "", "unknown command"},

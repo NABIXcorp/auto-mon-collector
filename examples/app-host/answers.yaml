@@ -1,0 +1,15 @@
+# Example answers for an application host (Tomcat + Oracle PDB). Only what a scan cannot know; no secrets.
+#   amc plan --answers answers.yaml                  (scans this host)
+#   amc plan --answers answers.yaml --detect-json detect.json   (uses the saved scan below: CI / review)
+services:
+  oracle:
+    service: apppdb       # the PDB's service name (the scan guesses the SID)
+    user: otel_mon
+  redis:
+    enabled: false
+checks:
+  http:
+    - url: http://127.0.0.1:8080/app/
+      comment: Tomcat directly
+    - url: https://app.example.com/app/
+      comment: "users' path: proxy + TLS -> Tomcat"

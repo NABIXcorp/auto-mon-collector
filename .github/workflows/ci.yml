@@ -76,6 +76,14 @@ jobs:
           must '[1-9][0-9]* discovered receivers' plan1.txt    # the templates were really built
           must 'CHECK done: 0 failures' plan1.txt
           if [ -e /etc/systemd/system/monitoring-otelcol.service ] || [ -e /opt/monitoring/config ]; then die "plan changed the system"; fi
+          # A GENERATED host part (detect.json + answers: Oracle + Tomcat + HTTP checks) must pass the real
+          # collector too: validate + smoke run with every receiver block the generator writes.
+          echo "::group::plan with a generated host part"
+          sudo $amc plan --answers examples/app-host/answers.yaml --detect-json examples/app-host/detect.json | tee plan-gen.txt
+          echo "::endgroup::"
+          must 'monitoring: oracle, tomcat' plan-gen.txt
+          must 'validate: VALID' plan-gen.txt
+          must 'no load / start errors' plan-gen.txt
           echo "::group::apply --start"
           sudo $amc apply --host-dir examples/oracle-db --start | tee apply.txt
           echo "::endgroup::"

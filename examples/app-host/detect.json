@@ -1,0 +1,10 @@
+{"os": "Example Linux 9", "time_zone": "Asia/Tashkent", "listening_ports": [22, 443, 1521, 6380, 8005, 8080, 9404],
+ "findings": [
+  {"id": "nginx", "confidence": "high", "profile": false, "ports": [443], "pids": [300]},
+  {"id": "oracle", "confidence": "high", "profile": true, "ports": [1521], "pids": [100, 101],
+   "values": {"ORACLE_ALERT_LOG": "/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log", "ORACLE_LISTENER_PORT": "1521",
+              "ORACLE_MON": "on", "ORACLE_SERVICE": "orcl", "ORACLE_SID": "ORCL"}},
+  {"id": "redis", "confidence": "high", "profile": true, "ports": [6380], "pids": [400], "values": {"REDIS_PORT": "6380"}},
+  {"id": "tomcat", "confidence": "high", "profile": true, "ports": [8005, 8080, 9404], "pids": [200],
+   "values": {"TOMCAT_ACCESS_LOG_DIR": "/opt/tomcat/logs", "TOMCAT_BASE": "/opt/tomcat", "TOMCAT_CATALINA_OUT": "/opt/tomcat/logs/catalina.out",
+              "TOMCAT_HTTP_PORT": "8080", "TOMCAT_JMX_PORT": "9404"}}]}

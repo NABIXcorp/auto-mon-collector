@@ -164,6 +164,9 @@ func tomcat(snap Snapshot, s Source) []Finding {
 		} else {
 			f.Notes = append(f.Notes, "no access log in "+logs+" (AccessLogValve off?)")
 		}
+		if m, _ := s.Glob(logs + "/catalina.out"); len(m) > 0 {
+			f.Values["TOMCAT_CATALINA_OUT"] = m[0]
+		}
 		out = append(out, f)
 	}
 	return out
@@ -246,7 +249,8 @@ func containsInt(xs []int, x int) bool {
 
 // Print writes the findings for people.
 func Print(w io.Writer, snap Snapshot, fs []Finding) {
-	fmt.Fprintf(w, "host: %s, %d listening port(s): %v\n", orUnknown(snap.OS), len(snap.PortsListening()), snap.PortsListening())
+	fmt.Fprintf(w, "host: %s, time zone %s, %d listening port(s): %v\n", orUnknown(snap.OS), orUnknown(snap.TimeZone),
+		len(snap.PortsListening()), snap.PortsListening())
 	for _, n := range snap.Notes {
 		fmt.Fprintf(w, "note: %s\n", n)
 	}
