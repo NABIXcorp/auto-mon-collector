@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/NABIXcorp/auto-mon-collector/internal/detect"
 	"github.com/NABIXcorp/auto-mon-collector/internal/engine"
 	"github.com/NABIXcorp/auto-mon-collector/internal/hostdir"
 	"github.com/NABIXcorp/auto-mon-collector/internal/sysexec"
@@ -24,6 +26,7 @@ Usage:
   amc plan  --host-dir DIR [flags]          check mode: diff + validate, changes nothing (default command)
   amc apply --host-dir DIR [--start] [flags] install (backup first), optionally (re)start the collector
   amc uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]   check mode unless --yes
+  amc detect [--json]                      read-only: which services this host runs (needs root)
   amc version
 
 Flags (plan / apply):
@@ -39,7 +42,7 @@ Flags (uninstall): removes units, files and what amc recorded in <prefix>/amc-st
 SELinux rules). Kept unless asked: data/ + backup/ (--purge-data), secrets/ (--purge-secrets: you type
 "yes"; without a terminal --yes counts), the collector user (--purge, only if amc created it).
 
-Not yet available: detect, sql, interactive questions (see docs/design.md, section 14).
+Not yet available: sql, generating the host config from detect, interactive questions (see docs/design.md, section 14).
 `
 
 // Exit codes (docs/design.md, section 8).
@@ -85,7 +88,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return planApply(cmd == "apply", args, stdout, stderr)
 	case "uninstall":
 		return uninstall(args, stdout, stderr)
-	case "detect", "sql":
+	case "detect":
+		return detectCmd(args, stdout, stderr)
+	case "sql":
 		fmt.Fprintf(stderr, "amc %s: not implemented yet (see docs/design.md, section 14)\n", cmd)
 		return exitPlan
 	default:
@@ -138,6 +143,38 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	if res.Failures > 0 {
 		return exitPlan
 	}
+	return exitOK
+}
+
+// detectSource is replaced in tests.
+var detectSource detect.Source = detect.OS{}
+
+func detectCmd(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("amc detect", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	asJSON := fs.Bool("json", false, "")
+	fs.Usage = func() { fmt.Fprint(stderr, usage) }
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	snap := detect.Collect(detectSource)
+	found := detect.Detect(snap, detectSource)
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(struct {
+			OS       string           `json:"os"`
+			Ports    []int            `json:"listening_ports"`
+			Notes    []string         `json:"notes,omitempty"`
+			Findings []detect.Finding `json:"findings"`
+		}{snap.OS, snap.PortsListening(), snap.Notes, found}); err != nil {
+			fmt.Fprintf(stderr, "amc: %v\n", err)
+			return exitUsage
+		}
+		return exitOK
+	}
+	detect.Print(stdout, snap, found)
+	fmt.Fprintln(stdout, "\nRead-only: nothing was changed. (Generating the host config from this comes next.)")
 	return exitOK
 }
 

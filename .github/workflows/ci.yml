@@ -82,6 +82,10 @@ jobs:
           must 'monitoring-otelcol.service active' apply.txt
           must 'monitoring-netconn.service active' apply.txt
           systemctl is-active monitoring-otelcol monitoring-netconn || die "units not active"
+          # detect on the real /proc: the live collector's OTLP port must be seen, the JSON must parse
+          sudo $amc detect
+          sudo $amc detect --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert 4317 in d["listening_ports"], d' \
+            || die "detect did not see the collector port 4317"
           sudo runuser -u otelcol-contrib -- test -r "$alert" || die "alert log not readable for the collector"
           if id -nG otelcol-contrib | grep -qwE 'root|sudo|adm'; then die "collector user in an admin group"; fi
           echo "::group::plan again (must be unchanged)"
