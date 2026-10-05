@@ -142,7 +142,7 @@ func runSmoke(t *testing.T, h host, r *fakeRunner, apply, start, fetch, smoke bo
 	t.Helper()
 	var out bytes.Buffer
 	res, err := Run(context.Background(), Options{
-		Root: h.root, Apply: apply, Start: start, Fetch: fetch, Smoke: smoke, Arch: "amd64",
+		Root: h.root, Apply: apply, Start: start, Fetch: fetch, Smoke: smoke, Rollback: true, Arch: "amd64",
 		SkipRootCheck: true, RootUID: os.Getuid(), StartWait: time.Millisecond, Out: &out, Runner: r,
 		Now:   func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) },
 		Chown: func(string, int, int) error { return nil },
