@@ -116,7 +116,7 @@ func run(t *testing.T, h host, r *fakeRunner, apply, start, fetch bool) (Result,
 	var out bytes.Buffer
 	res, err := Run(context.Background(), Options{
 		Root: h.root, Apply: apply, Start: start, Fetch: fetch, Arch: "amd64",
-		SkipRootCheck: true, StartWait: time.Millisecond, Out: &out, Runner: r,
+		SkipRootCheck: true, RootUID: os.Getuid(), StartWait: time.Millisecond, Out: &out, Runner: r,
 		Now:   func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) },
 		Chown: func(string, int, int) error { return nil },
 		Fetcher: func(_ context.Context, _ collector.Asset, dir string) (string, error) {

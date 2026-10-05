@@ -49,6 +49,7 @@ type Options struct {
 	Fetch bool // download the pinned collector if missing / other version
 
 	SkipRootCheck bool          // tests only
+	RootUID       int           // uid that must own the secrets file; 0 = root (tests use their own uid)
 	StartWait     time.Duration // default 20 s
 	Out           io.Writer
 	Runner        Runner
@@ -422,7 +423,7 @@ func (e *eng) checkSecrets(context.Context, string) bool {
 		e.r.fail("%s missing: needs %s (root, mode 600)", p, strings.Join(e.d.SecretKeys, " "))
 		return true
 	}
-	if ok, is := rootOnly600(fi); ok {
+	if ok, is := rootOnly600(fi, e.o.RootUID); ok {
 		e.r.ok("%s root 600", p)
 	} else {
 		e.r.fail("%s must be owned by root with mode 600 (is %s)", p, is)

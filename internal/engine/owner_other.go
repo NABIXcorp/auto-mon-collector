@@ -9,4 +9,4 @@ import "os"
 func ownerUID(os.FileInfo) (int, bool) { return 0, true }
 
 // rootOnly600: Unix modes do not exist there, so the check passes (it is enforced on Linux).
-func rootOnly600(os.FileInfo) (bool, string) { return true, "not checked on this OS" }
+func rootOnly600(os.FileInfo, int) (bool, string) { return true, "not checked on this OS" }
