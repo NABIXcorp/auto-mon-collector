@@ -233,6 +233,27 @@ func TestValidateFailureStopsAndMasksSecrets(t *testing.T) {
 	}
 }
 
+// A brand-new host in check mode has no <prefix>/data yet; file_storage needs an existing directory, so
+// validate must use a temporary data dir (the first CI end-to-end run failed exactly here).
+func TestCheckModeNewHostValidatesWithTempData(t *testing.T) {
+	h := newHost(t)
+	h.write("/opt/monitoring/secrets/collector.env", "OO_ENDPOINT=x\nOO_AUTH=y\nORACLE_MON_PASSWORD=z\n", 0o600)
+	r := &fakeRunner{readable: true}
+	res, out := run(t, h, r, false, false, true)
+	if res.Failures != 0 || !strings.Contains(out, "validate: VALID") {
+		t.Fatalf("%s", out)
+	}
+	data := ""
+	for _, kv := range r.envSeen {
+		if strings.HasPrefix(kv, "MONITORING_DATA=") {
+			data = strings.TrimPrefix(kv, "MONITORING_DATA=")
+		}
+	}
+	if data == "" || strings.HasPrefix(data, h.root) {
+		t.Errorf("MONITORING_DATA = %q, want a temp dir outside the host", data)
+	}
+}
+
 func TestSELinuxWithoutSemanageWarns(t *testing.T) {
 	h := newHost(t)
 	r := &fakeRunner{selinux: true}

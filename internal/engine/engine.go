@@ -706,8 +706,20 @@ func (e *eng) validate(_ context.Context, tmp string) bool {
 		}
 		args = append(args, "--config="+p)
 	}
+	// file_storage needs an existing directory. On a new host (check mode) <prefix>/data does not exist yet:
+	// validate against a temporary data dir with the same layout instead (found by the CI end-to-end test).
+	data := e.fs(e.pre("data"))
+	if _, err := os.Stat(filepath.Join(data, "file_storage")); err != nil {
+		data = filepath.Join(tmp, "data")
+		for _, sub := range []string{"file_storage", "netconn"} {
+			if err := os.MkdirAll(filepath.Join(data, sub), 0o700); err != nil {
+				e.r.fail("stage: %v", err)
+				return false
+			}
+		}
+	}
 	hostEnv, _ := envfile.Parse(e.d.HostEnv)
-	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "MONITORING_DATA=" + e.pre("data")}
+	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "MONITORING_DATA=" + data}
 	for _, m := range []map[string]string{hostEnv, e.secrets} {
 		for k, v := range m {
 			env = append(env, k+"="+v)

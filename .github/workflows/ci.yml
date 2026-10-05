@@ -48,24 +48,31 @@ jobs:
           printf "OO_ENDPOINT='http://127.0.0.1:9'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n" \
             | sudo tee /opt/monitoring/secrets/collector.env > /dev/null
           sudo chmod 600 /opt/monitoring/secrets/collector.env
+          # Every check stops the job on its own line: in `bash -e` a failure inside `a && b` does NOT stop the
+          # script (the first version of this step went green although validate had failed).
+          set -euo pipefail
+          die()  { echo "::error::$*"; exit 1; }
+          must() { grep -q -- "$1" "$2" || die "missing '$1' in $2"; }
           amc=./dist/amc-linux-amd64
           echo "::group::plan (check mode)"
-          sudo $amc plan --host-dir examples/oracle-db | tee plan1.txt
+          sudo $amc plan --host-dir examples/oracle-db | tee plan1.txt   # pipefail: amc's exit code counts
           echo "::endgroup::"
-          grep -q 'validate: VALID' plan1.txt && grep -q 'CHECK done: 0 failures' plan1.txt
-          [ ! -e /etc/systemd/system/monitoring-otelcol.service ] || { echo "plan changed the system"; exit 1; }
+          must 'validate: VALID' plan1.txt
+          must 'CHECK done: 0 failures' plan1.txt
+          if [ -e /etc/systemd/system/monitoring-otelcol.service ] || [ -e /opt/monitoring/config ]; then die "plan changed the system"; fi
           echo "::group::apply --start"
           sudo $amc apply --host-dir examples/oracle-db --start | tee apply.txt
           echo "::endgroup::"
-          grep -q 'monitoring-otelcol.service active' apply.txt
-          systemctl is-active monitoring-otelcol monitoring-netconn
-          sudo runuser -u otelcol-contrib -- test -r "$alert" && echo "alert log readable via ACL"
-          ! id -nG otelcol-contrib | grep -qwE 'root|sudo|adm' || { echo "collector user in an admin group"; exit 1; }
+          must 'monitoring-otelcol.service active' apply.txt
+          must 'monitoring-netconn.service active' apply.txt
+          systemctl is-active monitoring-otelcol monitoring-netconn || die "units not active"
+          sudo runuser -u otelcol-contrib -- test -r "$alert" || die "alert log not readable for the collector"
+          if id -nG otelcol-contrib | grep -qwE 'root|sudo|adm'; then die "collector user in an admin group"; fi
           echo "::group::plan again (must be unchanged)"
           sudo $amc plan --host-dir examples/oracle-db | tee plan2.txt
           echo "::endgroup::"
-          ! grep -E '^  (CHANGE|NEW|REMOVE) ' plan2.txt | grep -v ' VERSION' || { echo "second plan is not clean"; exit 1; }
-          grep -q 'CHECK done: 0 failures' plan2.txt
+          if grep -E '^  (CHANGE|NEW|REMOVE) ' plan2.txt; then die "second plan is not clean"; fi
+          must 'CHECK done: 0 failures' plan2.txt
       - name: No secrets (gitleaks, full history)
         run: |
           v=8.18.4; b=https://github.com/gitleaks/gitleaks/releases/download/v$v
