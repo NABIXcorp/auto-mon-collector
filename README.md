@@ -3,10 +3,10 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: early development (phase 3 done).** Detection, generator, interactive questions and the install
-> engine work and are tested on real hosts; signed releases and the one-liner come next. Design: [docs/design.md](docs/design.md).
+> **Status: v0.1.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 
-## What it will do
+## What it does
 
 ```bash
 curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh | sudo bash
@@ -21,6 +21,16 @@ curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/downl
 5. **Apply**: only after you say yes. Backup first, rollback on failure.
 
 Data goes over OTLP to any backend (OpenObserve first).
+
+## Verify instead of trusting
+
+`get.sh` checks an ECDSA P-256 signature over `SHA256SUMS` (public key: [keys/amc-release.pub](keys/amc-release.pub),
+also embedded in `get.sh`) and the binary's sha256 before it runs anything; without `openssl` it stops. To read it first:
+
+```bash
+curl -fsSLO https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh
+less get.sh && sudo bash get.sh            # AMC_VERSION=v0.1.0 pins a release
+```
 
 ## Principles
 
