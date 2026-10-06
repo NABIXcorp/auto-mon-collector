@@ -3,8 +3,9 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: v0.1.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.2.0, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
+> v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 
 ## What it does
 
@@ -29,7 +30,7 @@ also embedded in `get.sh`) and the binary's sha256 before it runs anything; with
 
 ```bash
 curl -fsSLO https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh
-less get.sh && sudo bash get.sh            # AMC_VERSION=v0.1.0 pins a release
+less get.sh && sudo bash get.sh            # AMC_VERSION=v0.2.0 pins a release
 ```
 
 ## Principles
