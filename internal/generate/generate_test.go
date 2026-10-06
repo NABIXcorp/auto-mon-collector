@@ -171,10 +171,10 @@ func TestLoadAnswers(t *testing.T) {
 		"services:\n  mongodb: {enabled: true}\n",                  // unknown service
 		"checks:\n  http:\n    - url: ftp://x/\n",                  // not http
 		"checks:\n  http:\n    - url: https://u:p4ss@x.example/\n", // credentials in a URL
-		"project: a,b\n",                                            // "," separates resource attributes
-		"project: a=b\n",                                            // "=" too
-		"project: Тест\n",                                           // not ASCII
-		"project: \" lead\"\n",                                      // must start with a letter or digit
+		"project: a,b\n",       // "," separates resource attributes
+		"project: a=b\n",       // "=" too
+		"project: Тест\n",      // not ASCII
+		"project: \" lead\"\n", // must start with a letter or digit
 	} {
 		if _, err := LoadAnswers(write(bad)); err == nil {
 			t.Errorf("must fail: %q", bad)
