@@ -33,6 +33,7 @@ receivers:
       network:
       paging:
       processes:
+      system:       # system.uptime (seconds since boot)
 
   # Collector self-metrics (service.telemetry below): otelcol_exporter_send_failed_*, queue size, ...
   prometheus/otelcol:
@@ -325,7 +326,8 @@ receivers:
 
 processors:
   resource_detection:
-    detectors: [system]
+    # env: OTEL_RESOURCE_ATTRIBUTES from host.env (e.g. project=..., set by amc from answers.yaml); empty = nothing
+    detectors: [env, system]
     system:
       hostname_sources: [os]
   batch:

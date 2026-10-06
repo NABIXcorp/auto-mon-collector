@@ -302,6 +302,11 @@ checks:
   http: [http://127.0.0.1:8080/app/]
 ```
 
+`project:` (optional, since v0.2.0): a group name (1-64 characters `A-Z a-z 0-9 space . _ -`). amc writes
+`OTEL_RESOURCE_ATTRIBUTES=project=<url-encoded>` into `host.env`; the `env` detector of `resource_detection` turns it
+into the resource attribute `project` on every metric, log and span of the host. Not asked interactively; kept
+from the saved answers. The base config also collects `system.uptime` (host_metrics `system` scraper).
+
 ---
 
 ## 10. Secrets

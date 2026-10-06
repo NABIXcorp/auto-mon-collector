@@ -129,6 +129,31 @@ func TestDeterministicAndQuoting(t *testing.T) {
 	}
 }
 
+// The project becomes OTEL_RESOURCE_ATTRIBUTES for the resource_detection "env" detector, which URL-decodes the
+// value (url.QueryUnescape): "Dev servers" -> "Dev+servers" -> "Dev servers". No project = no line at all.
+func TestProject(t *testing.T) {
+	h := Host{Findings: []detect.Finding{oracleFinding()}}
+	out, err := Generate(h, Answers{Project: "Dev servers.1_a-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\nOTEL_RESOURCE_ATTRIBUTES=project=Dev+servers.1_a-b\n"
+	if !strings.Contains(string(out.HostEnv), want) {
+		t.Errorf("host.env lacks %q:\n%s", want, out.HostEnv)
+	}
+	out, _ = Generate(h, Answers{})
+	if strings.Contains(string(out.HostEnv), "OTEL_RESOURCE_ATTRIBUTES") {
+		t.Errorf("no project -> no OTEL_RESOURCE_ATTRIBUTES:\n%s", out.HostEnv)
+	}
+	// round trip: answers.yaml keeps the project
+	b, _ := Answers{Project: "Dev servers"}.Marshal()
+	p := filepath.Join(t.TempDir(), "a.yaml")
+	os.WriteFile(p, b, 0o644)
+	if a, err := LoadAnswers(p); err != nil || a.Project != "Dev servers" {
+		t.Errorf("round trip: %+v %v\n%s", a, err, b)
+	}
+}
+
 func TestLoadAnswers(t *testing.T) {
 	dir := t.TempDir()
 	write := func(s string) string {
@@ -146,6 +171,10 @@ func TestLoadAnswers(t *testing.T) {
 		"services:\n  mongodb: {enabled: true}\n",                  // unknown service
 		"checks:\n  http:\n    - url: ftp://x/\n",                  // not http
 		"checks:\n  http:\n    - url: https://u:p4ss@x.example/\n", // credentials in a URL
+		"project: a,b\n",                                            // "," separates resource attributes
+		"project: a=b\n",                                            // "=" too
+		"project: Тест\n",                                           // not ASCII
+		"project: \" lead\"\n",                                      // must start with a letter or digit
 	} {
 		if _, err := LoadAnswers(write(bad)); err == nil {
 			t.Errorf("must fail: %q", bad)

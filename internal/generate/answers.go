@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -15,6 +16,8 @@ import (
 
 // Answers is everything a scan cannot know (docs/design.md, section 9). No secrets in here.
 type Answers struct {
+	// Project groups hosts in reports and dashboards (resource attribute "project" on everything the host sends).
+	Project  string             `yaml:"project,omitempty"`
 	Services map[string]Service `yaml:"services,omitempty"`
 	Checks   struct {
 		HTTP []HTTPCheck `yaml:"http,omitempty"`
@@ -34,6 +37,9 @@ type HTTPCheck struct {
 	Comment string `yaml:"comment,omitempty"`
 }
 
+// projectRE: empty (no project) or a plain name. No "," or "=": they separate OTEL_RESOURCE_ATTRIBUTES pairs.
+var projectRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9 ._-]{0,63})?$`)
+
 // LoadAnswers reads an answers file (unknown keys are an error: a typo must not be ignored silently).
 func LoadAnswers(path string) (Answers, error) {
 	var a Answers
@@ -51,6 +57,9 @@ func LoadAnswers(path string) (Answers, error) {
 
 // Validate rejects unknown services, non-http(s) URLs and URLs with credentials.
 func (a Answers) Validate() error {
+	if !projectRE.MatchString(a.Project) {
+		return fmt.Errorf("project: %q: use 1-64 characters A-Z a-z 0-9 space . _ - (it becomes a resource attribute)", a.Project)
+	}
 	for _, c := range a.Checks.HTTP {
 		u, err := url.Parse(c.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {

@@ -2,6 +2,7 @@ package generate
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -150,6 +151,10 @@ func Generate(h Host, a Answers) (Output, error) {
 
 	if len(netconn) > 0 {
 		env = append(env, `NETCONN_PORTS="`+joinInts(uniqSorted(netconn))+`"`)
+	}
+	// ---- project: read by the resource_detection "env" detector (values are URL-decoded there: "+" = space)
+	if a.Project != "" {
+		env = append(env, "OTEL_RESOURCE_ATTRIBUTES=project="+url.QueryEscape(a.Project))
 	}
 
 	// ---- write

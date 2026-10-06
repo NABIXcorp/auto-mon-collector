@@ -12,7 +12,7 @@ import (
 // Interview asks what a scan cannot know. prev (the saved answers of an earlier run) gives the defaults, so
 // a repeated run is Enter, Enter. The result names every detected service explicitly (enabled true / false).
 func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate.Answers, error) {
-	a := generate.Answers{Services: map[string]generate.Service{}}
+	a := generate.Answers{Services: map[string]generate.Service{}, Project: prev.Project} // project: kept, not asked
 	byID := map[string]detect.Finding{}
 	var profiles []string
 	for _, f := range fs {

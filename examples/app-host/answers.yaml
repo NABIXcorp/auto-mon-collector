@@ -1,6 +1,7 @@
 # Example answers for an application host (Tomcat + Oracle PDB). Only what a scan cannot know; no secrets.
 #   amc plan --answers answers.yaml                  (scans this host)
 #   amc plan --answers answers.yaml --detect-json detect.json   (uses the saved scan below: CI / review)
+project: Example apps     # optional: resource attribute "project" on all data (group hosts in reports)
 services:
   oracle:
     service: apppdb       # the PDB's service name (the scan guesses the SID)
