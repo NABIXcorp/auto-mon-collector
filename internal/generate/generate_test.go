@@ -129,6 +129,63 @@ func TestDeterministicAndQuoting(t *testing.T) {
 	}
 }
 
+// Tomcat log files (v0.3.0): the new scan value gives the same receiver as an old saved scan (TOMCAT_ACCESS_LOG_DIR);
+// systemd-started Tomcat (daily JULI files); answers override the scan; nothing found = a DEFAULT line, not silence.
+func TestTomcatLogFiles(t *testing.T) {
+	tz := "Asia/Tashkent"
+	gen := func(v map[string]string, a Answers) Output {
+		t.Helper()
+		f := detect.Finding{ID: "tomcat", Confidence: "high", Profile: true, Ports: []int{8080}, Values: v}
+		out, err := Generate(Host{TimeZone: tz, Findings: []detect.Finding{f}}, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	old := gen(map[string]string{"TOMCAT_ACCESS_LOG_DIR": "/opt/tomcat/logs", "TOMCAT_CATALINA_OUT": "/opt/tomcat/logs/catalina.out"}, Answers{})
+	cur := gen(map[string]string{"TOMCAT_ACCESS_LOG": "/opt/tomcat/logs/localhost_access_log.*.txt",
+		"TOMCAT_CATALINA_OUT": "/opt/tomcat/logs/catalina.out"}, Answers{})
+	if string(old.HostYAML) != string(cur.HostYAML) {
+		t.Errorf("old and new scan values must give the same config:\n%s\n---\n%s", old.HostYAML, cur.HostYAML)
+	}
+
+	prod := gen(map[string]string{"TOMCAT_ACCESS_LOG": "/opt/tomcat10/logs/access_log.*.log",
+		"TOMCAT_JULI_LOGS": "/opt/tomcat10/logs/catalina.*.log /opt/tomcat10/logs/localhost.*.log"}, Answers{})
+	y := string(prod.HostYAML)
+	for _, want := range []string{"include: [/opt/tomcat10/logs/access_log.*.log]",
+		"include: [/opt/tomcat10/logs/catalina.*.log, /opt/tomcat10/logs/localhost.*.log]"} {
+		if !strings.Contains(y, want) {
+			t.Errorf("host.yaml lacks %q:\n%s", want, y)
+		}
+	}
+	if p := pipelines(parse(t, prod.HostYAML)); len(p["logs"].(map[string]any)["receivers"].([]any)) != 2 {
+		t.Errorf("both Tomcat log receivers expected: %v", p["logs"])
+	}
+	for _, d := range prod.Defaults {
+		if strings.Contains(d, "Tomcat") {
+			t.Errorf("logs were found, no Tomcat default expected: %v", prod.Defaults)
+		}
+	}
+
+	none := gen(map[string]string{}, Answers{})
+	if d := strings.Join(none.Defaults, "\n"); !strings.Contains(d, "services.tomcat.access_log") || !strings.Contains(d, "services.tomcat.logs") {
+		t.Errorf("missing logs must be reported as defaults: %v", none.Defaults)
+	}
+	if strings.Contains(string(none.HostYAML), "file_log") {
+		t.Error("no logs found: no file_log receiver")
+	}
+
+	ans := Answers{Services: map[string]Service{"tomcat": {AccessLog: "/srv/tc/logs/acc.*.log", Logs: []string{"-"}}}}
+	set := gen(map[string]string{"TOMCAT_ACCESS_LOG": "/opt/tomcat/logs/localhost_access_log.*.txt",
+		"TOMCAT_CATALINA_OUT": "/opt/tomcat/logs/catalina.out"}, ans)
+	if y := string(set.HostYAML); !strings.Contains(y, "include: [/srv/tc/logs/acc.*.log]") || strings.Contains(y, "file_log/catalina") {
+		t.Errorf("answers override the scan ('-' = none):\n%s", y)
+	}
+	if len(set.Defaults) != 0 {
+		t.Errorf("answered: no defaults: %v", set.Defaults)
+	}
+}
+
 // The project becomes OTEL_RESOURCE_ATTRIBUTES for the resource_detection "env" detector, which URL-decodes the
 // value (url.QueryUnescape): "Dev servers" -> "Dev+servers" -> "Dev servers". No project = no line at all.
 func TestProject(t *testing.T) {
@@ -175,6 +232,10 @@ func TestLoadAnswers(t *testing.T) {
 		"project: a=b\n",       // "=" too
 		"project: Тест\n",      // not ASCII
 		"project: \" lead\"\n", // must start with a letter or digit
+		"services:\n  tomcat: {access_log: relative/x.log}\n",      // log path must be absolute
+		"services:\n  tomcat: {logs: [\"/a b/c.log\"]}\n",          // no spaces
+		"services:\n  oracle: {access_log: /x/access.log}\n",       // Tomcat-only setting
+		"services:\n  tomcat: {access_log: \"/x/a.log\\ny: 1\"}\n", // no line breaks (YAML injection)
 	} {
 		if _, err := LoadAnswers(write(bad)); err == nil {
 			t.Errorf("must fail: %q", bad)

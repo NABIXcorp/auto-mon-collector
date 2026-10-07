@@ -91,17 +91,40 @@ func Generate(h Host, a Answers) (Output, error) {
 		if g := t.Values["TOMCAT_GROUP"]; g != "" {
 			env = append(env, "TOMCAT_GROUP="+g)
 		}
-		if d := t.Values["TOMCAT_ACCESS_LOG_DIR"]; d != "" {
-			recv["file_log/tomcat_access"] = tomcatAccess(d)
+		ans := a.Services["tomcat"]
+		access := ans.AccessLog
+		switch {
+		case access != "":
+		case t.Values["TOMCAT_ACCESS_LOG"] != "":
+			access = t.Values["TOMCAT_ACCESS_LOG"]
+		case t.Values["TOMCAT_ACCESS_LOG_DIR"] != "": // scans saved by amc <= v0.2.0
+			access = t.Values["TOMCAT_ACCESS_LOG_DIR"] + "/localhost_access_log.*.txt"
+		default:
+			out.Defaults = append(out.Defaults, "no Tomcat access log found: no HTTP status / latency from logs "+
+				"(answer services.tomcat.access_log: a glob, or '-' for none)")
+		}
+		if access != "" && access != "-" {
+			recv["file_log/tomcat_access"] = tomcatAccess(access)
 			tomcatLogs = append(tomcatLogs, "file_log/tomcat_access")
 		}
-		if p := t.Values["TOMCAT_CATALINA_OUT"]; p != "" {
+		files := ans.Logs
+		switch {
+		case len(files) > 0:
+		case t.Values["TOMCAT_CATALINA_OUT"] != "":
+			files = []string{t.Values["TOMCAT_CATALINA_OUT"]}
+		case t.Values["TOMCAT_JULI_LOGS"] != "":
+			files = strings.Fields(t.Values["TOMCAT_JULI_LOGS"])
+		default:
+			out.Defaults = append(out.Defaults, "no Tomcat log (catalina.out / catalina.<date>.log) found: no exceptions "+
+				"from logs (answer services.tomcat.logs: a list of globs, or [\"-\"] for none)")
+		}
+		if len(files) > 0 && files[0] != "-" {
 			tz := h.TimeZone
 			if tz == "" {
 				tz = "Local"
-				out.Defaults = append(out.Defaults, "catalina.out time zone: the collector's local zone (host zone unknown)")
+				out.Defaults = append(out.Defaults, "Tomcat log time zone: the collector's local zone (host zone unknown)")
 			}
-			recv["file_log/catalina"] = catalina(p, tz)
+			recv["file_log/catalina"] = catalina(files, tz)
 			tomcatLogs = append(tomcatLogs, "file_log/catalina")
 		}
 		if p, err := strconv.Atoi(t.Values["TOMCAT_HTTP_PORT"]); err == nil {

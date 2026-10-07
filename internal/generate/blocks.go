@@ -51,7 +51,7 @@ func tcpCheck(port int) string {
 `, port)
 }
 
-func tomcatAccess(dir string) string {
+func tomcatAccess(glob string) string {
 	return strings.Replace(`  file_log/tomcat_access:
     include: [@INCLUDE@]
     start_at: end
@@ -79,11 +79,17 @@ func tomcatAccess(dir string) string {
       - type: remove
         if: 'attributes.time != nil'
         field: attributes.time
-`, "@INCLUDE@", q(dir+"/localhost_access_log.*.txt"), 1)
+`, "@INCLUDE@", q(glob), 1)
 }
 
-func catalina(file, tz string) string {
-	return strings.NewReplacer("@INCLUDE@", q(file), "@TZ@", q(tz)).Replace(`  file_log/catalina:
+// catalina reads Tomcat's own log: catalina.out or the daily JULI files (catalina.<date>.log, localhost.<date>.log);
+// same line format, multi-line entries (stack traces) joined per file.
+func catalina(files []string, tz string) string {
+	inc := make([]string, len(files))
+	for i, f := range files {
+		inc[i] = q(f)
+	}
+	return strings.NewReplacer("@INCLUDE@", strings.Join(inc, ", "), "@TZ@", q(tz)).Replace(`  file_log/catalina:
     include: [@INCLUDE@]
     start_at: end
     storage: file_storage

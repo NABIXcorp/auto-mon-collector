@@ -159,17 +159,57 @@ func tomcat(snap Snapshot, s Source) []Finding {
 		if g, err := s.Group(logs); err == nil && g != "" && g != "root" {
 			f.Values["TOMCAT_GROUP"] = g
 		}
-		if m, _ := s.Glob(logs + "/localhost_access_log*"); len(m) > 0 {
-			f.Values["TOMCAT_ACCESS_LOG_DIR"] = logs
-		} else {
-			f.Notes = append(f.Notes, "no access log in "+logs+" (AccessLogValve off?)")
+		// access log: the default name first, then any *access*log* file (AccessLogValve prefix / suffix changed,
+		// e.g. access_log.2026-10-07.log). The include glob = the newest name with its date replaced by *.
+		access, _ := s.Glob(logs + "/localhost_access_log*")
+		if len(access) == 0 {
+			access, _ = s.Glob(logs + "/*access*log*")
 		}
+		if len(access) > 0 {
+			f.Values["TOMCAT_ACCESS_LOG"] = datedGlob(access)
+		} else {
+			f.Notes = append(f.Notes, "no access log in "+logs+" (AccessLogValve off?): answer services.tomcat.access_log")
+		}
+		// Tomcat's own log: catalina.out (started by catalina.sh), else the daily files of the JULI handlers
+		// (started by systemd without catalina.out): catalina.<date>.log and localhost.<date>.log (webapp errors).
 		if m, _ := s.Glob(logs + "/catalina.out"); len(m) > 0 {
 			f.Values["TOMCAT_CATALINA_OUT"] = m[0]
+		} else {
+			var juli []string
+			for _, name := range []string{"catalina", "localhost"} {
+				if m, _ := s.Glob(logs + "/" + name + ".*.log"); len(m) > 0 {
+					juli = append(juli, logs+"/"+name+".*.log")
+				}
+			}
+			if len(juli) > 0 {
+				f.Values["TOMCAT_JULI_LOGS"] = strings.Join(juli, " ")
+			} else {
+				f.Notes = append(f.Notes, "no catalina.out or catalina.<date>.log in "+logs+": answer services.tomcat.logs")
+			}
 		}
 		out = append(out, f)
 	}
 	return out
+}
+
+var dateRE = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
+
+// datedGlob turns rotated file names into one include glob: the newest name (sorted last) with its date as *.
+// Without a date in the name the name itself is used. Compressed rotations (.gz, ...) are skipped: not text.
+func datedGlob(files []string) string {
+	var plain []string
+	for _, f := range files {
+		switch path.Ext(f) {
+		case ".gz", ".bz2", ".xz", ".zip", ".zst":
+		default:
+			plain = append(plain, f)
+		}
+	}
+	if len(plain) == 0 {
+		plain = files
+	}
+	sort.Strings(plain)
+	return dateRE.ReplaceAllString(plain[len(plain)-1], "*")
 }
 
 func caddy(snap Snapshot) []Finding {

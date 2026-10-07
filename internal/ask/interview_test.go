@@ -22,8 +22,10 @@ func appHost() []detect.Finding {
 }
 
 func TestFirstRunAsksAndSecondRunIsEnterEnter(t *testing.T) {
-	s := &Script{Answers: []string{"n", "y", "n", "y", // monitor oracle, not redis, tomcat
-		"apppdb", "", "http://127.0.0.1:8080/app/ https://app.example.com/app/"}}
+	s := &Script{Answers: []string{"Shop prod", // project
+		"n", "y", "n", "y", // monitor oracle, not redis, tomcat
+		"apppdb", "", "http://127.0.0.1:8080/app/ https://app.example.com/app/",
+		"/opt/tomcat/logs/access_log.*.log", ""}} // Tomcat logs: access log typed, Tomcat log none (default '-')
 	a, err := Interview(appHost(), generate.Answers{}, s)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, s.Out.String())
@@ -33,6 +35,10 @@ func TestFirstRunAsksAndSecondRunIsEnterEnter(t *testing.T) {
 	}
 	if a.Services["oracle"].Service != "apppdb" || a.Services["oracle"].User != "otel_mon" || len(a.Checks.HTTP) != 2 {
 		t.Errorf("answers: %+v", a)
+	}
+	if tc := a.Services["tomcat"]; a.Project != "Shop prod" || tc.AccessLog != "/opt/tomcat/logs/access_log.*.log" ||
+		!reflect.DeepEqual(tc.Logs, []string{"-"}) {
+		t.Errorf("project / Tomcat logs: %q %+v", a.Project, tc)
 	}
 	out := s.Out.String()
 	for _, want := range []string{"found  oracle", "seen   nginx", "guesses the service from SID ORCL", "Monitor [oracle, redis, tomcat]?"} {
@@ -55,7 +61,7 @@ func TestFirstRunAsksAndSecondRunIsEnterEnter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, b)
 	}
-	s2 := &Script{Answers: []string{"", "", "", ""}}
+	s2 := &Script{Answers: []string{"", "", "", "", "", "", ""}} // project, monitor, service, user, http, 2 x logs
 	a2, err := Interview(appHost(), prev, s2)
 	if err != nil {
 		t.Fatal(err)
@@ -69,15 +75,37 @@ func TestFirstRunAsksAndSecondRunIsEnterEnter(t *testing.T) {
 }
 
 func TestDashMeansNoHTTPChecks(t *testing.T) {
-	s := &Script{Answers: []string{"", "", "", "-"}}
+	s := &Script{Answers: []string{"", "", "", "", "-", "", ""}}
 	a, err := Interview(appHost(), generate.Answers{}, s)
-	if err != nil || len(a.Checks.HTTP) != 0 {
-		t.Errorf("%+v %v", a.Checks, err)
+	if err != nil || len(a.Checks.HTTP) != 0 || a.Project != "" {
+		t.Errorf("%+v %q %v", a.Checks, a.Project, err)
+	}
+}
+
+// Prod-like host (2026-10-07): Tomcat started by systemd, no catalina.out, renamed access log. The scan's
+// globs are the defaults: Enter keeps them and nothing is repeated in answers.yaml.
+func TestScannedTomcatLogsAreDefaults(t *testing.T) {
+	fs := []detect.Finding{{ID: "tomcat", Confidence: "high", Profile: true, Ports: []int{8080},
+		Values: map[string]string{"TOMCAT_HTTP_PORT": "8080", "TOMCAT_ACCESS_LOG": "/opt/tomcat10/logs/access_log.*.log",
+			"TOMCAT_JULI_LOGS": "/opt/tomcat10/logs/catalina.*.log /opt/tomcat10/logs/localhost.*.log"}}}
+	s := &Script{Answers: []string{"", "", "", "", ""}}
+	a, err := Interview(fs, generate.Answers{Project: "Shop online"}, s)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, s.Out.String())
+	}
+	if tc := a.Services["tomcat"]; a.Project != "Shop online" || tc.AccessLog != "" || tc.Logs != nil {
+		t.Errorf("previous project kept, scanned logs not saved: %q %+v", a.Project, tc)
+	}
+	for _, want := range []string{"Project [Shop online]", "Tomcat access log [/opt/tomcat10/logs/access_log.*.log]",
+		"[/opt/tomcat10/logs/catalina.*.log /opt/tomcat10/logs/localhost.*.log]"} {
+		if !strings.Contains(s.Out.String(), want) {
+			t.Errorf("transcript lacks %q:\n%s", want, s.Out.String())
+		}
 	}
 }
 
 func TestBadURLIsRejected(t *testing.T) {
-	s := &Script{Answers: []string{"", "", "", "https://user:secretpw@app.example.com/"}}
+	s := &Script{Answers: []string{"", "", "", "", "https://user:secretpw@app.example.com/", "", ""}}
 	if _, err := Interview(appHost(), generate.Answers{}, s); err == nil || strings.Contains(err.Error(), "secretpw") {
 		t.Errorf("URL with credentials must fail without echoing them: %v", err)
 	}
@@ -98,7 +126,7 @@ func TestSecretsNeverInTheTranscript(t *testing.T) {
 }
 
 func TestNoServices(t *testing.T) {
-	s := &Script{}
+	s := &Script{Answers: []string{""}} // project
 	a, err := Interview(nil, generate.Answers{}, s)
 	if err != nil || len(a.Services) != 0 || !strings.Contains(s.Out.String(), "only host metrics") {
 		t.Errorf("%+v %v %s", a, err, s.Out.String())

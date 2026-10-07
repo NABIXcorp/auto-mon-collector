@@ -12,7 +12,20 @@ import (
 // Interview asks what a scan cannot know. prev (the saved answers of an earlier run) gives the defaults, so
 // a repeated run is Enter, Enter. The result names every detected service explicitly (enabled true / false).
 func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate.Answers, error) {
-	a := generate.Answers{Services: map[string]generate.Service{}, Project: prev.Project} // project: kept, not asked
+	a := generate.Answers{Services: map[string]generate.Service{}}
+	// ---- project: groups hosts in reports and dashboards (resource attribute), the previous answer is the default
+	def := prev.Project
+	if def == "" {
+		def = "-"
+	}
+	p.Say("Project: groups this host with others in reports and dashboards (e.g. a product or environment), '-' = none\n")
+	proj, err := p.Ask("Project", def)
+	if err != nil {
+		return a, err
+	}
+	if proj = strings.TrimSpace(proj); proj != "-" {
+		a.Project = proj
+	}
 	byID := map[string]detect.Finding{}
 	var profiles []string
 	for _, f := range fs {
@@ -31,7 +44,7 @@ func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate
 	sort.Strings(profiles)
 	if len(profiles) == 0 {
 		p.Say("no known service: only host metrics will be collected\n")
-		return a, nil
+		return a, a.Validate()
 	}
 
 	// ---- which services
@@ -115,8 +128,54 @@ func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate
 				a.Checks.HTTP = append(a.Checks.HTTP, generate.HTTPCheck{URL: u, Comment: comment[u]})
 			}
 		}
+
+		// ---- Tomcat log files: default = previous answer, else what the scan found, else none ('-')
+		if err := tomcatLogs(&a, byID["tomcat"], prev.Services["tomcat"], p); err != nil {
+			return a, err
+		}
 	}
 	return a, a.Validate()
+}
+
+// tomcatLogs asks for the access log and Tomcat's own log. Enter keeps the default; the answer is saved only when
+// it differs from the scan, so answers.yaml stays short and a later scan can still find moved files.
+func tomcatLogs(a *generate.Answers, t detect.Finding, prev generate.Service, p Prompter) error {
+	s := a.Services["tomcat"]
+	foundAccess := t.Values["TOMCAT_ACCESS_LOG"]
+	if foundAccess == "" && t.Values["TOMCAT_ACCESS_LOG_DIR"] != "" {
+		foundAccess = t.Values["TOMCAT_ACCESS_LOG_DIR"] + "/localhost_access_log.*.txt"
+	}
+	foundLogs := t.Values["TOMCAT_CATALINA_OUT"]
+	if foundLogs == "" {
+		foundLogs = t.Values["TOMCAT_JULI_LOGS"]
+	}
+	pick := func(prev, found string) string {
+		switch {
+		case prev != "":
+			return prev
+		case found != "":
+			return found
+		}
+		return "-"
+	}
+	p.Say("  Tomcat logs: file globs (* = any date), '-' = none\n")
+	access, err := p.Ask("Tomcat access log", pick(prev.AccessLog, foundAccess))
+	if err != nil {
+		return err
+	}
+	if access = strings.TrimSpace(access); access != foundAccess { // incl. "-" when nothing was found: answered
+		s.AccessLog = access
+	}
+	logs, err := p.Ask("Tomcat log (catalina.out format, globs separated by spaces)",
+		pick(strings.Join(prev.Logs, " "), foundLogs))
+	if err != nil {
+		return err
+	}
+	if f := strings.Fields(logs); strings.Join(f, " ") != foundLogs {
+		s.Logs = f
+	}
+	a.Services["tomcat"] = s
+	return nil
 }
 
 // Secrets asks for the values of the secrets file (only when it does not exist yet). OO_ENDPOINT is not a

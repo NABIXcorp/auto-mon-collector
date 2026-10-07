@@ -109,10 +109,14 @@ func TestTomcatAndOracleHost(t *testing.T) {
 		t.Fatalf("tomcat not found: %+v", fs)
 	}
 	for k, v := range map[string]string{"TOMCAT_BASE": "/opt/tomcat", "TOMCAT_JMX_PORT": "9404", "TOMCAT_HTTP_PORT": "8080",
-		"TOMCAT_GROUP": "tomcat", "TOMCAT_ACCESS_LOG_DIR": "/opt/tomcat/logs", "TOMCAT_CATALINA_OUT": "/opt/tomcat/logs/catalina.out"} {
+		"TOMCAT_GROUP": "tomcat", "TOMCAT_ACCESS_LOG": "/opt/tomcat/logs/localhost_access_log.*.txt",
+		"TOMCAT_CATALINA_OUT": "/opt/tomcat/logs/catalina.out"} {
 		if tc.Values[k] != v {
 			t.Errorf("%s = %q, want %q", k, tc.Values[k], v)
 		}
+	}
+	if tc.Values["TOMCAT_JULI_LOGS"] != "" {
+		t.Errorf("catalina.out exists: the daily files are not used: %q", tc.Values["TOMCAT_JULI_LOGS"])
 	}
 	if !strings.Contains(strings.Join(tc.Notes, " "), "OpenTelemetry Java agent") {
 		t.Errorf("otel agent not noticed: %v", tc.Notes)
@@ -121,6 +125,42 @@ func TestTomcatAndOracleHost(t *testing.T) {
 	if o == nil || o.Values["ORACLE_SID"] != "ORCL" || o.Values["ORACLE_SERVICE"] != "orcl" ||
 		o.Values["ORACLE_ALERT_LOG"] != "/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log" {
 		t.Errorf("oracle: %+v", o)
+	}
+}
+
+// Pattern of a Tomcat started by systemd (2026-10-07): no catalina.out, daily JULI files, the access log renamed
+// by the AccessLogValve (prefix access_log., suffix .log), old rotations compressed.
+func TestTomcatDailyLogsAndRenamedAccessLog(t *testing.T) {
+	h := newFake()
+	h.proc(300, "java", []string{"/usr/bin/java", "-Xmx16384m", "-Dcatalina.base=/opt/tomcat10", "-Dcatalina.home=/opt/tomcat10",
+		"org.apache.catalina.startup.Bootstrap", "start"}, nil, 8080, 8005)
+	for _, f := range []string{"access_log.2026-10-06.log", "access_log.2026-10-07.log", "access_log.2026-09-01.log.gz",
+		"catalina.2026-10-06.log", "catalina.2026-10-07.log", "localhost.2026-10-07.log"} {
+		h.m.Files["/opt/tomcat10/logs/"+f] = "x"
+	}
+	_, fs := h.snap()
+	tc := find(fs, "tomcat")
+	if tc == nil {
+		t.Fatalf("tomcat not found: %+v", fs)
+	}
+	for k, v := range map[string]string{"TOMCAT_ACCESS_LOG": "/opt/tomcat10/logs/access_log.*.log",
+		"TOMCAT_JULI_LOGS": "/opt/tomcat10/logs/catalina.*.log /opt/tomcat10/logs/localhost.*.log", "TOMCAT_CATALINA_OUT": ""} {
+		if tc.Values[k] != v {
+			t.Errorf("%s = %q, want %q", k, tc.Values[k], v)
+		}
+	}
+	if n := strings.Join(tc.Notes, " "); strings.Contains(n, "no access log") || strings.Contains(n, "no catalina.out") {
+		t.Errorf("logs were found, no note expected: %v", tc.Notes)
+	}
+}
+
+func TestTomcatWithoutLogsSaysWhatToAnswer(t *testing.T) {
+	h := newFake()
+	h.proc(300, "java", []string{"/usr/bin/java", "-Dcatalina.base=/srv/tc", "start"}, nil, 8080)
+	_, fs := h.snap()
+	n := strings.Join(find(fs, "tomcat").Notes, " ")
+	if !strings.Contains(n, "services.tomcat.access_log") || !strings.Contains(n, "services.tomcat.logs") {
+		t.Errorf("notes must name the answers: %v", n)
 	}
 }
 

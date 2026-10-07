@@ -29,7 +29,13 @@ type Service struct {
 	Enabled *bool  `yaml:"enabled,omitempty"`
 	Service string `yaml:"service,omitempty"` // oracle: service name (ORACLE_SERVICE), e.g. the PDB
 	User    string `yaml:"user,omitempty"`    // oracle: monitoring user (ORACLE_MON_USER)
+	// tomcat: log files when the scan cannot find them (empty = what the scan found, "-" = none).
+	AccessLog string   `yaml:"access_log,omitempty"` // access log glob, e.g. /opt/tomcat/logs/access_log.*.log
+	Logs      []string `yaml:"logs,omitempty"`       // Tomcat log globs (catalina.out format), e.g. .../catalina.*.log
 }
+
+// logPathRE: an absolute path / glob without spaces, quotes or control characters, or "-" (= none).
+var logPathRE = regexp.MustCompile(`^(-|/[A-Za-z0-9_./*?\[\]{},+@%=:-]{1,255})$`)
 
 // HTTPCheck is one up check. URLs are labels used by alerts and dashboards: keep them stable.
 type HTTPCheck struct {
@@ -69,11 +75,19 @@ func (a Answers) Validate() error {
 			return fmt.Errorf("checks.http: %q contains credentials: not allowed (they would be printed and stored)", u.Redacted())
 		}
 	}
-	for name := range a.Services {
+	for name, s := range a.Services {
 		switch name {
 		case "oracle", "tomcat", "redis", "caddy":
 		default:
 			return fmt.Errorf("services: unknown service %q (known: oracle, tomcat, redis, caddy)", name)
+		}
+		if name != "tomcat" && (s.AccessLog != "" || len(s.Logs) > 0) {
+			return fmt.Errorf("services.%s: access_log / logs are Tomcat settings", name)
+		}
+		for _, p := range append([]string{s.AccessLog}, s.Logs...) {
+			if p != "" && !logPathRE.MatchString(p) {
+				return fmt.Errorf("services.tomcat: log path %q: use an absolute path or glob without spaces, or '-'", p)
+			}
 		}
 	}
 	return nil

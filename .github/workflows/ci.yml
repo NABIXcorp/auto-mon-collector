@@ -118,11 +118,21 @@ jobs:
           must 'monitoring: oracle, tomcat' plan-gen.txt
           must 'validate: VALID' plan-gen.txt
           must 'no load / start errors' plan-gen.txt
-          # Interactive on a REAL terminal (script = pseudo-tty, so /dev/tty works as over SSH): Enter for the
-          # service list, a PDB name, Enter for user + HTTP checks, then "n" for "Apply now?".
-          echo "::group::interactive plan (pseudo-terminal)"
-          printf '\napppdb\n\n\nn\n' | sudo script -qec "$amc plan --detect-json examples/app-host/detect.json" /dev/null | tee interactive.txt
+          # Tomcat started by systemd (v0.3.0): daily JULI files + renamed access log, two includes in one receiver.
+          echo "::group::plan with a systemd Tomcat (daily log files)"
+          sudo $amc plan --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json | tee plan-juli.txt
           echo "::endgroup::"
+          must 'validate: VALID' plan-juli.txt
+          must 'no load / start errors' plan-juli.txt
+          if grep -q 'DEFAULT' plan-juli.txt; then die "systemd Tomcat: logs were found, no DEFAULT expected"; fi
+          # Interactive on a REAL terminal (script = pseudo-tty, so /dev/tty works as over SSH): Enter for the
+          # project and the service list, a PDB name, Enter for user + HTTP checks + 2 Tomcat log paths, then "n"
+          # for "Apply now?".
+          echo "::group::interactive plan (pseudo-terminal)"
+          printf '\n\napppdb\n\n\n\n\nn\n' | sudo script -qec "$amc plan --detect-json examples/app-host/detect.json" /dev/null | tee interactive.txt
+          echo "::endgroup::"
+          must 'Project \[-\]' interactive.txt
+          must 'Tomcat access log \[/opt/tomcat/logs/localhost_access_log' interactive.txt
           must 'Monitor \[oracle, redis, tomcat\]?' interactive.txt
           must 'Oracle service name \[orcl\]' interactive.txt
           must 'NEW    answers.yaml' interactive.txt

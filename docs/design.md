@@ -116,6 +116,8 @@ Enable [oracle, tomcat, redis]? (enter = yes, or list to change):
 | Oracle service name | answers → derived from SID / listener config → prompt with the guess as default |
 | Oracle monitoring user / password | answers (user) → hidden prompt (password) |
 | HTTP checks (URLs) | answers → prompt (optional, empty = none) |
+| Project (v0.3.0) | answers → prompt, default = the previous answer, `-` = none |
+| Tomcat access log / Tomcat log (v0.3.0) | answers → scan (default name, renamed `*access*log*`, `catalina.out`, else daily `catalina.*.log` + `localhost.*.log`) → prompt with the scan result as default, `-` = none. Nothing found and nothing answered = a `DEFAULT` line in `plan` (logs never go missing silently) |
 
 ### 4.5 Generate (staging, still read-only for the system)
 Writes to a staging directory: `host.yaml`, `host.env`, `collector.env` (0600), plus the shipped base config
@@ -304,8 +306,19 @@ checks:
 
 `project:` (optional, since v0.2.0): a group name (1-64 characters `A-Z a-z 0-9 space . _ -`). amc writes
 `OTEL_RESOURCE_ATTRIBUTES=project=<url-encoded>` into `host.env`; the `env` detector of `resource_detection` turns it
-into the resource attribute `project` on every metric, log and span of the host. Not asked interactively; kept
-from the saved answers. The base config also collects `system.uptime` (host_metrics `system` scraper).
+into the resource attribute `project` on every metric, log and span of the host. Asked interactively since v0.3.0
+(default = the saved answer). The base config also collects `system.uptime` (host_metrics `system` scraper).
+
+`services.tomcat.access_log` / `services.tomcat.logs` (optional, since v0.3.0): absolute file globs (`*` = any date)
+when the scan cannot find the files or finds the wrong ones; `-` = none. Empty = what the scan found. The
+interactive run saves them only when they differ from the scan, so a later scan still follows moved files.
+
+```yaml
+services:
+  tomcat:
+    access_log: /opt/tomcat10/logs/access_log.*.log
+    logs: [/opt/tomcat10/logs/catalina.*.log, /opt/tomcat10/logs/localhost.*.log]
+```
 
 ---
 
