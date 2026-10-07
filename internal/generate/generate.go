@@ -119,7 +119,13 @@ func Generate(h Host, a Answers) (Output, error) {
 				"from logs (answer services.tomcat.logs: a list of globs, or [\"-\"] for none)")
 		}
 		if len(files) > 0 && files[0] != "-" {
-			tz := h.TimeZone
+			tz := ans.TimeZone // answer > the JVM's zone (scan) > the host's zone
+			if tz == "" {
+				tz = t.Values["TOMCAT_TIME_ZONE"]
+			}
+			if tz == "" {
+				tz = h.TimeZone
+			}
 			if tz == "" {
 				tz = "Local"
 				out.Defaults = append(out.Defaults, "Tomcat log time zone: the collector's local zone (host zone unknown)")

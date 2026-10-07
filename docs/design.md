@@ -312,6 +312,9 @@ into the resource attribute `project` on every metric, log and span of the host.
 `services.tomcat.access_log` / `services.tomcat.logs` (optional, since v0.3.0): absolute file globs (`*` = any date)
 when the scan cannot find the files or finds the wrong ones; `-` = none. Empty = what the scan found. The
 interactive run saves them only when they differ from the scan, so a later scan still follows moved files.
+`services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
+JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone
+than the host would otherwise put every entry hours off.
 
 ```yaml
 services:

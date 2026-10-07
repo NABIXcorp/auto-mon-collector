@@ -132,6 +132,16 @@ func tomcat(snap Snapshot, s Source) []Finding {
 		f := Finding{ID: "tomcat", Confidence: "high", Profile: true, Ports: p.Ports, PIDs: []int{p.PID},
 			Values: map[string]string{}}
 		f.Values["TOMCAT_BASE"] = base
+		// Tomcat's own log has local time WITHOUT an offset, in the JVM's zone: -Duser.timezone, else TZ of the
+		// process, else the host's zone (seen 2026: a JVM at UTC+2 on a UTC+5 host = entries 3 h off).
+		tz := argValue(p.Args, "-Duser.timezone=")
+		if tz == "" {
+			tz = strings.TrimPrefix(p.Env["TZ"], ":")
+		}
+		if tz != "" {
+			f.Values["TOMCAT_TIME_ZONE"] = tz
+			f.Notes = append(f.Notes, "JVM time zone "+tz+" (used for Tomcat's log times)")
+		}
 		jmx := 0
 		for _, a := range p.Args {
 			if m := jmxRE.FindStringSubmatch(a); m != nil {

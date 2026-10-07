@@ -154,6 +154,23 @@ func TestTomcatDailyLogsAndRenamedAccessLog(t *testing.T) {
 	}
 }
 
+func TestTomcatJVMTimeZone(t *testing.T) {
+	h := newFake()
+	h.proc(300, "java", []string{"/usr/bin/java", "-Duser.timezone=Europe/Kyiv", "-Dcatalina.base=/a", "start"}, nil, 8080)
+	h.proc(301, "java", []string{"/usr/bin/java", "-Dcatalina.base=/b", "start"}, map[string]string{"TZ": ":Etc/GMT-2"}, 8081)
+	h.proc(302, "java", []string{"/usr/bin/java", "-Dcatalina.base=/c", "start"}, nil, 8082)
+	_, fs := h.snap()
+	got := map[string]string{}
+	for _, f := range fs {
+		if f.ID == "tomcat" {
+			got[f.Values["TOMCAT_BASE"]] = f.Values["TOMCAT_TIME_ZONE"]
+		}
+	}
+	if got["/a"] != "Europe/Kyiv" || got["/b"] != "Etc/GMT-2" || got["/c"] != "" {
+		t.Errorf("JVM zone from -Duser.timezone, else TZ, else none: %v", got)
+	}
+}
+
 func TestTomcatWithoutLogsSaysWhatToAnswer(t *testing.T) {
 	h := newFake()
 	h.proc(300, "java", []string{"/usr/bin/java", "-Dcatalina.base=/srv/tc", "start"}, nil, 8080)

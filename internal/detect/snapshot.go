@@ -37,7 +37,7 @@ type Snapshot struct {
 }
 
 var envKeys = map[string]bool{"ORACLE_BASE": true, "ORACLE_HOME": true, "ORACLE_SID": true,
-	"CATALINA_BASE": true, "CATALINA_HOME": true}
+	"CATALINA_BASE": true, "CATALINA_HOME": true, "TZ": true} // TZ: a JVM can run in another zone than the host
 
 // Collect reads /proc/net/tcp{,6} and /proc/<pid>/{comm,cmdline,fd,environ}.
 func Collect(s Source) Snapshot {

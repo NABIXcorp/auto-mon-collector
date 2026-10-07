@@ -184,6 +184,20 @@ func TestTomcatLogFiles(t *testing.T) {
 	if len(set.Defaults) != 0 {
 		t.Errorf("answered: no defaults: %v", set.Defaults)
 	}
+
+	// time zone of Tomcat's log: answer > JVM zone (scan) > host zone
+	juli := map[string]string{"TOMCAT_JULI_LOGS": "/l/catalina.*.log", "TOMCAT_ACCESS_LOG": "/l/a.*.log"}
+	if y := string(gen(juli, Answers{}).HostYAML); !strings.Contains(y, "location: Asia/Tashkent") {
+		t.Errorf("host zone expected:\n%s", y)
+	}
+	juli["TOMCAT_TIME_ZONE"] = "Europe/Kyiv"
+	if y := string(gen(juli, Answers{}).HostYAML); !strings.Contains(y, "location: Europe/Kyiv") {
+		t.Errorf("JVM zone expected:\n%s", y)
+	}
+	tzAns := Answers{Services: map[string]Service{"tomcat": {TimeZone: "Etc/GMT-2"}}}
+	if y := string(gen(juli, tzAns).HostYAML); !strings.Contains(y, "location: Etc/GMT-2") {
+		t.Errorf("answered zone expected:\n%s", y)
+	}
 }
 
 // The project becomes OTEL_RESOURCE_ATTRIBUTES for the resource_detection "env" detector, which URL-decodes the
@@ -236,6 +250,8 @@ func TestLoadAnswers(t *testing.T) {
 		"services:\n  tomcat: {logs: [\"/a b/c.log\"]}\n",          // no spaces
 		"services:\n  oracle: {access_log: /x/access.log}\n",       // Tomcat-only setting
 		"services:\n  tomcat: {access_log: \"/x/a.log\\ny: 1\"}\n", // no line breaks (YAML injection)
+		"services:\n  tomcat: {time_zone: \"Asia/Tash kent\"}\n",   // not a zone name
+		"services:\n  redis: {time_zone: UTC}\n",                   // Tomcat-only setting
 	} {
 		if _, err := LoadAnswers(write(bad)); err == nil {
 			t.Errorf("must fail: %q", bad)

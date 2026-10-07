@@ -32,7 +32,12 @@ type Service struct {
 	// tomcat: log files when the scan cannot find them (empty = what the scan found, "-" = none).
 	AccessLog string   `yaml:"access_log,omitempty"` // access log glob, e.g. /opt/tomcat/logs/access_log.*.log
 	Logs      []string `yaml:"logs,omitempty"`       // Tomcat log globs (catalina.out format), e.g. .../catalina.*.log
+	// tomcat: zone of the times in Tomcat's own log (they have no offset); empty = the JVM's (scan), else the host's
+	TimeZone string `yaml:"time_zone,omitempty"`
 }
+
+// zoneRE: an IANA zone name (Asia/Tashkent, Etc/GMT-5, UTC) or Local.
+var zoneRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+/-]{0,63}$`)
 
 // logPathRE: an absolute path / glob without spaces, quotes or control characters, or "-" (= none).
 var logPathRE = regexp.MustCompile(`^(-|/[A-Za-z0-9_./*?\[\]{},+@%=:-]{1,255})$`)
@@ -81,8 +86,11 @@ func (a Answers) Validate() error {
 		default:
 			return fmt.Errorf("services: unknown service %q (known: oracle, tomcat, redis, caddy)", name)
 		}
-		if name != "tomcat" && (s.AccessLog != "" || len(s.Logs) > 0) {
-			return fmt.Errorf("services.%s: access_log / logs are Tomcat settings", name)
+		if name != "tomcat" && (s.AccessLog != "" || len(s.Logs) > 0 || s.TimeZone != "") {
+			return fmt.Errorf("services.%s: access_log / logs / time_zone are Tomcat settings", name)
+		}
+		if s.TimeZone != "" && !zoneRE.MatchString(s.TimeZone) {
+			return fmt.Errorf("services.tomcat.time_zone: %q is not a zone name (e.g. Asia/Tashkent, UTC)", s.TimeZone)
 		}
 		for _, p := range append([]string{s.AccessLog}, s.Logs...) {
 			if p != "" && !logPathRE.MatchString(p) {
