@@ -199,8 +199,17 @@ jobs:
           $J timeout 12 journalctl -t sshd -t sshd-session -o json --no-pager -n 0 -f > /tmp/vB 2>&1 &
           $J timeout 12 journalctl -t sshd -t sshd-session -o cat --no-pager -n 0 -f > /tmp/vC 2>&1 &
           $J timeout 12 bash -c 'journalctl -t sshd -o cat --no-pager -n 0 -f | grep --line-buffered -E "^Accepted"' > /tmp/vD 2>&1 &
+          sudo mkdir -p /opt/monitoring/data/exp && sudo chown otelcol-contrib /opt/monitoring/data/exp
+          RUN="sudo systemd-run --quiet --collect --uid=otelcol-contrib --gid=otelcol-contrib -p SupplementaryGroups=systemd-journal"
+          $RUN --unit=amc-exp-s1 -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \
+               -p PrivateNetwork=yes -p ReadWritePaths=/opt/monitoring/data/exp -p RestrictAddressFamilies=AF_UNIX \
+               -p CapabilityBoundingSet= -p MemoryMax=32M \
+               bash -c 'timeout 15 journalctl -t sshd -o cat --no-pager -n 0 -f > /opt/monitoring/data/exp/s1 2>&1'
+          $RUN --unit=amc-exp-s2 bash -c 'timeout 15 journalctl -t sshd -o cat --no-pager -n 0 -f > /opt/monitoring/data/exp/s2 2>&1'
           sleep 3; sudo logger -t sshd "Accepted publickey for probe from 192.0.2.99 port 1 ssh2"; sleep 10
           for v in A B C D; do echo "variant $v: $(grep -c probe /tmp/v$v) | $(head -c 200 /tmp/v$v | tr '\n' ' ')"; done
+          for s in s1 s2; do echo "variant $s: $(sudo grep -c probe /opt/monitoring/data/exp/$s) | $(sudo head -c 300 /opt/monitoring/data/exp/$s | tr '\n' ' ')"; done
+          echo "variant files:"; sudo ls -la --time-style=+%T /var/log/journal/*/ /run/log/journal/*/ 2>&1 | grep -E 'journal|total' | head -12
           if ! sudo sh -c 'grep -qs "Accepted publickey for ciuser from 192.0.2.10" /opt/monitoring/data/sshd/sshd-*.jsonl'; then
             echo "--- unit"; systemctl status monitoring-sshd --no-pager | tail -12; sudo journalctl -u monitoring-sshd --no-pager | tail -10
             echo "--- journal -t sshd (root)"; sudo journalctl -t sshd -t sshd-session -n 8 -o cat --no-pager
