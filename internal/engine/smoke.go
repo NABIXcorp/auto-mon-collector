@@ -56,7 +56,7 @@ func (e *eng) smoke(ctx context.Context, tmp string, configs, env []string) bool
 	}
 	// Own data dir always: the running collector holds locks on the real queue / bookmarks.
 	data := filepath.Join(tmp, "smoke-data")
-	for _, sub := range []string{"file_storage", "netconn", "kmsg"} {
+	for _, sub := range []string{"file_storage", "netconn", "kmsg", "procs"} {
 		if err := os.MkdirAll(filepath.Join(data, sub), 0o700); err != nil {
 			e.r.fail("smoke data dir: %v", err)
 			return false

@@ -7,7 +7,7 @@ import (
 )
 
 func TestAssetsPresentAndLF(t *testing.T) {
-	for name, b := range map[string][]byte{"config": BaseConfig(), "netconn": Netconn(), "kmsg": Kmsg()} {
+	for name, b := range map[string][]byte{"config": BaseConfig(), "netconn": Netconn(), "kmsg": Kmsg(), "procs": Procs()} {
 		if len(b) == 0 {
 			t.Fatalf("%s is empty", name)
 		}
@@ -36,6 +36,22 @@ func TestUnitRender(t *testing.T) {
 		SiteConfigs: []string{"/x/a.yaml", "/x/b.yaml"}})
 	if !strings.Contains(string(b), "--config=/x/a.yaml --config=/x/b.yaml\n") {
 		t.Errorf("site configs not appended to ExecStart:\n%s", b)
+	}
+}
+
+// Privacy (v0.6.0): the process helper writes command names only (ps comm), never arguments (they can hold
+// passwords), and runs without network or capabilities.
+func TestProcsWritesNoArguments(t *testing.T) {
+	s := string(Procs())
+	if !strings.Contains(s, "comm=") || strings.Contains(s, "args") || strings.Contains(s, "cmd=") || strings.Contains(s, "command=") {
+		t.Error("otel-procs.sh must use ps comm only (no args / cmd / command columns)")
+	}
+	u, _ := Unit("monitoring-procs", UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
+	for _, want := range []string{"PrivateNetwork=yes", "NoNewPrivileges=yes", "CapabilityBoundingSet=\n",
+		"ReadWritePaths=/opt/monitoring/data/procs\n"} {
+		if !strings.Contains(string(u), want) {
+			t.Errorf("monitoring-procs lacks %q", want)
+		}
 	}
 }
 

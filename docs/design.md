@@ -326,6 +326,13 @@ Root grants: `V_$PDBS` (with `CONTAINER_DATA`), `V_$DATABASE`, `V_$INSTANCE`, `V
 supplementary group `systemd-journal`; the collector process cannot read the journal (checked in CI). Sandboxed like
 netconn (`ProtectSystem=strict`, `PrivateNetwork=yes`, no capabilities, `MemoryMax=32M`).
 
+**Top processes (v0.6.0, every host):** unit `monitoring-procs` runs `netconn/otel-procs.sh --loop 60`: two `ps`
+snapshots 15 s apart -> one JSON line per process in the top 10 by CPU (over the 15 s, 100 = one core) or top 10 by
+RSS: pid, user, comm, rss_kb, cpu_pct, etime_s, top -> `data/procs/procs-<day>.jsonl` (mode 640, 2 days) ->
+`file_log/procs` -> stream `processes`. Command names only, never arguments (they can hold passwords). Chosen over
+the hostmetrics `process` scraper: ~20 rows per minute per host instead of one time series per process (short-lived
+processes would create new series all the time). No root, no network, no capabilities.
+
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
 JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone
 than the host would otherwise put every entry hours off.

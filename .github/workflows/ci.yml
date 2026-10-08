@@ -166,6 +166,20 @@ jobs:
             for p in $(pgrep -f 'journalctl -k'); do echo "pid $p"; grep -E '^(Uid|Gid|Groups)' /proc/$p/status; done
             die "kernel message not captured by monitoring-kmsg"
           fi
+          # v0.6.0 end to end: a CPU burner must show up in the top-processes file with cpu_pct > 50 (15 s window)
+          must 'monitoring-procs.service active' apply.txt
+          timeout 45 bash -c 'exec -a amcburn bash -c "while :; do :; done"' &
+          ok=""
+          for i in $(seq 1 45); do
+            if sudo sh -c 'cat /opt/monitoring/data/procs/procs-*.jsonl 2>/dev/null' | python3 -c '
+          import json, sys
+          rows = [json.loads(l) for l in sys.stdin if l.strip()]
+          sys.exit(0 if any(r["cpu_pct"] > 50 and "cpu" in r["top"] for r in rows) else 1)'; then ok=1; break; fi
+            sleep 1
+          done
+          [ -n "$ok" ] || { sudo sh -c 'tail -5 /opt/monitoring/data/procs/procs-*.jsonl'; die "CPU burner not in the top-processes file"; }
+          sudo sh -c 'cat /opt/monitoring/data/procs/procs-*.jsonl' | grep -q '"args"' && die "process arguments written"
+          case "$(sudo sh -c 'stat -c %A /opt/monitoring/data/procs/procs-*.jsonl' | head -1)" in ????????w?) die "procs file is world-writable";; esac
           # the collector process itself must NOT be in the journal group (only the helper unit is)
           pid=$(systemctl show -p MainPID --value monitoring-otelcol)
           ! grep -q "^Groups:.*\b$(getent group systemd-journal | cut -d: -f3)\b" /proc/$pid/status || die "collector has journal access"

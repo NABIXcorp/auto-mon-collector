@@ -111,6 +111,25 @@ receivers:
       - type: retain
         fields: [attributes.kind, attributes.log_type, attributes.PRIORITY]
 
+  # Top processes (v0.6.0; netconn/otel-procs.sh, unit monitoring-procs, every 60 s): top 10 by CPU (over 15 s, 100 =
+  # one core) and top 10 by RSS. Command names only, never arguments. One record per process per sample.
+  file_log/procs:
+    include:
+      - '${env:MONITORING_DATA:-/opt/monitoring/data}/procs/procs-*.jsonl'
+    start_at: end
+    storage: file_storage
+    attributes:
+      log_type: processes
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout_type: gotime
+          layout: '2006-01-02T15:04:05Z07:00'
+      - type: remove
+        if: 'attributes.time != nil'
+        field: attributes.time
+
   # ---- Discovery: metric collectors ------------------------------------------------------------------------
   receiver_creator/metrics:
     watch_observers: [host_observer]
@@ -538,6 +557,18 @@ exporters:
     retry_on_failure:
       max_elapsed_time: 1h
 
+  otlp_http/openobserve_processes:
+    endpoint: ${env:OO_ENDPOINT}
+    compression: gzip
+    headers:
+      Authorization: ${env:OO_AUTH}
+      stream-name: processes
+    sending_queue:
+      storage: file_storage
+      queue_size: 1000
+    retry_on_failure:
+      max_elapsed_time: 1h
+
 service:
   telemetry:
     metrics:
@@ -567,6 +598,10 @@ service:
       receivers: [file_log/kmsg]
       processors: [resource_detection, batch]
       exporters: [otlp_http/openobserve_kernel]
+    logs/processes:
+      receivers: [file_log/procs]
+      processors: [resource_detection, batch]
+      exporters: [otlp_http/openobserve_processes]
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource_detection, transform/traces_privacy, tail_sampling, batch]
