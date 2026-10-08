@@ -192,8 +192,14 @@ jobs:
           logger -t sshd "Server listening on 0.0.0.0 port 22."
           logger -t sudo "ciuser : COMMAND=/usr/bin/echo SudoSecret123"
           for i in $(seq 1 20); do sudo sh -c 'grep -qs "Connection closed by invalid user" /opt/monitoring/data/sshd/sshd-*.jsonl' && break; sleep 1; done
+          if ! sudo sh -c 'grep -qs "Accepted publickey for ciuser from 192.0.2.10" /opt/monitoring/data/sshd/sshd-*.jsonl'; then
+            echo "--- unit"; systemctl status monitoring-sshd --no-pager | tail -12; sudo journalctl -u monitoring-sshd --no-pager | tail -10
+            echo "--- journal -t sshd (root)"; sudo journalctl -t sshd -t sshd-session -n 8 -o cat --no-pager
+            echo "--- helper --stdout as the collector user"; sudo -u otelcol-contrib -g systemd-journal /opt/monitoring/netconn/otel-sshd.sh --stdout
+            echo "--- data dir"; sudo ls -la /opt/monitoring/data/sshd
+            die "accepted login not captured"
+          fi
           sudo sh -c 'cat /opt/monitoring/data/sshd/sshd-*.jsonl'
-          sudo sh -c 'grep -qs "Accepted publickey for ciuser from 192.0.2.10" /opt/monitoring/data/sshd/sshd-*.jsonl' || die "accepted login not captured"
           [ "$(sudo sh -c 'grep -c "invalid user \*\*\*" /opt/monitoring/data/sshd/sshd-*.jsonl' || true)" -ge 2 ] || die "unknown user not masked"
           if sudo sh -c 'grep -qs "Sup3rS3cretPw\|SudoSecret123\|Server listening" /opt/monitoring/data/sshd/sshd-*.jsonl'; then die "secret / non-login line written"; fi
           # the collector process itself must NOT be in the journal group (only the helper unit is)
