@@ -210,6 +210,17 @@ jobs:
           for v in A B C D; do echo "variant $v: $(grep -c probe /tmp/v$v) | $(head -c 200 /tmp/v$v | tr '\n' ' ')"; done
           for s in s1 s2; do echo "variant $s: $(sudo grep -c probe /opt/monitoring/data/exp/$s) | $(sudo head -c 300 /opt/monitoring/data/exp/$s | tr '\n' ' ')"; done
           echo "variant files:"; sudo ls -la --time-style=+%T /var/log/journal/*/ /run/log/journal/*/ 2>&1 | grep -E 'journal|total' | head -12
+          # rotation experiment: followers started BEFORE a journal rotation
+          $RUN --unit=amc-exp-s3 -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \
+               -p PrivateNetwork=yes -p ReadWritePaths=/opt/monitoring/data/exp -p RestrictAddressFamilies=AF_UNIX \
+               -p CapabilityBoundingSet= bash -c 'timeout 20 journalctl -t sshd -o cat --no-pager -n 0 -f > /opt/monitoring/data/exp/s3 2>&1'
+          $RUN --unit=amc-exp-s4 bash -c 'timeout 20 journalctl -t sshd -o cat --no-pager -n 0 -f > /opt/monitoring/data/exp/s4 2>&1'
+          sleep 3; sudo journalctl --rotate; sleep 2
+          sudo logger -t sshd "Accepted publickey for rotprobe from 192.0.2.98 port 1 ssh2"
+          echo "<3>amcrot: kernel line after rotation" | sudo tee /dev/kmsg > /dev/null; sleep 10
+          for s in s3 s4; do echo "variant $s (after rotate): $(sudo grep -c rotprobe /opt/monitoring/data/exp/$s)"; done
+          echo "variant kmsg-unit (after rotate): $(sudo sh -c 'grep -c "kernel line after rotation" /opt/monitoring/data/kmsg/kmsg-*.jsonl')"
+          echo "variant sshd-unit (after rotate): $(sudo sh -c 'grep -c rotprobe /opt/monitoring/data/sshd/sshd-*.jsonl 2>/dev/null' || echo 0)"
           if ! sudo sh -c 'grep -qs "Accepted publickey for ciuser from 192.0.2.10" /opt/monitoring/data/sshd/sshd-*.jsonl'; then
             echo "--- unit"; systemctl status monitoring-sshd --no-pager | tail -12; sudo journalctl -u monitoring-sshd --no-pager | tail -10
             echo "--- journal -t sshd (root)"; sudo journalctl -t sshd -t sshd-session -n 8 -o cat --no-pager
