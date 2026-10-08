@@ -200,6 +200,31 @@ func TestTomcatLogFiles(t *testing.T) {
 	}
 }
 
+// CDB root checks (v0.4.0): ORACLE_CDB_SERVICE only when answered, and only with a common user.
+func TestOracleCDBService(t *testing.T) {
+	h := Host{Findings: []detect.Finding{oracleFinding()}}
+	out, err := Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "apppdb", User: "C##OTEL_MON", CDBService: "orcl"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ORACLE_MON_USER=C##OTEL_MON\n", "ORACLE_CDB_SERVICE=orcl\n"} {
+		if !strings.Contains(string(out.HostEnv), want) {
+			t.Errorf("host.env lacks %q:\n%s", want, out.HostEnv)
+		}
+	}
+	for _, a := range []Service{{Service: "apppdb", User: "C##OTEL_MON", CDBService: "-"}, {Service: "apppdb", User: "monitor"}} {
+		out, _ = Generate(h, Answers{Services: map[string]Service{"oracle": a}})
+		if strings.Contains(string(out.HostEnv), "ORACLE_CDB_SERVICE") {
+			t.Errorf("no CDB checks expected for %+v:\n%s", a, out.HostEnv)
+		}
+	}
+	for _, bad := range []Service{{User: "monitor", CDBService: "orcl"}, {User: "C##X", CDBService: "or$cl"}} {
+		if err := (Answers{Services: map[string]Service{"oracle": bad}}).Validate(); err == nil {
+			t.Errorf("must fail: %+v", bad)
+		}
+	}
+}
+
 // The project becomes OTEL_RESOURCE_ATTRIBUTES for the resource_detection "env" detector, which URL-decodes the
 // value (url.QueryUnescape): "Dev servers" -> "Dev+servers" -> "Dev servers". No project = no line at all.
 func TestProject(t *testing.T) {

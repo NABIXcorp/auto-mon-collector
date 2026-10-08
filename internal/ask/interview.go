@@ -101,6 +101,18 @@ func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate
 		if s.User, err = p.Ask("Oracle monitoring user", userDef); err != nil {
 			return a, err
 		}
+		// CDB root checks (PDB states, role, limits, FRA): only with a common user (C##...)
+		if strings.HasPrefix(strings.ToUpper(s.User), "C##") {
+			cdbDef := ps.CDBService
+			if cdbDef == "" {
+				cdbDef = o.Values["ORACLE_SERVICE"] // the SID in lower case = usually the CDB root service
+			}
+			p.Say("  (CDB root service: PDB open states, database role, limits, FRA; '-' = none)\n")
+			if s.CDBService, err = p.Ask("Oracle CDB root service", cdbDef); err != nil {
+				return a, err
+			}
+			s.CDBService = strings.TrimSpace(s.CDBService)
+		}
 		a.Services["oracle"] = s
 	}
 

@@ -312,6 +312,14 @@ into the resource attribute `project` on every metric, log and span of the host.
 `services.tomcat.access_log` / `services.tomcat.logs` (optional, since v0.3.0): absolute file globs (`*` = any date)
 when the scan cannot find the files or finds the wrong ones; `-` = none. Empty = what the scan found. The
 interactive run saves them only when they differ from the scan, so a later scan still follows moved files.
+`services.oracle.cdb_service` (optional, since v0.4.0): the CDB root service (e.g. `orcl`). Needs a COMMON
+monitoring user (`C##...`, the same user and password for the PDB and the root; asked only for such a user). Adds
+`sql_query/oracle_cdb` (60 s): `oracle.pdb.open` per PDB (1 = READ WRITE and not restricted; attributes pdb,
+open_mode, restricted), `oracle.database.state` (attributes role, open_mode), `oracle.limit.current` / `.max`
+(processes, sessions: `V$RESOURCE_LIMIT` is empty inside a PDB), `oracle.fra.limit` / `.used` / `.reclaimable`.
+Root grants: `V_$PDBS` (with `CONTAINER_DATA`), `V_$DATABASE`, `V_$INSTANCE`, `V_$RESOURCE_LIMIT`,
+`V_$RECOVERY_FILE_DEST`. Only the root sees a PDB that is MOUNTED.
+
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
 JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone
 than the host would otherwise put every entry hours off.

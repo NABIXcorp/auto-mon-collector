@@ -29,12 +29,18 @@ type Service struct {
 	Enabled *bool  `yaml:"enabled,omitempty"`
 	Service string `yaml:"service,omitempty"` // oracle: service name (ORACLE_SERVICE), e.g. the PDB
 	User    string `yaml:"user,omitempty"`    // oracle: monitoring user (ORACLE_MON_USER)
+	// oracle (v0.4.0): service of the CDB root (ORACLE_CDB_SERVICE) for PDB states, role, limits, FRA; needs a
+	// COMMON monitoring user (C##...). Empty or "-" = no CDB checks (non-CDB, or a local PDB user).
+	CDBService string `yaml:"cdb_service,omitempty"`
 	// tomcat: log files when the scan cannot find them (empty = what the scan found, "-" = none).
 	AccessLog string   `yaml:"access_log,omitempty"` // access log glob, e.g. /opt/tomcat/logs/access_log.*.log
 	Logs      []string `yaml:"logs,omitempty"`       // Tomcat log globs (catalina.out format), e.g. .../catalina.*.log
 	// tomcat: zone of the times in Tomcat's own log (they have no offset); empty = the JVM's (scan), else the host's
 	TimeZone string `yaml:"time_zone,omitempty"`
 }
+
+// serviceRE: an Oracle service name (letters, digits, _ . -), e.g. orcl, ORCL.example.com. No $ (host.env).
+var serviceRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
 
 // zoneRE: an IANA zone name (Asia/Tashkent, Etc/GMT-5, UTC) or Local.
 var zoneRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+/-]{0,63}$`)
@@ -88,6 +94,15 @@ func (a Answers) Validate() error {
 		}
 		if name != "tomcat" && (s.AccessLog != "" || len(s.Logs) > 0 || s.TimeZone != "") {
 			return fmt.Errorf("services.%s: access_log / logs / time_zone are Tomcat settings", name)
+		}
+		if name != "oracle" && s.CDBService != "" {
+			return fmt.Errorf("services.%s: cdb_service is an Oracle setting", name)
+		}
+		if s.CDBService != "" && s.CDBService != "-" && !serviceRE.MatchString(s.CDBService) {
+			return fmt.Errorf("services.oracle.cdb_service: %q is not a service name", s.CDBService)
+		}
+		if s.CDBService != "" && s.CDBService != "-" && !strings.HasPrefix(strings.ToUpper(s.User), "C##") {
+			return fmt.Errorf("services.oracle.cdb_service needs a common monitoring user (C##..., user: %q)", s.User)
 		}
 		if s.TimeZone != "" && !zoneRE.MatchString(s.TimeZone) {
 			return fmt.Errorf("services.tomcat.time_zone: %q is not a zone name (e.g. Asia/Tashkent, UTC)", s.TimeZone)

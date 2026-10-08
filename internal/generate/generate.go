@@ -73,6 +73,9 @@ func Generate(h Host, a Answers) (Output, error) {
 			return out, fmt.Errorf("oracle: no service name (answer services.oracle.service)")
 		}
 		env = append(env, "ORACLE_MON=on", "ORACLE_SERVICE="+svc, "ORACLE_MON_USER="+user)
+		if c := ans.CDBService; c != "" && c != "-" {
+			env = append(env, "ORACLE_CDB_SERVICE="+c) // sql_query/oracle_cdb: PDB states, role, limits, FRA
+		}
 		if p := o.Values["ORACLE_ALERT_LOG"]; p != "" {
 			env = append(env, "ORACLE_ALERT_LOG="+p)
 			recv["file_log/oracle_alert"] = oracleAlertLog(p)

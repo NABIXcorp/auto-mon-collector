@@ -118,6 +118,9 @@ jobs:
           must 'monitoring: oracle, tomcat' plan-gen.txt
           must 'validate: VALID' plan-gen.txt
           must 'no load / start errors' plan-gen.txt
+          # v0.4.0: the CDB root block is switched on in this example (so the smoke run above built it too)
+          $amc generate --answers examples/app-host/answers.yaml --detect-json examples/app-host/detect.json --out gen-app > /dev/null
+          must 'ORACLE_CDB_SERVICE=orcl' gen-app/host.env
           # Tomcat started by systemd (v0.3.0): daily JULI files + renamed access log, two includes in one receiver.
           echo "::group::plan with a systemd Tomcat (daily log files)"
           sudo $amc plan --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json | tee plan-juli.txt

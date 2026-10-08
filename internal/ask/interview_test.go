@@ -104,6 +104,25 @@ func TestScannedTomcatLogsAreDefaults(t *testing.T) {
 	}
 }
 
+// A common user (C##...) gets the CDB root question; default = the SID in lower case. A local user does not.
+func TestCommonUserAsksCDBService(t *testing.T) {
+	s := &Script{Answers: []string{"", "", "apppdb", "C##OTEL_MON", "", "-", "", ""}}
+	a, err := Interview(appHost(), generate.Answers{}, s)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, s.Out.String())
+	}
+	if o := a.Services["oracle"]; o.User != "C##OTEL_MON" || o.CDBService != "orcl" {
+		t.Errorf("oracle answers: %+v", o)
+	}
+	if !strings.Contains(s.Out.String(), "Oracle CDB root service [orcl]") {
+		t.Errorf("transcript:\n%s", s.Out.String())
+	}
+	s2 := &Script{Answers: []string{"", "", "apppdb", "", "-", "", ""}}
+	if _, err := Interview(appHost(), generate.Answers{}, s2); err != nil || strings.Contains(s2.Out.String(), "CDB root") {
+		t.Errorf("local user: no CDB question (%v):\n%s", err, s2.Out.String())
+	}
+}
+
 func TestBadURLIsRejected(t *testing.T) {
 	s := &Script{Answers: []string{"", "", "", "", "https://user:secretpw@app.example.com/", "", ""}}
 	if _, err := Interview(appHost(), generate.Answers{}, s); err == nil || strings.Contains(err.Error(), "secretpw") {

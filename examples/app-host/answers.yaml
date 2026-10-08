@@ -5,7 +5,8 @@ project: Example apps     # optional: resource attribute "project" on all data (
 services:
   oracle:
     service: apppdb       # the PDB's service name (the scan guesses the SID)
-    user: otel_mon
+    user: C##OTEL_MON     # a COMMON user (CDB): one user for the PDB and the CDB root
+    cdb_service: orcl     # v0.4.0: CDB root service -> PDB open states, role, limits, FRA ('-' or empty = none)
   redis:
     enabled: false
 checks:
