@@ -209,7 +209,7 @@ jobs:
           sleep 3; sudo logger -t sshd "Accepted publickey for probe from 192.0.2.99 port 1 ssh2"; sleep 10
           for v in A B C D; do echo "variant $v: $(grep -c probe /tmp/v$v) | $(head -c 200 /tmp/v$v | tr '\n' ' ')"; done
           for s in s1 s2; do echo "variant $s: $(sudo grep -c probe /opt/monitoring/data/exp/$s) | $(sudo head -c 300 /opt/monitoring/data/exp/$s | tr '\n' ' ')"; done
-          echo "variant files:"; sudo ls -la --time-style=+%T /var/log/journal/*/ /run/log/journal/*/ 2>&1 | grep -E 'journal|total' | head -12
+          echo "variant files:"; sudo ls -la --time-style=+%T /var/log/journal/*/ /run/log/journal/*/ 2>&1 | grep -E 'journal|total' | head -12 || true
           # rotation experiment: followers started BEFORE a journal rotation
           $RUN --unit=amc-exp-s3 -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \
                -p PrivateNetwork=yes -p ReadWritePaths=/opt/monitoring/data/exp -p RestrictAddressFamilies=AF_UNIX \
