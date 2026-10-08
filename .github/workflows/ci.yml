@@ -168,9 +168,10 @@ jobs:
           fi
           # v0.6.0 end to end: a CPU burner must show up in the top-processes file with cpu_pct > 50 (15 s window)
           must 'monitoring-procs.service active' apply.txt
-          timeout 45 bash -c 'exec -a amcburn bash -c "while :; do :; done"' &
+          # (the helper samples every 60 s: burn longer than one interval + window)
+          timeout 100 bash -c 'exec -a amcburn bash -c "while :; do :; done"' &
           ok=""
-          for i in $(seq 1 45); do
+          for i in $(seq 1 100); do
             if sudo sh -c 'cat /opt/monitoring/data/procs/procs-*.jsonl 2>/dev/null' | python3 -c '
           import json, sys
           rows = [json.loads(l) for l in sys.stdin if l.strip()]
