@@ -21,6 +21,8 @@ case "${1:-}" in
       if [ "$today" != "$day" ]; then
         day="$today"
         find "$OUT_DIR" -name 'kmsg-*.jsonl' -mtime +1 -delete   # keep ~2 days
+        # explicit mode: a default ACL on a parent directory overrides the unit's UMask (seen on CI runners)
+        : >> "$OUT_DIR/kmsg-$day.jsonl" && chmod 640 "$OUT_DIR/kmsg-$day.jsonl"
       fi
       printf '%s\n' "$line" >> "$OUT_DIR/kmsg-$day.jsonl"
     done ;;
