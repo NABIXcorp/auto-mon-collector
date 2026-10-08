@@ -9,7 +9,9 @@
 # Usage: otel-sshd.sh --follow   (service)   |   otel-sshd.sh --stdout   (last 20 login lines, test)
 set -u
 OUT_DIR="${SSHD_DIR:-/opt/monitoring/data/sshd}"
-JOURNAL=(journalctl -t sshd -t sshd-session -o cat --no-pager)
+# stdbuf -oL: journalctl -o cat into a pipe holds lines back in follow mode (seen in CI: --stdout worked, -f wrote
+# nothing); line buffering makes every login line go through at once
+JOURNAL=(stdbuf -oL journalctl -t sshd -t sshd-session -o cat --no-pager)
 KEEP='^(Accepted |Failed |Invalid user |Connection closed by (authenticating|invalid) user |Disconnected from (authenticating |invalid )?user |pam_unix\(sshd:session\): session (opened|closed) for user )'
 
 filter() {
