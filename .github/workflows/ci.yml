@@ -182,20 +182,21 @@ jobs:
           sudo sh -c 'cat /opt/monitoring/data/procs/procs-*.jsonl' | grep -q '"args"' && die "process arguments written"
           case "$(sudo sh -c 'stat -c %A /opt/monitoring/data/procs/procs-*.jsonl' | head -1)" in ????????w?) die "procs file is world-writable";; esac
           # v0.7.0 end to end: sshd login lines (via logger -t sshd) arrive; an unknown user name (here a "password")
-          # is masked before it is written; other services' lines are not read
+          # is masked before it is written; other services' lines are not read. As root (like the real sshd): a normal
+          # user's logger lines go to that user's own journal file
           must 'monitoring-sshd.service active' apply.txt
           sleep 3
-          logger -t sshd "Accepted publickey for ciuser from 192.0.2.10 port 4242 ssh2"
-          logger -t sshd "Invalid user Sup3rS3cretPw from 192.0.2.11 port 4243"
-          logger -t sshd "Failed password for invalid user Sup3rS3cretPw from 192.0.2.11 port 4243 ssh2"
-          logger -t sshd "Connection closed by invalid user Sup3rS3cretPw 192.0.2.11 port 4243 [preauth]"
-          logger -t sshd "Server listening on 0.0.0.0 port 22."
-          logger -t sudo "ciuser : COMMAND=/usr/bin/echo SudoSecret123"
+          sudo logger -t sshd "Accepted publickey for ciuser from 192.0.2.10 port 4242 ssh2"
+          sudo logger -t sshd "Invalid user Sup3rS3cretPw from 192.0.2.11 port 4243"
+          sudo logger -t sshd "Failed password for invalid user Sup3rS3cretPw from 192.0.2.11 port 4243 ssh2"
+          sudo logger -t sshd "Connection closed by invalid user Sup3rS3cretPw 192.0.2.11 port 4243 [preauth]"
+          sudo logger -t sshd "Server listening on 0.0.0.0 port 22."
+          sudo logger -t sudo "ciuser : COMMAND=/usr/bin/echo SudoSecret123"
           for i in $(seq 1 20); do sudo sh -c 'grep -qs "Connection closed by invalid user" /opt/monitoring/data/sshd/sshd-*.jsonl' && break; sleep 1; done
           if ! sudo sh -c 'grep -qs "Accepted publickey for ciuser from 192.0.2.10" /opt/monitoring/data/sshd/sshd-*.jsonl'; then
             echo "--- unit"; systemctl status monitoring-sshd --no-pager | tail -12; sudo journalctl -u monitoring-sshd --no-pager | tail -10
             echo "--- journal -t sshd (root)"; sudo journalctl -t sshd -t sshd-session -n 8 -o cat --no-pager
-            echo "--- helper --stdout as the collector user"; sudo -u otelcol-contrib -g systemd-journal /opt/monitoring/netconn/otel-sshd.sh --stdout
+            echo "--- helper --stdout as the collector user"; sudo runuser -u otelcol-contrib -g otelcol-contrib -G systemd-journal -- /opt/monitoring/netconn/otel-sshd.sh --stdout
             echo "--- data dir"; sudo ls -la /opt/monitoring/data/sshd
             die "accepted login not captured"
           fi
