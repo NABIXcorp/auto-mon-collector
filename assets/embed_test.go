@@ -59,7 +59,7 @@ func TestProcsWritesNoArguments(t *testing.T) {
 // typed into the user field) before writing. The real masking is tested end to end in CI with logger.
 func TestSshdReadsSshdOnlyAndMasks(t *testing.T) {
 	s := string(Sshd())
-	for _, want := range []string{"journalctl -t sshd -t sshd-session", "-n 0 -f", `([Ii]nvalid user) ([^ ]+ )?(from )/\1 *** \3/`} {
+	for _, want := range []string{"journalctl -t sshd -t sshd-session", "--after-cursor", `([Ii]nvalid user) ([^ ]+ )?(from )/\1 *** \3/`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("otel-sshd.sh lacks %q", want)
 		}
@@ -87,7 +87,7 @@ func TestJournalAccessOnlyForKmsg(t *testing.T) {
 		}
 	}
 	s := string(Kmsg())
-	for _, want := range []string{"journalctl -k -p warning", "-n 0 -f", "--output-fields=MESSAGE,PRIORITY"} {
+	for _, want := range []string{"journalctl -k -p warning", "--after-cursor", "--output-fields=MESSAGE,PRIORITY"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("otel-kmsg.sh lacks %q", want)
 		}

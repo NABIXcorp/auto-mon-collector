@@ -321,7 +321,7 @@ Root grants: `V_$PDBS` (with `CONTAINER_DATA`), `V_$DATABASE`, `V_$INSTANCE`, `V
 `V_$RECOVERY_FILE_DEST`. Only the root sees a PDB that is MOUNTED.
 
 **Kernel messages (v0.5.0, every host):** unit `monitoring-kmsg` runs `netconn/otel-kmsg.sh`: `journalctl -k -p warning
--o json -n 0 -f` (kernel only, warning or worse, no history) -> `data/kmsg/kmsg-<day>.jsonl` (2 days) -> `file_log/kmsg`
+-o json`, polled every 10 s with a cursor (kernel only, warning or worse, no history) -> `data/kmsg/kmsg-<day>.jsonl` (2 days) -> `file_log/kmsg`
 -> stream `kernel`, attribute `kind` = oom / hung_task / disk_error / other. Least privilege: only this unit has the
 supplementary group `systemd-journal`; the collector process cannot read the journal (checked in CI). Sandboxed like
 netconn (`ProtectSystem=strict`, `PrivateNetwork=yes`, no capabilities, `MemoryMax=32M`).
@@ -334,11 +334,14 @@ the hostmetrics `process` scraper: ~20 rows per minute per host instead of one t
 processes would create new series all the time). No root, no network, no capabilities.
 
 **SSH logins (v0.7.0, every host):** unit `monitoring-sshd` runs `netconn/otel-sshd.sh`: `journalctl -t sshd -t
-sshd-session -n 0 -f` (sshd's own messages only, no history), keeps only login lines (accepted, failed, invalid
+sshd-session`, polled every 10 s with a cursor (sshd's own messages only, no history), keeps only login lines (accepted, failed, invalid
 user, connection closed / disconnected before auth, PAM session opened / closed) -> `data/sshd` -> stream `ssh`,
 attributes event / user / src_ip / method. **Privacy:** the name of an UNKNOWN user is replaced by `***` before it is
 written (people type their password into the user field); sudo and all other services are never read. Journal access
 only in this unit and `monitoring-kmsg`.
+Both journal helpers POLL with a cursor (`--after-cursor`, position in `data/<helper>/.cursor`) instead of `journalctl
+-f`: a long-running follower missed lines after the journal changed under it (found in CI); polling opens the journal
+fresh each time, survives rotations and loses nothing across a helper restart. CI rotates the journal and checks both.
 
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
 JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone

@@ -12,7 +12,7 @@ Group={{.User}}
 SupplementaryGroups=systemd-journal
 Environment=KMSG_DIR={{.Prefix}}/data/kmsg
 UMask=0027
-ExecStart={{.Prefix}}/netconn/otel-kmsg.sh --follow
+ExecStart={{.Prefix}}/netconn/otel-kmsg.sh --poll
 Restart=always
 RestartSec=10
 NoNewPrivileges=yes

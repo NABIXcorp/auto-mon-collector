@@ -12,7 +12,7 @@ Group={{.User}}
 SupplementaryGroups=systemd-journal
 Environment=SSHD_DIR={{.Prefix}}/data/sshd
 UMask=0027
-ExecStart={{.Prefix}}/netconn/otel-sshd.sh --follow
+ExecStart={{.Prefix}}/netconn/otel-sshd.sh --poll
 Restart=always
 RestartSec=10
 NoNewPrivileges=yes
