@@ -320,6 +320,12 @@ open_mode, restricted), `oracle.database.state` (attributes role, open_mode), `o
 Root grants: `V_$PDBS` (with `CONTAINER_DATA`), `V_$DATABASE`, `V_$INSTANCE`, `V_$RESOURCE_LIMIT`,
 `V_$RECOVERY_FILE_DEST`. Only the root sees a PDB that is MOUNTED.
 
+**Kernel messages (v0.5.0, every host):** unit `monitoring-kmsg` runs `netconn/otel-kmsg.sh`: `journalctl -k -p warning
+-o json -n 0 -f` (kernel only, warning or worse, no history) -> `data/kmsg/kmsg-<day>.jsonl` (2 days) -> `file_log/kmsg`
+-> stream `kernel`, attribute `kind` = oom / hung_task / disk_error / other. Least privilege: only this unit has the
+supplementary group `systemd-journal`; the collector process cannot read the journal (checked in CI). Sandboxed like
+netconn (`ProtectSystem=strict`, `PrivateNetwork=yes`, no capabilities, `MemoryMax=32M`).
+
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
 JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone
 than the host would otherwise put every entry hours off.

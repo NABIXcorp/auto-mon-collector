@@ -71,6 +71,46 @@ receivers:
         if: 'attributes.time != nil'
         field: attributes.time
 
+  # Kernel warnings / errors (v0.5.0; netconn/otel-kmsg.sh, unit monitoring-kmsg): journalctl -k -p warning -o json.
+  # kind = oom (OOM killer) / hung_task (task blocked > 120 s) / disk_error (I/O or filesystem error) / other.
+  # Record time = read time (the helper follows the journal live, no history).
+  file_log/kmsg:
+    include:
+      - '${env:MONITORING_DATA:-/opt/monitoring/data}/kmsg/kmsg-*.jsonl'
+    start_at: end
+    storage: file_storage
+    attributes:
+      log_type: kernel
+    operators:
+      - type: json_parser
+        severity:
+          parse_from: attributes.PRIORITY
+          mapping:
+            fatal: ['0', '1', '2']
+            error: '3'
+            warn: '4'
+      - type: move
+        if: 'attributes.MESSAGE != nil'
+        from: attributes.MESSAGE
+        to: body
+      - type: add
+        field: attributes.kind
+        value: other
+      - type: add
+        if: 'body matches "Out of memory|oom-kill|oom_reaper|Memory cgroup out of memory"'
+        field: attributes.kind
+        value: oom
+      - type: add
+        if: 'body matches "blocked for more than|hung_task"'
+        field: attributes.kind
+        value: hung_task
+      - type: add
+        if: 'body matches "I/O error|EXT4-fs error|XFS .*(error|corrupt)|Buffer I/O|blk_update_request|Remounting filesystem read-only"'
+        field: attributes.kind
+        value: disk_error
+      - type: retain
+        fields: [attributes.kind, attributes.log_type, attributes.PRIORITY]
+
   # ---- Discovery: metric collectors ------------------------------------------------------------------------
   receiver_creator/metrics:
     watch_observers: [host_observer]
@@ -486,6 +526,18 @@ exporters:
     retry_on_failure:
       max_elapsed_time: 1h
 
+  otlp_http/openobserve_kernel:
+    endpoint: ${env:OO_ENDPOINT}
+    compression: gzip
+    headers:
+      Authorization: ${env:OO_AUTH}
+      stream-name: kernel
+    sending_queue:
+      storage: file_storage
+      queue_size: 1000
+    retry_on_failure:
+      max_elapsed_time: 1h
+
 service:
   telemetry:
     metrics:
@@ -511,6 +563,10 @@ service:
       receivers: [file_log/netconn]
       processors: [resource_detection, batch]
       exporters: [otlp_http/openobserve_netconn]
+    logs/kernel:
+      receivers: [file_log/kmsg]
+      processors: [resource_detection, batch]
+      exporters: [otlp_http/openobserve_kernel]
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource_detection, transform/traces_privacy, tail_sampling, batch]

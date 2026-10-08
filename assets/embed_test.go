@@ -7,7 +7,7 @@ import (
 )
 
 func TestAssetsPresentAndLF(t *testing.T) {
-	for name, b := range map[string][]byte{"config": BaseConfig(), "netconn": Netconn()} {
+	for name, b := range map[string][]byte{"config": BaseConfig(), "netconn": Netconn(), "kmsg": Kmsg()} {
 		if len(b) == 0 {
 			t.Fatalf("%s is empty", name)
 		}
@@ -36,5 +36,30 @@ func TestUnitRender(t *testing.T) {
 		SiteConfigs: []string{"/x/a.yaml", "/x/b.yaml"}})
 	if !strings.Contains(string(b), "--config=/x/a.yaml --config=/x/b.yaml\n") {
 		t.Errorf("site configs not appended to ExecStart:\n%s", b)
+	}
+}
+
+// Least privilege (v0.5.0): only the kernel-messages helper may read the journal, and it reads kernel messages
+// only (-k, priority warning+, no history); the collector unit never gets the journal group.
+func TestJournalAccessOnlyForKmsg(t *testing.T) {
+	for _, u := range UnitNames {
+		b, _ := Unit(u, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
+		has := strings.Contains(string(b), "systemd-journal")
+		if has != (u == "monitoring-kmsg") {
+			t.Errorf("%s: systemd-journal group = %v", u, has)
+		}
+	}
+	k, _ := Unit("monitoring-kmsg", UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
+	for _, want := range []string{"NoNewPrivileges=yes", "PrivateNetwork=yes", "ProtectSystem=strict",
+		"ReadWritePaths=/opt/monitoring/data/kmsg\n", "CapabilityBoundingSet=\n"} {
+		if !strings.Contains(string(k), want) {
+			t.Errorf("monitoring-kmsg lacks %q", want)
+		}
+	}
+	s := string(Kmsg())
+	for _, want := range []string{"journalctl -k -p warning", "-n 0 -f", "--output-fields=MESSAGE,PRIORITY"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("otel-kmsg.sh lacks %q", want)
+		}
 	}
 }

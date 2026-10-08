@@ -148,7 +148,16 @@ jobs:
           echo "::endgroup::"
           must 'monitoring-otelcol.service active' apply.txt
           must 'monitoring-netconn.service active' apply.txt
-          systemctl is-active monitoring-otelcol monitoring-netconn || die "units not active"
+          must 'monitoring-kmsg.service active' apply.txt
+          systemctl is-active monitoring-otelcol monitoring-netconn monitoring-kmsg || die "units not active"
+          # v0.5.0 end to end: a kernel message (priority 3) must reach the helper's file within seconds
+          sleep 3
+          echo "<3>amc-ci: Out of memory: Killed process 4242 (ci-test)" | sudo tee /dev/kmsg > /dev/null
+          for i in $(seq 1 20); do sudo grep -qs 'amc-ci: Out of memory' /opt/monitoring/data/kmsg/kmsg-*.jsonl && break; sleep 1; done
+          sudo grep -qs 'amc-ci: Out of memory' /opt/monitoring/data/kmsg/kmsg-*.jsonl || { sudo journalctl -u monitoring-kmsg --no-pager | tail -20; die "kernel message not captured by monitoring-kmsg"; }
+          # the collector process itself must NOT be in the journal group (only the helper unit is)
+          pid=$(systemctl show -p MainPID --value monitoring-otelcol)
+          ! grep -q "^Groups:.*\b$(getent group systemd-journal | cut -d: -f3)\b" /proc/$pid/status || die "collector has journal access"
           # detect on the real /proc: the live collector's OTLP port must be seen, the JSON must parse
           sudo $amc detect
           sudo $amc detect --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert 4317 in d["listening_ports"], d' \
