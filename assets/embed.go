@@ -8,7 +8,7 @@ import (
 	"text/template"
 )
 
-//go:embed config/config.yaml netconn/otel-netconn.sh netconn/otel-kmsg.sh netconn/otel-procs.sh systemd/*.tmpl
+//go:embed config/config.yaml netconn/otel-netconn.sh netconn/otel-kmsg.sh netconn/otel-procs.sh netconn/otel-sshd.sh systemd/*.tmpl
 var files embed.FS
 
 // BaseConfig is config/config.yaml (identical on every host).
@@ -22,6 +22,9 @@ func Kmsg() []byte { return mustRead("netconn/otel-kmsg.sh") }
 
 // Procs is the top-processes helper script (v0.6.0): top CPU / RSS processes, command names only.
 func Procs() []byte { return mustRead("netconn/otel-procs.sh") }
+
+// Sshd is the SSH-logins helper script (v0.7.0): sshd login lines, unknown user names masked.
+func Sshd() []byte { return mustRead("netconn/otel-sshd.sh") }
 
 // UnitData fills the systemd unit templates.
 type UnitData struct {
@@ -44,7 +47,7 @@ func Unit(name string, d UnitData) ([]byte, error) {
 }
 
 // UnitNames are the systemd units amc manages, in start order.
-var UnitNames = []string{"monitoring-otelcol", "monitoring-netconn", "monitoring-kmsg", "monitoring-procs"}
+var UnitNames = []string{"monitoring-otelcol", "monitoring-netconn", "monitoring-kmsg", "monitoring-procs", "monitoring-sshd"}
 
 func mustRead(p string) []byte {
 	b, err := files.ReadFile(p)

@@ -130,6 +130,65 @@ receivers:
         if: 'attributes.time != nil'
         field: attributes.time
 
+  # SSH logins (v0.7.0; netconn/otel-sshd.sh, unit monitoring-sshd): sshd login lines only; the name of an UNKNOWN
+  # user is already *** (people type passwords into the user field). event = accepted / failed / invalid_user /
+  # session_opened / session_closed / closed; attributes user (existing accounts only), src_ip, method.
+  file_log/sshd:
+    include:
+      - '${env:MONITORING_DATA:-/opt/monitoring/data}/sshd/sshd-*.jsonl'
+    start_at: end
+    storage: file_storage
+    attributes:
+      log_type: ssh
+    operators:
+      - type: json_parser
+      - type: move
+        if: 'attributes.msg != nil'
+        from: attributes.msg
+        to: body
+      - type: add
+        field: attributes.event
+        value: closed
+      - type: regex_parser
+        if: 'body matches "^Accepted "'
+        regex: '^Accepted (?P<method>\S+) for (?P<user>\S+) from (?P<src_ip>\S+) port'
+        on_error: send_quiet
+      - type: add
+        if: 'body matches "^Accepted "'
+        field: attributes.event
+        value: accepted
+      - type: regex_parser
+        if: 'body matches "^Failed "'
+        regex: '^Failed (?P<method>\S+) for (?:invalid user \*\*\* |(?P<user>\S+) )from (?P<src_ip>\S+) port'
+        on_error: send_quiet
+      - type: add
+        if: 'body matches "^Failed "'
+        field: attributes.event
+        value: failed
+      - type: regex_parser
+        if: 'body matches "^Invalid user "'
+        regex: '^Invalid user \*\*\* from (?P<src_ip>\S+)'
+        on_error: send_quiet
+      - type: add
+        if: 'body matches "^Invalid user "'
+        field: attributes.event
+        value: invalid_user
+      - type: regex_parser
+        if: 'body matches "session (opened|closed) for user"'
+        regex: 'session (?P<session>opened|closed) for user (?P<user>[^ (]+)'
+        on_error: send_quiet
+      - type: add
+        if: 'attributes.session == "opened"'
+        field: attributes.event
+        value: session_opened
+      - type: add
+        if: 'attributes.session == "closed"'
+        field: attributes.event
+        value: session_closed
+      - type: remove
+        if: 'attributes.session != nil'
+        field: attributes.session
+
   # ---- Discovery: metric collectors ------------------------------------------------------------------------
   receiver_creator/metrics:
     watch_observers: [host_observer]
@@ -569,6 +628,18 @@ exporters:
     retry_on_failure:
       max_elapsed_time: 1h
 
+  otlp_http/openobserve_ssh:
+    endpoint: ${env:OO_ENDPOINT}
+    compression: gzip
+    headers:
+      Authorization: ${env:OO_AUTH}
+      stream-name: ssh
+    sending_queue:
+      storage: file_storage
+      queue_size: 1000
+    retry_on_failure:
+      max_elapsed_time: 1h
+
 service:
   telemetry:
     metrics:
@@ -602,6 +673,10 @@ service:
       receivers: [file_log/procs]
       processors: [resource_detection, batch]
       exporters: [otlp_http/openobserve_processes]
+    logs/ssh:
+      receivers: [file_log/sshd]
+      processors: [resource_detection, batch]
+      exporters: [otlp_http/openobserve_ssh]
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource_detection, transform/traces_privacy, tail_sampling, batch]

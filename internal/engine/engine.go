@@ -415,6 +415,7 @@ func (e *eng) desiredFiles() ([]file, error) {
 		file{"netconn/otel-netconn.sh", assets.Netconn(), 0o755},
 		file{"netconn/otel-kmsg.sh", assets.Kmsg(), 0o755},
 		file{"netconn/otel-procs.sh", assets.Procs(), 0o755},
+		file{"netconn/otel-sshd.sh", assets.Sshd(), 0o755},
 		file{"VERSION", e.d.Version, 0o644})
 	if e.d.Answers != nil {
 		files = append(files, file{"answers.yaml", e.d.Answers, 0o644})
@@ -449,7 +450,7 @@ func (e *eng) userAndDirs(context.Context, string) bool {
 	for _, d := range []string{"", "bin", "config", "config/site.d", "systemd", "netconn", "backup"} {
 		e.dir(e.pre(d), 0o755, 0, 0)
 	}
-	for _, d := range []string{"data", "data/file_storage", "data/netconn", "data/kmsg", "data/procs"} {
+	for _, d := range []string{"data", "data/file_storage", "data/netconn", "data/kmsg", "data/procs", "data/sshd"} {
 		if !haveUser && e.o.Apply {
 			e.r.fail("%s: user %s missing", e.pre(d), e.o.User)
 			continue
@@ -764,7 +765,8 @@ func (e *eng) selinux(context.Context, string) bool {
 	}
 	e.r.warn("semanage not installed -> chcon (lost on a full relabel; install policycoreutils-python-utils)")
 	paths := append(append([]string{}, dirs...), e.pre("bin/otelcol-contrib"), e.pre("netconn/otel-netconn.sh"),
-		e.pre("netconn/otel-kmsg.sh"), e.pre("netconn/otel-procs.sh"))
+		e.pre("netconn/otel-kmsg.sh"), e.pre("netconn/otel-procs.sh"),
+		e.pre("netconn/otel-sshd.sh"))
 	out, err := e.o.Runner.Output(nil, "stat", append([]string{"-c", "%C"}, paths...)...)
 	if err == nil && allBinT(out, len(paths)) {
 		e.r.ok("labels are bin_t")
@@ -867,7 +869,7 @@ func (e *eng) validate(ctx context.Context, tmp string) bool {
 	data := e.fs(e.pre("data"))
 	if _, err := os.Stat(filepath.Join(data, "file_storage")); err != nil {
 		data = filepath.Join(tmp, "data")
-		for _, sub := range []string{"file_storage", "netconn", "kmsg", "procs"} {
+		for _, sub := range []string{"file_storage", "netconn", "kmsg", "procs", "sshd"} {
 			if err := os.MkdirAll(filepath.Join(data, sub), 0o700); err != nil {
 				e.r.fail("stage: %v", err)
 				return false

@@ -55,13 +55,27 @@ func TestProcsWritesNoArguments(t *testing.T) {
 	}
 }
 
+// Privacy (v0.7.0): the SSH helper reads sshd's own messages only and masks unknown user names (often a password
+// typed into the user field) before writing. The real masking is tested end to end in CI with logger.
+func TestSshdReadsSshdOnlyAndMasks(t *testing.T) {
+	s := string(Sshd())
+	for _, want := range []string{"journalctl -t sshd -t sshd-session", "-n 0 -f", `([Ii]nvalid user) ([^ ]+ )?(from )/\1 *** \3/`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("otel-sshd.sh lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "sudo") && !strings.Contains(s, "Never sudo") {
+		t.Error("otel-sshd.sh must not read sudo")
+	}
+}
+
 // Least privilege (v0.5.0): only the kernel-messages helper may read the journal, and it reads kernel messages
 // only (-k, priority warning+, no history); the collector unit never gets the journal group.
 func TestJournalAccessOnlyForKmsg(t *testing.T) {
 	for _, u := range UnitNames {
 		b, _ := Unit(u, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
 		has := strings.Contains(string(b), "systemd-journal")
-		if has != (u == "monitoring-kmsg") {
+		if has != (u == "monitoring-kmsg" || u == "monitoring-sshd") { // the two journal readers, never the collector
 			t.Errorf("%s: systemd-journal group = %v", u, has)
 		}
 	}

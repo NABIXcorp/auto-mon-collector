@@ -333,6 +333,13 @@ RSS: pid, user, comm, rss_kb, cpu_pct, etime_s, top -> `data/procs/procs-<day>.j
 the hostmetrics `process` scraper: ~20 rows per minute per host instead of one time series per process (short-lived
 processes would create new series all the time). No root, no network, no capabilities.
 
+**SSH logins (v0.7.0, every host):** unit `monitoring-sshd` runs `netconn/otel-sshd.sh`: `journalctl -t sshd -t
+sshd-session -n 0 -f` (sshd's own messages only, no history), keeps only login lines (accepted, failed, invalid
+user, connection closed / disconnected before auth, PAM session opened / closed) -> `data/sshd` -> stream `ssh`,
+attributes event / user / src_ip / method. **Privacy:** the name of an UNKNOWN user is replaced by `***` before it is
+written (people type their password into the user field); sudo and all other services are never read. Journal access
+only in this unit and `monitoring-kmsg`.
+
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
 JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone
 than the host would otherwise put every entry hours off.
