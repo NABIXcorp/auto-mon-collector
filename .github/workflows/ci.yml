@@ -152,9 +152,11 @@ jobs:
           systemctl is-active monitoring-otelcol monitoring-netconn monitoring-kmsg || die "units not active"
           # v0.5.0 end to end: a kernel message (priority 3) must reach the helper's file within seconds
           sleep 3
+          # (journald takes "amc-ci:" as the program name and strips it from MESSAGE)
           echo "<3>amc-ci: Out of memory: Killed process 4242 (ci-test)" | sudo tee /dev/kmsg > /dev/null
-          for i in $(seq 1 20); do sudo grep -qs 'amc-ci: Out of memory' /opt/monitoring/data/kmsg/kmsg-*.jsonl && break; sleep 1; done
-          if ! sudo grep -qs 'amc-ci: Out of memory' /opt/monitoring/data/kmsg/kmsg-*.jsonl; then
+          for i in $(seq 1 20); do sudo grep -qs 'Killed process 4242 (ci-test)' /opt/monitoring/data/kmsg/kmsg-*.jsonl && break; sleep 1; done
+          [ "$(sudo stat -c %a /opt/monitoring/data/kmsg/kmsg-*.jsonl | head -1)" = 640 ] || die "kmsg file mode is not 640"
+          if ! sudo grep -qs 'Killed process 4242 (ci-test)' /opt/monitoring/data/kmsg/kmsg-*.jsonl; then
             echo "--- unit"; systemctl status monitoring-kmsg --no-pager | tail -15
             echo "--- data dir"; sudo ls -la /opt/monitoring/data/kmsg
             echo "--- root: last kernel messages"; sudo journalctl -k -n 3 --no-pager -o json --output-fields=MESSAGE,PRIORITY
