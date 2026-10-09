@@ -112,6 +112,12 @@ func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate
 				return a, err
 			}
 			s.CDBService = strings.TrimSpace(s.CDBService)
+		} else {
+			// a local user: a PDB user (no root checks possible) or a NON-CDB database (role, limits, FRA directly)
+			p.Say("  (non-CDB = a database without PDBs: database role, limits, FRA are read directly)\n")
+			if s.NonCDB, err = p.YesNo("Non-CDB database?", ps.NonCDB); err != nil {
+				return a, err
+			}
 		}
 		a.Services["oracle"] = s
 	}

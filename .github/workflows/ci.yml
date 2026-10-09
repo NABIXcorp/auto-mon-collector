@@ -121,6 +121,17 @@ jobs:
           # v0.4.0: the CDB root block is switched on in this example (so the smoke run above built it too)
           $amc generate --answers examples/app-host/answers.yaml --detect-json examples/app-host/detect.json --out gen-app > /dev/null
           must 'ORACLE_CDB_SERVICE=orcl' gen-app/host.env
+          # v0.8.0: a NON-CDB database (local user + services.oracle.non_cdb): the oracle_db block must start too
+          sed -e 's/C##OTEL_MON/otel_mon/' -e 's/^\( *\)cdb_service:.*/\1non_cdb: true/' examples/app-host/answers.yaml > noncdb.yaml
+          must 'non_cdb: true' noncdb.yaml
+          echo "::group::plan with a non-CDB database"
+          sudo $amc plan --answers noncdb.yaml --detect-json examples/app-host/detect.json | tee plan-noncdb.txt
+          echo "::endgroup::"
+          must 'validate: VALID' plan-noncdb.txt
+          must 'no load / start errors' plan-noncdb.txt
+          $amc generate --answers noncdb.yaml --detect-json examples/app-host/detect.json --out gen-noncdb > /dev/null
+          must 'ORACLE_NONCDB=on' gen-noncdb/host.env
+          if grep -q 'ORACLE_CDB_SERVICE' gen-noncdb/host.env; then die "non-CDB: no CDB root checks expected"; fi
           # Tomcat started by systemd (v0.3.0): daily JULI files + renamed access log, two includes in one receiver.
           echo "::group::plan with a systemd Tomcat (daily log files)"
           sudo $amc plan --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json | tee plan-juli.txt
@@ -129,10 +140,10 @@ jobs:
           must 'no load / start errors' plan-juli.txt
           if grep -q 'DEFAULT' plan-juli.txt; then die "systemd Tomcat: logs were found, no DEFAULT expected"; fi
           # Interactive on a REAL terminal (script = pseudo-tty, so /dev/tty works as over SSH): Enter for the
-          # project and the service list, a PDB name, Enter for user + HTTP checks + 2 Tomcat log paths, then "n"
-          # for "Apply now?".
+          # project and the service list, a PDB name, Enter for user + non-CDB + HTTP checks + 2 Tomcat log paths,
+          # then "n" for "Apply now?".
           echo "::group::interactive plan (pseudo-terminal)"
-          printf '\n\napppdb\n\n\n\n\nn\n' | sudo script -qec "$amc plan --detect-json examples/app-host/detect.json" /dev/null | tee interactive.txt
+          printf '\n\napppdb\n\n\n\n\n\nn\n' | sudo script -qec "$amc plan --detect-json examples/app-host/detect.json" /dev/null | tee interactive.txt
           echo "::endgroup::"
           must 'Project \[-\]' interactive.txt
           must 'Tomcat access log \[/opt/tomcat/logs/localhost_access_log' interactive.txt

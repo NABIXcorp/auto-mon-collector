@@ -3,7 +3,7 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: v0.7.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.8.0, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
@@ -14,6 +14,8 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > (`monitoring-kmsg`, the only unit with journal access) -> stream `kernel`.
 > v0.6.0: top processes by CPU and memory every minute (`monitoring-procs`, command names only) -> stream `processes`.
 > v0.7.0: SSH logins (`monitoring-sshd`, sshd only; unknown user names masked) -> stream `ssh`.
+> v0.8.0: NON-CDB databases (`services.oracle.non_cdb: true`, asked for a local user): database role + open mode,
+> process / session limits, fast recovery area usage, read from the database itself.
 
 ## What it does
 

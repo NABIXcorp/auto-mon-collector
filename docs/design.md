@@ -320,6 +320,13 @@ open_mode, restricted), `oracle.database.state` (attributes role, open_mode), `o
 Root grants: `V_$PDBS` (with `CONTAINER_DATA`), `V_$DATABASE`, `V_$INSTANCE`, `V_$RESOURCE_LIMIT`,
 `V_$RECOVERY_FILE_DEST`. Only the root sees a PDB that is MOUNTED.
 
+`services.oracle.non_cdb` (optional, since v0.8.0): `true` = a NON-CDB database (no PDBs, no CDB root). Adds
+`sql_query/oracle_db` (60 s) against the database service itself with the normal (local) monitoring user: the same
+`oracle.database.state`, `oracle.limit.current` / `.max` and `oracle.fra.*` as `oracle_cdb` (`V$RESOURCE_LIMIT` works
+in a non-CDB), without `oracle.pdb.open`. Grants: `V_$DATABASE`, `V_$RESOURCE_LIMIT`, `V_$RECOVERY_FILE_DEST`.
+Excludes `cdb_service` and a common user. Asked interactively for a local user (`Non-CDB database?`, default = the
+saved answer, else no).
+
 **Kernel messages (v0.5.0, every host):** unit `monitoring-kmsg` runs `netconn/otel-kmsg.sh`: `journalctl -k -p warning
 -o json`, polled every 10 s with a cursor (kernel only, warning or worse, no history) -> `data/kmsg/kmsg-<day>.jsonl` (2 days) -> `file_log/kmsg`
 -> stream `kernel`, attribute `kind` = oom / hung_task / disk_error / other. Least privilege: only this unit has the

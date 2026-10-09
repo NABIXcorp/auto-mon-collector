@@ -32,6 +32,9 @@ type Service struct {
 	// oracle (v0.4.0): service of the CDB root (ORACLE_CDB_SERVICE) for PDB states, role, limits, FRA; needs a
 	// COMMON monitoring user (C##...). Empty or "-" = no CDB checks (non-CDB, or a local PDB user).
 	CDBService string `yaml:"cdb_service,omitempty"`
+	// oracle (v0.8.0): true = a NON-CDB database: role, limits, FRA are read from the database itself
+	// (ORACLE_NONCDB, sql_query/oracle_db) with the normal monitoring user. Not with cdb_service.
+	NonCDB bool `yaml:"non_cdb,omitempty"`
 	// tomcat: log files when the scan cannot find them (empty = what the scan found, "-" = none).
 	AccessLog string   `yaml:"access_log,omitempty"` // access log glob, e.g. /opt/tomcat/logs/access_log.*.log
 	Logs      []string `yaml:"logs,omitempty"`       // Tomcat log globs (catalina.out format), e.g. .../catalina.*.log
@@ -97,6 +100,15 @@ func (a Answers) Validate() error {
 		}
 		if name != "oracle" && s.CDBService != "" {
 			return fmt.Errorf("services.%s: cdb_service is an Oracle setting", name)
+		}
+		if name != "oracle" && s.NonCDB {
+			return fmt.Errorf("services.%s: non_cdb is an Oracle setting", name)
+		}
+		if s.NonCDB && s.CDBService != "" && s.CDBService != "-" {
+			return fmt.Errorf("services.oracle: non_cdb and cdb_service exclude each other (a non-CDB has no CDB root)")
+		}
+		if s.NonCDB && strings.HasPrefix(strings.ToUpper(s.User), "C##") {
+			return fmt.Errorf("services.oracle: non_cdb with a common user (%q): common users exist only in a CDB", s.User)
 		}
 		if s.CDBService != "" && s.CDBService != "-" && !serviceRE.MatchString(s.CDBService) {
 			return fmt.Errorf("services.oracle.cdb_service: %q is not a service name", s.CDBService)

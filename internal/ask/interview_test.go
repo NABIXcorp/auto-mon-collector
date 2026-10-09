@@ -24,7 +24,7 @@ func appHost() []detect.Finding {
 func TestFirstRunAsksAndSecondRunIsEnterEnter(t *testing.T) {
 	s := &Script{Answers: []string{"Shop prod", // project
 		"n", "y", "n", "y", // monitor oracle, not redis, tomcat
-		"apppdb", "", "http://127.0.0.1:8080/app/ https://app.example.com/app/",
+		"apppdb", "", "", "http://127.0.0.1:8080/app/ https://app.example.com/app/",
 		"/opt/tomcat/logs/access_log.*.log", ""}} // Tomcat logs: access log typed, Tomcat log none (default '-')
 	a, err := Interview(appHost(), generate.Answers{}, s)
 	if err != nil {
@@ -61,7 +61,7 @@ func TestFirstRunAsksAndSecondRunIsEnterEnter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, b)
 	}
-	s2 := &Script{Answers: []string{"", "", "", "", "", "", ""}} // project, monitor, service, user, http, 2 x logs
+	s2 := &Script{Answers: []string{"", "", "", "", "", "", "", ""}} // project, monitor, service, user, non-CDB, http, 2 x logs
 	a2, err := Interview(appHost(), prev, s2)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestFirstRunAsksAndSecondRunIsEnterEnter(t *testing.T) {
 }
 
 func TestDashMeansNoHTTPChecks(t *testing.T) {
-	s := &Script{Answers: []string{"", "", "", "", "-", "", ""}}
+	s := &Script{Answers: []string{"", "", "", "", "", "-", "", ""}}
 	a, err := Interview(appHost(), generate.Answers{}, s)
 	if err != nil || len(a.Checks.HTTP) != 0 || a.Project != "" {
 		t.Errorf("%+v %q %v", a.Checks, a.Project, err)
@@ -117,14 +117,35 @@ func TestCommonUserAsksCDBService(t *testing.T) {
 	if !strings.Contains(s.Out.String(), "Oracle CDB root service [orcl]") {
 		t.Errorf("transcript:\n%s", s.Out.String())
 	}
-	s2 := &Script{Answers: []string{"", "", "apppdb", "", "-", "", ""}}
+	s2 := &Script{Answers: []string{"", "", "apppdb", "", "", "-", "", ""}}
 	if _, err := Interview(appHost(), generate.Answers{}, s2); err != nil || strings.Contains(s2.Out.String(), "CDB root") {
 		t.Errorf("local user: no CDB question (%v):\n%s", err, s2.Out.String())
 	}
 }
 
+// A local user gets the non-CDB question (v0.8.0); default = the saved answer. A common user does not.
+func TestLocalUserAsksNonCDB(t *testing.T) {
+	s := &Script{Answers: []string{"", "", "", "", "y", "-", "", ""}}
+	a, err := Interview(appHost(), generate.Answers{}, s)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, s.Out.String())
+	}
+	if !a.Services["oracle"].NonCDB || !strings.Contains(s.Out.String(), "Non-CDB database?") {
+		t.Errorf("oracle answers %+v, transcript:\n%s", a.Services["oracle"], s.Out.String())
+	}
+	prev := generate.Answers{Services: map[string]generate.Service{"oracle": {NonCDB: true}}}
+	s2 := &Script{Answers: []string{"", "", "", "", "", "-", "", ""}}
+	if a, err = Interview(appHost(), prev, s2); err != nil || !a.Services["oracle"].NonCDB {
+		t.Errorf("Enter must keep the saved non_cdb (%v): %+v", err, a.Services["oracle"])
+	}
+	s3 := &Script{Answers: []string{"", "", "apppdb", "C##OTEL_MON", "", "-", "", ""}}
+	if _, err = Interview(appHost(), generate.Answers{}, s3); err != nil || strings.Contains(s3.Out.String(), "Non-CDB") {
+		t.Errorf("common user: no non-CDB question (%v):\n%s", err, s3.Out.String())
+	}
+}
+
 func TestBadURLIsRejected(t *testing.T) {
-	s := &Script{Answers: []string{"", "", "", "", "https://user:secretpw@app.example.com/", "", ""}}
+	s := &Script{Answers: []string{"", "", "", "", "", "https://user:secretpw@app.example.com/", "", ""}}
 	if _, err := Interview(appHost(), generate.Answers{}, s); err == nil || strings.Contains(err.Error(), "secretpw") {
 		t.Errorf("URL with credentials must fail without echoing them: %v", err)
 	}

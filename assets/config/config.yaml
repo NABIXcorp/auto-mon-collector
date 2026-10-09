@@ -432,6 +432,56 @@ receivers:
                   value_column: reclaimable_b
                   unit: By
 
+      # NON-CDB database (v0.8.0): the same role / limits / FRA queries as oracle_cdb, against the database itself
+      # (ORACLE_SERVICE, the normal monitoring user; answers services.oracle.non_cdb). There is no V$PDBS here.
+      # Grants: V_$DATABASE, V_$RESOURCE_LIMIT (works in a non-CDB), V_$RECOVERY_FILE_DEST.
+      sql_query/oracle_db:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_NONCDB:-off}" == "on"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_SERVICE:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 60s
+          timeout: 10s
+          queries:
+            # Database role (PRIMARY / PHYSICAL STANDBY) + open mode: 1 row, value 1 (state in the attributes)
+            - sql: |
+                SELECT database_role AS "role", open_mode AS "open_mode", 1 AS "v" FROM v$$database
+              metrics:
+                - metric_name: oracle.database.state
+                  value_column: v
+                  attribute_columns: [role, open_mode]
+            # processes / sessions vs their limit (V$RESOURCE_LIMIT is empty inside a PDB); UNLIMITED -> 0
+            - sql: |
+                SELECT resource_name AS "resource", current_utilization AS "current",
+                       NVL(TO_NUMBER(DECODE(TRIM(limit_value), 'UNLIMITED', NULL, TRIM(limit_value))), 0) AS "limit"
+                FROM v$$resource_limit WHERE resource_name IN ('processes', 'sessions')
+              metrics:
+                - metric_name: oracle.limit.current
+                  value_column: current
+                  attribute_columns: [resource]
+                - metric_name: oracle.limit.max
+                  value_column: limit
+                  attribute_columns: [resource]
+            # Fast recovery area (archive logs, backups): full = database hangs (ORA-00257). No FRA = 0 / 0.
+            - sql: |
+                SELECT NVL(SUM(space_limit), 0) AS "limit_b", NVL(SUM(space_used), 0) AS "used_b",
+                       NVL(SUM(space_reclaimable), 0) AS "reclaimable_b"
+                FROM v$$recovery_file_dest
+              metrics:
+                - metric_name: oracle.fra.limit
+                  value_column: limit_b
+                  unit: By
+                - metric_name: oracle.fra.used
+                  value_column: used_b
+                  unit: By
+                - metric_name: oracle.fra.reclaimable
+                  value_column: reclaimable_b
+                  unit: By
+
       # Redis. REDIS_MON=off in host.env disables it, REDIS_PORT for a non-standard port.
       redis:
         rule: type == "hostport" && port == ${env:REDIS_PORT:-6379} && host != "::1" && "${env:REDIS_MON:-on}" != "off"

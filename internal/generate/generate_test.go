@@ -225,6 +225,30 @@ func TestOracleCDBService(t *testing.T) {
 	}
 }
 
+// Non-CDB checks (v0.8.0): ORACLE_NONCDB=on only when answered; never together with cdb_service or a common user.
+func TestOracleNonCDB(t *testing.T) {
+	h := Host{Findings: []detect.Finding{oracleFinding()}}
+	out, err := Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "orcl", User: "otel_mon", NonCDB: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out.HostEnv), "ORACLE_NONCDB=on\n") || strings.Contains(string(out.HostEnv), "ORACLE_CDB_SERVICE") {
+		t.Errorf("host.env:\n%s", out.HostEnv)
+	}
+	out, _ = Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "orcl", User: "otel_mon"}}})
+	if strings.Contains(string(out.HostEnv), "ORACLE_NONCDB") {
+		t.Errorf("no non-CDB checks without the answer:\n%s", out.HostEnv)
+	}
+	for _, bad := range []Service{{User: "C##OTEL_MON", NonCDB: true}, {User: "otel_mon", NonCDB: true, CDBService: "orcl"}} {
+		if err := (Answers{Services: map[string]Service{"oracle": bad}}).Validate(); err == nil {
+			t.Errorf("must fail: %+v", bad)
+		}
+	}
+	if err := (Answers{Services: map[string]Service{"tomcat": {NonCDB: true}}}).Validate(); err == nil {
+		t.Error("non_cdb on tomcat must fail")
+	}
+}
+
 // The project becomes OTEL_RESOURCE_ATTRIBUTES for the resource_detection "env" detector, which URL-decodes the
 // value (url.QueryUnescape): "Dev servers" -> "Dev+servers" -> "Dev servers". No project = no line at all.
 func TestProject(t *testing.T) {

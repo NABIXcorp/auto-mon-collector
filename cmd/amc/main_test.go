@@ -100,6 +100,7 @@ func TestInteractivePlanThenApplyNow(t *testing.T) {
 		"Shop prod",  // project
 		"",           // monitor [oracle, redis, tomcat]? (all detected: keep)
 		"apppdb", "", // oracle service, user (default otel_mon)
+		"",     // non-CDB database? (default no)
 		"",     // HTTP checks: default http://127.0.0.1:8080/
 		"", "", // Tomcat logs: what the scan found
 		"https://backend.example.com/api/x", "Basic dGVzdA==", "pw123456", // secrets file missing
@@ -143,7 +144,7 @@ func TestInteractiveApplyNowNo(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
 	os.WriteFile(filepath.Join(dir, "secrets", "collector.env"), []byte("OO_ENDPOINT=x\n"), 0o600) // exists: no secret questions
-	s := &ask.Script{Answers: []string{"", "", "apppdb", "", "", "", "", "n"}}                     // project .. logs, Apply now? n
+	s := &ask.Script{Answers: []string{"", "", "apppdb", "", "", "", "", "", "n"}}                 // project .. logs, Apply now? n
 	openPrompter = func() (promptCloser, error) { return scriptTTY{s}, nil }
 	n := 0
 	runEngine = func(context.Context, engine.Options, engine.Desired) (engine.Result, error) {

@@ -76,6 +76,9 @@ func Generate(h Host, a Answers) (Output, error) {
 		if c := ans.CDBService; c != "" && c != "-" {
 			env = append(env, "ORACLE_CDB_SERVICE="+c) // sql_query/oracle_cdb: PDB states, role, limits, FRA
 		}
+		if ans.NonCDB {
+			env = append(env, "ORACLE_NONCDB=on") // sql_query/oracle_db: role, limits, FRA of a non-CDB
+		}
 		if p := o.Values["ORACLE_ALERT_LOG"]; p != "" {
 			env = append(env, "ORACLE_ALERT_LOG="+p)
 			recv["file_log/oracle_alert"] = oracleAlertLog(p)
