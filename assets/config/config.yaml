@@ -397,13 +397,13 @@ receivers:
                 - metric_name: oracle.pdb.open
                   value_column: open
                   attribute_columns: [pdb, open_mode, restricted]
-            # Database role (PRIMARY / PHYSICAL STANDBY) + open mode: 1 row, value 1 (state in the attributes)
+            # Role (PRIMARY / PHYSICAL STANDBY), open mode, cdb (YES / NO): 1 row, value 1 (state in the attributes)
             - sql: |
-                SELECT database_role AS "role", open_mode AS "open_mode", 1 AS "v" FROM v$$database
+                SELECT database_role AS "role", open_mode AS "open_mode", cdb AS "cdb", 1 AS "v" FROM v$$database
               metrics:
                 - metric_name: oracle.database.state
                   value_column: v
-                  attribute_columns: [role, open_mode]
+                  attribute_columns: [role, open_mode, cdb]
             # processes / sessions vs their limit (V$RESOURCE_LIMIT is empty inside a PDB); UNLIMITED -> 0
             - sql: |
                 SELECT resource_name AS "resource", current_utilization AS "current",
@@ -447,13 +447,13 @@ receivers:
           collection_interval: 60s
           timeout: 10s
           queries:
-            # Database role (PRIMARY / PHYSICAL STANDBY) + open mode: 1 row, value 1 (state in the attributes)
+            # Role (PRIMARY / PHYSICAL STANDBY), open mode, cdb (YES / NO): 1 row, value 1 (state in the attributes)
             - sql: |
-                SELECT database_role AS "role", open_mode AS "open_mode", 1 AS "v" FROM v$$database
+                SELECT database_role AS "role", open_mode AS "open_mode", cdb AS "cdb", 1 AS "v" FROM v$$database
               metrics:
                 - metric_name: oracle.database.state
                   value_column: v
-                  attribute_columns: [role, open_mode]
+                  attribute_columns: [role, open_mode, cdb]
             # processes / sessions vs their limit (V$RESOURCE_LIMIT is empty inside a PDB); UNLIMITED -> 0
             - sql: |
                 SELECT resource_name AS "resource", current_utilization AS "current",
