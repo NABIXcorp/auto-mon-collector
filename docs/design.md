@@ -144,8 +144,14 @@ with a warning), systemd units, start, 20 s health check (`active` + no `error` 
 rollback to the backup.
 
 ### 4.8 Update, many hosts, removal
-- **Update:** same one-liner. The installer reads the existing host config as answers, detects again, asks only
-  about new findings, shows the diff.
+- **Update (v0.10.0):** `get.sh | sudo bash -s -- update`. Inputs come from the installation itself:
+  `<prefix>/answers.yaml` (written by every `--answers` / interactive apply) and the installed `config/site.d/`
+  (kept as is; `plan` / `apply` without `--site-dir` would remove it). Scan again, check run (validate + smoke);
+  only after a clean check that changes something: apply + start + rollback (no second smoke run). An
+  up-to-date host is NOT restarted (a restart resets cumulative counters). `--plan` stops after the check.
+  No answers.yaml (install via `--host-dir`) = stop with exit 2. Changing answers / site.d is still
+  `plan` / `apply --answers F [--site-dir D]`. The engine reports `Result.Changes` (check mode: "would"
+  actions + changed files) for this decision.
 - **Many hosts:** `--answers hosts/<name>.yaml --secrets-file /root/amc.secrets --yes` (answers files
   live in the operator's private repository; secrets file put on the host by the operator or a vault agent).
 - **Removal:** `amc uninstall` (units, files; secrets only after an explicit confirmation).
@@ -279,6 +285,7 @@ docs:
 ```
 amc plan      [--answers F] [--secrets-file F] [--only a,b] [--skip c]   # default command, read-only
 amc apply     [--start] [same flags] [--yes]                              # changes the system
+amc update    [--plan] [--detect-json F]                                  # saved answers + installed site.d
 amc detect    [--json]                                                    # findings only
 amc sql <profile>                                                         # print DB grants
 amc uninstall [--keep-secrets]

@@ -608,3 +608,24 @@ func TestTypedSecretsMissingKeyFails(t *testing.T) {
 		t.Errorf("%s", out)
 	}
 }
+
+func TestCheckCountsChanges(t *testing.T) {
+	needSymlinks(t)
+	h := smokeHost(t)
+	r := &fakeRunner{version: collector.Version, readable: true}
+	if res, out := run(t, h, r, false, false, false); res.Changes == 0 {
+		t.Fatalf("a first check must report changes:\n%s", out)
+	}
+	if res, out := run(t, h, r, true, true, false); res.Failures != 0 {
+		t.Fatalf("apply: %s", out)
+	}
+	// the fake runner does not edit /etc/group: do what the real usermod -aG did
+	h.write("/etc/group", "root:x:0:\ntomcat:x:992:otelcol-contrib\notelcol-contrib:x:990:\n", 0o644)
+	if res, out := run(t, h, r, false, false, false); res.Changes != 0 {
+		t.Errorf("check after apply: %d changes, want 0 (amc update would restart for nothing):\n%s", res.Changes, out)
+	}
+	h.write("/opt/monitoring/config/host.yaml", "receivers: {x: 1}\n", 0o644)
+	if res, out := run(t, h, r, false, false, false); res.Changes != 1 {
+		t.Errorf("one changed file: %d changes, want 1:\n%s", res.Changes, out)
+	}
+}

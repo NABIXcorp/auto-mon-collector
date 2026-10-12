@@ -3,7 +3,7 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: v0.9.1, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.10.0, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
@@ -21,6 +21,8 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > (`services.oracle.backups`).
 > v0.9.1: HTTP metrics renamed `tomcat.access.*` (the app's own OpenTelemetry agent already sends `http.server.*`),
 > processor `delta_to_cumulative` (the old name is deprecated).
+> v0.10.0: `amc update`: a new release on an installed host with one command, nothing to copy (the saved
+> `answers.yaml` + the installed `site.d`); an up-to-date host is not restarted.
 
 ## What it does
 
@@ -37,6 +39,17 @@ curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/downl
 5. **Apply**: only after you say yes. Backup first, rollback on failure.
 
 Data goes over OTLP to any backend (OpenObserve first).
+
+## Update an installed host
+
+```bash
+curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh | sudo bash -s -- update
+```
+
+No files to copy: `update` uses what the last install left on the host (`/opt/monitoring/answers.yaml`, the
+installed `config/site.d/`), scans again, plans (validate + test run) and applies + restarts only when something
+changes (backup first, automatic rollback). `update --plan` stops after the plan. To change answers or the site
+overlay use `plan` / `apply --answers FILE [--site-dir DIR]` as before.
 
 ## Verify instead of trusting
 
@@ -62,6 +75,7 @@ less get.sh && sudo bash get.sh            # AMC_VERSION=v0.2.0 pins a release
 sudo amc detect                       # read-only: what runs on this host
 sudo amc                              # asks what a scan cannot know, then a full plan; "Apply now?" at the end
 sudo amc plan --answers answers.yaml  # the same without questions (automation), see examples/app-host
+sudo amc update                      # new release: saved answers + installed site.d, restart only on changes
 sudo amc uninstall                    # check mode; --yes removes (secrets / data / user kept unless --purge*)
 ```
 

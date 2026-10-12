@@ -29,6 +29,9 @@ const usage = `auto-mon-collector (amc): host discovery installer for otelcol-co
 Usage:
   amc plan  --answers FILE [flags]           detect + generate + diff + validate + smoke run; changes nothing
   amc apply --answers FILE [--start] [flags] the same, then install (backup first), optionally (re)start
+  amc update [--plan] [flags]                new release on an installed host, no files to copy: the saved
+                                             answers + the installed site.d, plan, then apply + start only
+                                             when something changes (--plan: stop after the plan)
   amc generate --answers FILE [--out DIR]    only write host.yaml + host.env (nothing installed)
   amc detect [--json]                        read-only: which services this host runs (needs root)
   amc uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]   check mode unless --yes
@@ -94,6 +97,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case "plan", "apply":
 		return planApply(cmd == "apply", args, stdout, stderr)
+	case "update":
+		return update(args, stdout, stderr)
 	case "uninstall":
 		return uninstall(args, stdout, stderr)
 	case "detect":
@@ -187,6 +192,81 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if res.Failures > 0 {
+		return exitPlan
+	}
+	return exitOK
+}
+
+// update: the one-liner for a new release. Inputs come from the installation itself (<prefix>/answers.yaml,
+// <prefix>/config/site.d/), so nothing has to be copied to the host. The host is scanned again (moved log
+// files, new services). Plan first (validate + smoke run); apply + start + rollback only after a clean plan
+// that changes something: an up-to-date host is not restarted (a restart resets the counters).
+func update(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("amc update", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	planOnly := fs.Bool("plan", false, "")
+	detectFile := fs.String("detect-json", "", "")
+	prefix := fs.String("prefix", "/opt/monitoring", "")
+	user := fs.String("user", "otelcol-contrib", "")
+	noFetch := fs.Bool("no-fetch", false, "")
+	noSmoke := fs.Bool("no-smoke", false, "")
+	noRollback := fs.Bool("no-rollback", false, "")
+	fs.Usage = func() { fmt.Fprint(stderr, usage) }
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "amc update: unexpected argument %q (to change answers or site.d use plan / apply --answers)\n", fs.Arg(0))
+		return exitUsage
+	}
+	saved := filepath.Join(*prefix, "answers.yaml")
+	a, err := generate.LoadAnswers(saved)
+	if os.IsNotExist(err) {
+		fmt.Fprintf(stderr, "amc update: %s is missing: install first (`amc` asks, or `amc apply --answers FILE --start`)\n", saved)
+		return exitUsage
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		return exitUsage
+	}
+	siteDir := filepath.Join(*prefix, "config", "site.d")
+	fmt.Fprintf(stdout, "update: answers from %s, site overlay from %s (kept as installed)\n", saved, siteDir)
+	d, err := desiredFrom(stdout, a, *detectFile, siteDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		return exitUsage
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	opts := engine.Options{
+		Prefix: *prefix, User: *user, Fetch: !*noFetch, Smoke: !*noSmoke, Rollback: !*noRollback,
+		Out: stdout, Runner: sysexec.Runner{},
+	}
+	res, err := runEngine(ctx, opts, d)
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		if errors.Is(err, context.Canceled) {
+			return exitPlan
+		}
+		return exitUsage
+	case res.Failures > 0:
+		fmt.Fprintln(stdout, "\nupdate: the plan has failures: nothing was changed.")
+		return exitPlan
+	case res.Changes == 0:
+		fmt.Fprintln(stdout, "\nupdate: up to date: nothing to change, nothing restarted.")
+		return exitOK
+	case *planOnly:
+		fmt.Fprintf(stdout, "\nupdate: %d change(s) planned. Apply: run the same command without --plan.\n", res.Changes)
+		return exitOK
+	}
+	opts.Apply, opts.Start = true, true
+	opts.Smoke = false // the identical configuration passed the smoke run seconds ago
+	if res, err = runEngine(ctx, opts, d); err != nil {
+		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		return exitUsage
+	}
+	if res.Failures > 0 || res.RolledBack {
 		return exitPlan
 	}
 	return exitOK

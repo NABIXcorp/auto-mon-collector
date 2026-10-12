@@ -14,11 +14,13 @@ import (
 type report struct {
 	w                  io.Writer
 	failures, warnings int
+	changes            int // check mode: "would" actions + changed files (0 = the system already matches)
 }
 
 func (r *report) step(format string, a ...any) { fmt.Fprintf(r.w, "\n== "+format+"\n", a...) }
 func (r *report) ok(format string, a ...any)   { fmt.Fprintf(r.w, "  ok    "+format+"\n", a...) }
 func (r *report) would(format string, a ...any) {
+	r.changes++
 	fmt.Fprintf(r.w, "  would: "+format+"\n", a...)
 }
 func (r *report) done(format string, a ...any) { fmt.Fprintf(r.w, "  done  "+format+"\n", a...) }

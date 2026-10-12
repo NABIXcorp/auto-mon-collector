@@ -83,6 +83,7 @@ type Desired struct {
 // Result of a run.
 type Result struct {
 	Failures, Warnings int
+	Changes            int // check mode: what would change ("would" actions + changed files); 0 = up to date
 	Applied            bool
 	RolledBack         bool // the units did not start; the previous state was restored (or a first install stopped)
 }
@@ -177,7 +178,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	}
 	// ACLs / groups / labels set above stay even if a later step fails: record them for uninstall now.
 	e.persistState()
-	res := Result{Failures: e.r.failures, Warnings: e.r.warnings}
+	res := Result{Failures: e.r.failures, Warnings: e.r.warnings, Changes: e.r.changes}
 	if e.r.failures > 0 {
 		fmt.Fprintf(o.Out, "\nSTOP: %d failure(s), %d warning(s). Nothing restarted.\n", e.r.failures, e.r.warnings)
 		return res, nil
@@ -627,6 +628,9 @@ func (e *eng) installFiles(context.Context, string) bool {
 	for _, n := range stale {
 		changed = true
 		e.r.line("REMOVE config/site.d/%s (no longer wanted)", n)
+	}
+	if changed {
+		e.r.changes++
 	}
 	if !changed || !e.o.Apply {
 		return true

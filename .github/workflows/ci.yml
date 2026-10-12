@@ -301,6 +301,32 @@ jobs:
           sudo systemctl start monitoring-otelcol
           for i in $(seq 1 20); do systemctl is-active -q monitoring-otelcol && break; sleep 1; done
           systemctl is-active monitoring-otelcol || die "live collector did not come back after the HTTP metrics test"
+          # v0.10.0 end to end: amc update = a new release on an installed host without copying files (saved
+          # answers.yaml + the installed site.d). An up-to-date host must NOT be restarted (same MainPID).
+          echo "::group::amc update"
+          set +e; sudo $amc update --no-smoke > upd0.txt 2>&1; rc=$?; set -e; cat upd0.txt
+          { [ "$rc" -eq 2 ] && grep -q 'answers.yaml is missing' upd0.txt; } || die "update without saved answers must stop (exit 2, got $rc)"
+          td=examples/tomcat-systemd
+          mkdir -p site-upd && printf 'processors:\n  batch/ci_update: {}\n' > site-upd/10-ci.yaml
+          sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start | tee upd1.txt
+          must 'monitoring-otelcol.service active' upd1.txt
+          { sudo test -s /opt/monitoring/answers.yaml && sudo test -s /opt/monitoring/config/site.d/10-ci.yaml; } || die "answers / site.d not installed"
+          pid=$(systemctl show -p MainPID --value monitoring-otelcol)
+          sudo $amc update --detect-json $td/detect.json | tee upd2.txt
+          must 'up to date: nothing to change, nothing restarted' upd2.txt
+          [ "$(systemctl show -p MainPID --value monitoring-otelcol)" = "$pid" ] || die "an up-to-date update restarted the collector"
+          sudo test -s /opt/monitoring/config/site.d/10-ci.yaml || die "update removed the installed site.d"
+          # a changed saved answer (stands for a release with a changed template): --plan changes nothing, then apply
+          sudo sed -i 's/^project: Shop online$/project: Shop update/' /opt/monitoring/answers.yaml
+          sudo $amc update --plan --detect-json $td/detect.json | tee upd3.txt
+          must 'change(s) planned' upd3.txt
+          [ "$(systemctl show -p MainPID --value monitoring-otelcol)" = "$pid" ] || die "update --plan restarted the collector"
+          sudo $amc update --detect-json $td/detect.json | tee upd4.txt
+          must 'DONE: 0 failure' upd4.txt
+          sudo grep -q 'Shop update' /opt/monitoring/config/host.env || die "update did not apply the saved answers"
+          sudo test -s /opt/monitoring/config/site.d/10-ci.yaml || die "update removed the installed site.d"
+          systemctl is-active monitoring-otelcol || die "collector not active after the update"
+          echo "::endgroup::"
           # Uninstall: check mode first (must change nothing), then everything; afterwards nothing of amc is left.
           echo "::group::uninstall"
           grep -q '"/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log"' /opt/monitoring/amc-state.json || die "ACL not recorded"
