@@ -240,7 +240,7 @@ func update(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	opts := engine.Options{
 		Prefix: *prefix, User: *user, Fetch: !*noFetch, Smoke: !*noSmoke, Rollback: !*noRollback,
-		Out: stdout, Runner: sysexec.Runner{},
+		Out: stdout, Runner: sysexec.Runner{}, CheckHint: "-",
 	}
 	res, err := runEngine(ctx, opts, d)
 	switch {
@@ -256,18 +256,27 @@ func update(args []string, stdout, stderr io.Writer) int {
 	case res.Changes == 0:
 		fmt.Fprintln(stdout, "\nupdate: up to date: nothing to change, nothing restarted.")
 		return exitOK
+	case *planOnly && res.VersionOnly:
+		fmt.Fprintln(stdout, "\nupdate: only the installer version changed (configuration identical): the update writes VERSION, no restart.")
+		return exitOK
 	case *planOnly:
 		fmt.Fprintf(stdout, "\nupdate: %d change(s) planned. Apply: run the same command without --plan.\n", res.Changes)
 		return exitOK
 	}
-	opts.Apply, opts.Start = true, true
+	// only VERSION differs: the running collector already has this configuration -> write it, do not restart
+	// (a restart resets cumulative counters for nothing)
+	opts.Apply, opts.Start = true, !res.VersionOnly
 	opts.Smoke = false // the identical configuration passed the smoke run seconds ago
+	versionOnly := res.VersionOnly
 	if res, err = runEngine(ctx, opts, d); err != nil {
 		fmt.Fprintf(stderr, "amc update: %v\n", err)
 		return exitUsage
 	}
 	if res.Failures > 0 || res.RolledBack {
 		return exitPlan
+	}
+	if versionOnly {
+		fmt.Fprintln(stdout, "\nupdate: only the installer version changed: VERSION written, collector NOT restarted.")
 	}
 	return exitOK
 }

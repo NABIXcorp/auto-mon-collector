@@ -66,6 +66,9 @@ type Options struct {
 	Now           func() time.Time
 	Chown         func(path string, uid, gid int) error
 	Fetcher       func(context.Context, collector.Asset, string) (string, error)
+
+	// CheckHint: the hint after a clean check (default: run `amc apply`); "-" = none (the caller prints its own)
+	CheckHint string
 }
 
 // Desired is what the generator (or an operator) wants on the host.
@@ -86,6 +89,8 @@ type Result struct {
 	Changes            int // check mode: what would change ("would" actions + changed files); 0 = up to date
 	Applied            bool
 	RolledBack         bool // the units did not start; the previous state was restored (or a first install stopped)
+	// VersionOnly: the only change is the VERSION file (a new installer, identical configuration): no restart needed
+	VersionOnly bool
 }
 
 type file struct {
@@ -109,6 +114,8 @@ type eng struct {
 
 	st    *state // what amc changed outside <prefix> (amc-state.json), for uninstall
 	files []file
+
+	changedFiles []string // check / apply: files that differ from the installed ones (NEW / CHANGE / REMOVE)
 }
 
 const backupsKept = 10
@@ -178,13 +185,22 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	}
 	// ACLs / groups / labels set above stay even if a later step fails: record them for uninstall now.
 	e.persistState()
-	res := Result{Failures: e.r.failures, Warnings: e.r.warnings, Changes: e.r.changes}
+	res := Result{Failures: e.r.failures, Warnings: e.r.warnings, Changes: e.r.changes,
+		VersionOnly: e.r.changes == 1 && len(e.changedFiles) == 1 && e.changedFiles[0] == "VERSION"}
 	if e.r.failures > 0 {
 		fmt.Fprintf(o.Out, "\nSTOP: %d failure(s), %d warning(s). Nothing restarted.\n", e.r.failures, e.r.warnings)
 		return res, nil
 	}
 	if !o.Apply {
-		fmt.Fprintf(o.Out, "\nCHECK done: 0 failures, %d warning(s). Run `amc apply` to change things.\n", e.r.warnings)
+		hint := " Run `amc apply` to change things."
+		switch o.CheckHint {
+		case "":
+		case "-":
+			hint = ""
+		default:
+			hint = " " + o.CheckHint
+		}
+		fmt.Fprintf(o.Out, "\nCHECK done: 0 failures, %d warning(s).%s\n", e.r.warnings, hint)
 		return res, nil
 	}
 	e.units()
@@ -616,17 +632,20 @@ func (e *eng) installFiles(context.Context, string) bool {
 			e.r.ok("%s unchanged", f.rel)
 		case err == nil:
 			changed = true
+			e.changedFiles = append(e.changedFiles, f.rel)
 			d, add, del := lineDiff(string(old), string(f.data))
 			e.r.line("CHANGE %s (+%d -%d)", f.rel, add, del)
 			e.r.indent(e.mask(d), 80)
 		default:
 			changed = true
+			e.changedFiles = append(e.changedFiles, f.rel)
 			e.r.line("NEW    %s", f.rel)
 		}
 	}
 	stale := e.staleSite()
 	for _, n := range stale {
 		changed = true
+		e.changedFiles = append(e.changedFiles, "config/site.d/"+n)
 		e.r.line("REMOVE config/site.d/%s (no longer wanted)", n)
 	}
 	if changed {

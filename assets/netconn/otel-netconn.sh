@@ -38,7 +38,9 @@ case "${1:-}" in
     interval="${2:-30}"
     mkdir -p "$OUT_DIR"
     while :; do
-      sample >> "$OUT_DIR/netconn-$(date +%Y%m%d).jsonl"
+      f="$OUT_DIR/netconn-$(date +%Y%m%d).jsonl"
+      [ -e "$f" ] || { : >> "$f" && chmod 640 "$f"; }   # explicit mode: a default ACL on a parent overrides UMask
+      sample >> "$f"
       find "$OUT_DIR" -name 'netconn-*.jsonl' -mtime +1 -delete   # keep ~2 days
       sleep "$interval"
     done ;;

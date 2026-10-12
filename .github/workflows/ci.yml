@@ -169,6 +169,10 @@ jobs:
           f=$(sudo sh -c 'ls /opt/monitoring/data/kmsg/kmsg-*.jsonl | head -1')
           echo "kmsg file: $(sudo stat -c '%A %U:%G' "$f")"; sudo getfacl -p "$f" /opt/monitoring/data/kmsg /opt/monitoring/data /opt 2>/dev/null | grep -vE '^$'
           case "$(sudo stat -c %A "$f")" in ????????w?) die "kmsg file is world-writable";; esac
+          # v0.10.1: the netconn helper sets its file mode itself too (the runner's default ACL on /opt gives other::rwx)
+          for i in $(seq 1 40); do sudo sh -c 'ls /opt/monitoring/data/netconn/netconn-*.jsonl' > /dev/null 2>&1 && break; sleep 1; done
+          m=$(sudo sh -c 'stat -c %A /opt/monitoring/data/netconn/netconn-*.jsonl' | head -1); echo "netconn file: $m"
+          case "$m" in '') die "no netconn file";; ????????w?) die "netconn file is world-writable";; esac
           if ! sudo grep -qs 'Killed process 4242 (ci-test)' /opt/monitoring/data/kmsg/kmsg-*.jsonl; then
             echo "--- unit"; systemctl status monitoring-kmsg --no-pager | tail -15
             echo "--- data dir"; sudo ls -la /opt/monitoring/data/kmsg
@@ -326,6 +330,14 @@ jobs:
           sudo grep -q 'project=Shop+update' /opt/monitoring/config/host.env || die "update did not apply the saved answers"
           sudo test -s /opt/monitoring/config/site.d/10-ci.yaml || die "update removed the installed site.d"
           systemctl is-active monitoring-otelcol || die "collector not active after the update"
+          # v0.10.1: a new installer with an identical configuration (only VERSION differs): written, NOT restarted
+          sudo sed -i 's/^installer=.*/installer=amc older/' /opt/monitoring/VERSION
+          pid=$(systemctl show -p MainPID --value monitoring-otelcol)
+          sudo $amc update --detect-json $td/detect.json | tee upd5.txt
+          must 'collector NOT restarted' upd5.txt
+          [ "$(systemctl show -p MainPID --value monitoring-otelcol)" = "$pid" ] || die "a VERSION-only update restarted the collector"
+          if sudo grep -q 'installer=amc older' /opt/monitoring/VERSION; then die "VERSION not written"; fi
+          if grep -q 'Run `amc apply`' upd2.txt upd3.txt upd5.txt; then die "update printed the engine's amc apply hint"; fi
           echo "::endgroup::"
           # Uninstall: check mode first (must change nothing), then everything; afterwards nothing of amc is left.
           echo "::group::uninstall"

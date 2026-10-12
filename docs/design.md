@@ -149,6 +149,8 @@ rollback to the backup.
   (kept as is; `plan` / `apply` without `--site-dir` would remove it). Scan again, check run (validate + smoke);
   only after a clean check that changes something: apply + start + rollback (no second smoke run). An
   up-to-date host is NOT restarted (a restart resets cumulative counters). `--plan` stops after the check.
+  v0.10.1: only `VERSION` differs (`Result.VersionOnly`: a new installer, identical configuration) = apply
+  WITHOUT start (VERSION written, the running collector already has this configuration).
   No answers.yaml (install via `--host-dir`) = stop with exit 2. Changing answers / site.d is still
   `plan` / `apply --answers F [--site-dir D]`. The engine reports `Result.Changes` (check mode: "would"
   actions + changed files) for this decision.

@@ -624,8 +624,25 @@ func TestCheckCountsChanges(t *testing.T) {
 	if res, out := run(t, h, r, false, false, false); res.Changes != 0 {
 		t.Errorf("check after apply: %d changes, want 0 (amc update would restart for nothing):\n%s", res.Changes, out)
 	}
+	// a new installer, identical configuration: only VERSION differs
+	h.write("/opt/monitoring/VERSION", "installer=amc older\n", 0o644)
+	if res, out := run(t, h, r, false, false, false); res.Changes != 1 || !res.VersionOnly {
+		t.Errorf("only VERSION changed: changes %d, VersionOnly %v, want 1 / true:\n%s", res.Changes, res.VersionOnly, out)
+	}
 	h.write("/opt/monitoring/config/host.yaml", "receivers: {x: 1}\n", 0o644)
-	if res, out := run(t, h, r, false, false, false); res.Changes != 1 {
-		t.Errorf("one changed file: %d changes, want 1:\n%s", res.Changes, out)
+	if res, out := run(t, h, r, false, false, false); res.Changes != 1 || res.VersionOnly {
+		t.Errorf("VERSION + host.yaml changed: changes %d (one files step), VersionOnly %v, want 1 / false:\n%s", res.Changes, res.VersionOnly, out)
+	}
+}
+
+func TestCheckHint(t *testing.T) {
+	for hint, want := range map[string]string{"": "Run `amc apply` to change things.", "-": "warning(s).\n", "Run x.": "warning(s). Run x.\n"} {
+		var out bytes.Buffer
+		_, err := Run(context.Background(), Options{Root: smokeHost(t).root, SkipRootCheck: true, RootUID: os.Getuid(),
+			Arch: "amd64", Out: &out, Runner: &fakeRunner{version: collector.Version, readable: true}, CheckHint: hint,
+			Chown: func(string, int, int) error { return nil }}, desired())
+		if err != nil || !strings.Contains(out.String(), "CHECK done: 0 failures, 0 warning(s)") || !strings.Contains(out.String(), want) {
+			t.Errorf("hint %q: want %q in the output (err %v):\n%s", hint, want, err, out.String())
+		}
 	}
 }

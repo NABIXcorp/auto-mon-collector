@@ -3,7 +3,7 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: v0.10.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.10.1, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
@@ -23,6 +23,8 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > processor `delta_to_cumulative` (the old name is deprecated).
 > v0.10.0: `amc update`: a new release on an installed host with one command, nothing to copy (the saved
 > `answers.yaml` + the installed `site.d`); an up-to-date host is not restarted.
+> v0.10.1: `update` does not restart the collector when only the installer version changed (identical
+> configuration); the connection-count helper sets its file mode itself (a default ACL could make it world-writable).
 
 ## What it does
 
@@ -48,7 +50,8 @@ curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/downl
 
 No files to copy: `update` uses what the last install left on the host (`/opt/monitoring/answers.yaml`, the
 installed `config/site.d/`), scans again, plans (validate + test run) and applies + restarts only when something
-changes (backup first, automatic rollback). `update --plan` stops after the plan. To change answers or the site
+changes (backup first, automatic rollback); a new installer with an identical configuration only writes `VERSION`
+(no restart). `update --plan` stops after the plan. To change answers or the site
 overlay use `plan` / `apply --answers FILE [--site-dir DIR]` as before.
 
 ## Verify instead of trusting
