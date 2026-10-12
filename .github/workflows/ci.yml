@@ -323,7 +323,7 @@ jobs:
           [ "$(systemctl show -p MainPID --value monitoring-otelcol)" = "$pid" ] || die "update --plan restarted the collector"
           sudo $amc update --detect-json $td/detect.json | tee upd4.txt
           must 'DONE: 0 failure' upd4.txt
-          sudo grep -q 'Shop update' /opt/monitoring/config/host.env || die "update did not apply the saved answers"
+          sudo grep -q 'project=Shop+update' /opt/monitoring/config/host.env || die "update did not apply the saved answers"
           sudo test -s /opt/monitoring/config/site.d/10-ci.yaml || die "update removed the installed site.d"
           systemctl is-active monitoring-otelcol || die "collector not active after the update"
           echo "::endgroup::"
