@@ -155,16 +155,16 @@ func oracleAlertLog(file string) string {
 }
 
 // httpMetricsBlocks (v0.9.0): access log records -> metrics with the signal_to_metrics connector, made cumulative by
-// deltatocumulative (the connector emits per-batch deltas; PromQL rate() needs cumulative counters).
+// delta_to_cumulative (the connector emits per-batch deltas; PromQL rate() needs cumulative counters).
 //
-//	http.server.requests  sum, attributes status_class (1-5), method
-//	http.server.duration  histogram in ms (records with a %{ms}T duration only)
-//	http.server.logins    sum, attribute status_class (only with services.tomcat.login_path)
+//	tomcat.access.requests  sum, attributes status_class (1-5), method
+//	tomcat.access.duration  histogram in ms (records with a %{ms}T duration only)
+//	tomcat.access.logins    sum, attribute status_class (only with services.tomcat.login_path)
 func httpMetricsBlocks(loginPath string) string {
 	logins := ""
 	if loginPath != "" {
 		logins = strings.Replace(`
-      - name: http.server.logins
+      - name: tomcat.access.logins
         description: Login requests (services.tomcat.login_path) by status class
         conditions:
           - IsMatch(attributes["path"], "@RE@")
@@ -179,7 +179,7 @@ func httpMetricsBlocks(loginPath string) string {
   signal_to_metrics/http:
     error_mode: ignore
     logs:
-      - name: http.server.requests
+      - name: tomcat.access.requests
         description: HTTP requests from the Tomcat access log by status class
         attributes:
           - key: status_class
@@ -189,7 +189,7 @@ func httpMetricsBlocks(loginPath string) string {
         sum:
           value: "1"
           monotonic: true
-      - name: http.server.duration
+      - name: tomcat.access.duration
         description: HTTP response time from the Tomcat access log
         unit: ms
         conditions:
@@ -198,6 +198,6 @@ func httpMetricsBlocks(loginPath string) string {
           buckets: [25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000]
           value: Double(attributes["duration_ms"])` + logins + `
 processors:
-  deltatocumulative: {}
+  delta_to_cumulative: {}
 `
 }

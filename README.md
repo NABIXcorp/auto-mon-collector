@@ -3,7 +3,7 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: v0.9.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.9.1, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
@@ -19,6 +19,8 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > v0.9.0: HTTP metrics from the Tomcat access log (requests by status class, response-time histogram, optional
 > logins: `services.tomcat.login_path`), Oracle Data Guard lag (`services.oracle.data_guard`) and RMAN backups
 > (`services.oracle.backups`).
+> v0.9.1: HTTP metrics renamed `tomcat.access.*` (the app's own OpenTelemetry agent already sends `http.server.*`),
+> processor `delta_to_cumulative` (the old name is deprecated).
 
 ## What it does
 

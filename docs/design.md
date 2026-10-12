@@ -351,13 +351,16 @@ Both journal helpers POLL with a cursor (`--after-cursor`, position in `data/<he
 fresh each time, survives rotations and loses nothing across a helper restart. CI rotates the journal and checks both.
 
 **HTTP metrics from the access log (v0.9.0, every host with an access log):** the access-log receiver also feeds
-the pipeline `logs/http_metrics` -> connector `signal_to_metrics/http` -> `metrics/http` (processor `deltatocumulative`:
+the pipeline `logs/http_metrics` -> connector `signal_to_metrics/http` -> `metrics/http` (processor `delta_to_cumulative`:
 the connector emits per-batch deltas, PromQL `rate()` needs cumulative counters) -> the metrics backend.
-`http.server.requests` (sum; attributes `status_class` = first digit of the status, `method`), `http.server.duration`
-(histogram, ms, buckets 25 .. 30000; only lines with a duration), `http.server.logins` (sum by `status_class`, only with
+`tomcat.access.requests` (sum; attributes `status_class` = first digit of the status, `method`), `tomcat.access.duration`
+(histogram, ms, buckets 25 .. 30000; only lines with a duration), `tomcat.access.logins` (sum by `status_class`, only with
 `services.tomcat.login_path` = a regular expression of the login path; letters, digits and `^$/._*+?()|[]-` only, it is
 put into an OTTL string). The access log keeps flowing to the logs backend unchanged (new field `status_class`).
 CI: real collector, access-log lines in, counters (cumulative, accumulating) and histogram out.
+Names `tomcat.access.*` since v0.9.1: an application with the OpenTelemetry Java agent sends its own `http.server.*`
+metrics (seen: `http_server_requests_bucket` from the app next to ours in the backend). Checked on a real host:
+the backend stores the histogram Prometheus-style (`_bucket{le}`, `_sum`, `_count`), `histogram_quantile` works.
 
 **Oracle Data Guard + backups (v0.9.0, answers):** `services.oracle.data_guard: true` -> `sql_query/oracle_dg` (60 s):
 `oracle.dataguard.lag` seconds, attribute `kind` = apply_lag / transport_lag (V$DATAGUARD_STATS; on the standby the

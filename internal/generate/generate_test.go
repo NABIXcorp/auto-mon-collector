@@ -319,14 +319,14 @@ func TestHTTPMetricsFromAccessLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	y := string(out.HostYAML)
-	for _, want := range []string{"signal_to_metrics/http:", "name: http.server.requests", "name: http.server.duration",
-		"deltatocumulative: {}", "logs/http_metrics:", "receivers: [signal_to_metrics/http]", "exporters: [signal_to_metrics/http]",
+	for _, want := range []string{"signal_to_metrics/http:", "name: tomcat.access.requests", "name: tomcat.access.duration",
+		"delta_to_cumulative: {}", "logs/http_metrics:", "receivers: [signal_to_metrics/http]", "exporters: [signal_to_metrics/http]",
 		"parse_from: attributes.status"} {
 		if !strings.Contains(y, want) {
 			t.Errorf("host.yaml lacks %q", want)
 		}
 	}
-	if strings.Contains(y, "http.server.logins") {
+	if strings.Contains(y, "tomcat.access.logins") {
 		t.Error("no login metric without login_path")
 	}
 	out, err = Generate(h, Answers{Services: map[string]Service{"tomcat": {LoginPath: "^/app/login"}}})

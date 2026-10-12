@@ -40,7 +40,7 @@ type Service struct {
 	Logs      []string `yaml:"logs,omitempty"`       // Tomcat log globs (catalina.out format), e.g. .../catalina.*.log
 	// tomcat: zone of the times in Tomcat's own log (they have no offset); empty = the JVM's (scan), else the host's
 	TimeZone string `yaml:"time_zone,omitempty"`
-	// tomcat (v0.9.0): regular expression of the login request path (e.g. ^/app/login) -> metric http.server.logins
+	// tomcat (v0.9.0): regular expression of the login request path (e.g. ^/app/login) -> metric tomcat.access.logins
 	// (attribute status_class). Empty = no login metric. Needs the access log.
 	LoginPath string `yaml:"login_path,omitempty"`
 	// oracle (v0.9.0): Data Guard lag (V$DATAGUARD_STATS: apply / transport lag in seconds) -> oracle.dataguard.lag;

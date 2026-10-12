@@ -238,7 +238,7 @@ func Generate(h Host, a Answers) (Output, error) {
 		// the access log feeds a second pipeline: log records -> connector -> metrics (cumulative for PromQL rate())
 		y.WriteString("    logs/http_metrics:\n      receivers: [file_log/tomcat_access]\n      processors: [resource_detection]\n" +
 			"      exporters: [signal_to_metrics/http]\n    metrics/http:\n      receivers: [signal_to_metrics/http]\n" +
-			"      processors: [deltatocumulative, batch]\n      exporters: [otlp_http/openobserve]\n")
+			"      processors: [delta_to_cumulative, batch]\n      exporters: [otlp_http/openobserve]\n")
 	}
 	if oracleLog != "" {
 		fmt.Fprintf(&y, "    logs/oracle:\n      receivers: [%s]\n      processors: [resource_detection, batch]\n"+
