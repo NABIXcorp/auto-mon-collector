@@ -350,6 +350,23 @@ Both journal helpers POLL with a cursor (`--after-cursor`, position in `data/<he
 -f`: a long-running follower missed lines after the journal changed under it (found in CI); polling opens the journal
 fresh each time, survives rotations and loses nothing across a helper restart. CI rotates the journal and checks both.
 
+**HTTP metrics from the access log (v0.9.0, every host with an access log):** the access-log receiver also feeds
+the pipeline `logs/http_metrics` -> connector `signal_to_metrics/http` -> `metrics/http` (processor `deltatocumulative`:
+the connector emits per-batch deltas, PromQL `rate()` needs cumulative counters) -> the metrics backend.
+`http.server.requests` (sum; attributes `status_class` = first digit of the status, `method`), `http.server.duration`
+(histogram, ms, buckets 25 .. 30000; only lines with a duration), `http.server.logins` (sum by `status_class`, only with
+`services.tomcat.login_path` = a regular expression of the login path; letters, digits and `^$/._*+?()|[]-` only, it is
+put into an OTTL string). The access log keeps flowing to the logs backend unchanged (new field `status_class`).
+CI: real collector, access-log lines in, counters (cumulative, accumulating) and histogram out.
+
+**Oracle Data Guard + backups (v0.9.0, answers):** `services.oracle.data_guard: true` -> `sql_query/oracle_dg` (60 s):
+`oracle.dataguard.lag` seconds, attribute `kind` = apply_lag / transport_lag (V$DATAGUARD_STATS; on the standby the
+monitoring user must be able to log in = Active Data Guard / read only; NULL = -1). `services.oracle.backups: true` ->
+`sql_query/oracle_backup` (300 s): `oracle.backup.age` hours since the last COMPLETED job per `type` (DB FULL, DB INCR,
+ARCHIVELOG, ...), `oracle.backup.failed_24h`. Both run against the CDB root when `cdb_service` is answered, else the
+service. Grants: `V_$DATAGUARD_STATS`, `V_$RMAN_BACKUP_JOB_DETAILS`. Not checked against a real database yet:
+the time base of SYSDATE vs END_TIME (verify on the first host).
+
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
 JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone
 than the host would otherwise put every entry hours off.

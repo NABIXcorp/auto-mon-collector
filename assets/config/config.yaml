@@ -482,6 +482,65 @@ receivers:
                   value_column: reclaimable_b
                   unit: By
 
+      # Data Guard (v0.9.0, answers services.oracle.data_guard): apply / transport lag in seconds from V$DATAGUARD_STATS
+      # (on the STANDBY; the monitoring user must be able to log in there = Active Data Guard / read only).
+      # Grant: V_$DATAGUARD_STATS. A lag value NULL (not computed yet) = -1.
+      sql_query/oracle_dg:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_DG:-off}" == "on"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_DB_SERVICE:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 60s
+          timeout: 10s
+          queries:
+            - sql: |
+                SELECT REPLACE(name, ' ', '_') AS "kind",
+                       NVL(EXTRACT(DAY FROM TO_DSINTERVAL(value)) * 86400 + EXTRACT(HOUR FROM TO_DSINTERVAL(value)) * 3600
+                         + EXTRACT(MINUTE FROM TO_DSINTERVAL(value)) * 60 + EXTRACT(SECOND FROM TO_DSINTERVAL(value)), -1) AS "seconds"
+                FROM v$$dataguard_stats WHERE name IN ('apply lag', 'transport lag')
+              metrics:
+                - metric_name: oracle.dataguard.lag
+                  value_column: seconds
+                  value_type: double
+                  unit: s
+                  attribute_columns: [kind]
+
+      # RMAN backups (v0.9.0, answers services.oracle.backups): hours since the last COMPLETED job per input type
+      # (DB FULL, DB INCR, ARCHIVELOG, ...) and failed jobs in the last 24 h. Grant: V_$RMAN_BACKUP_JOB_DETAILS.
+      # Times: SYSDATE and END_TIME are both the database's clock (no time-zone mix as with V$LOG_HISTORY: CHECK on
+      # the first host). Every 5 min: the view is small but not free.
+      sql_query/oracle_backup:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_BACKUP:-off}" == "on"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_DB_SERVICE:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 300s
+          timeout: 20s
+          queries:
+            - sql: |
+                SELECT input_type AS "type", ROUND((SYSDATE - MAX(end_time)) * 24, 2) AS "age_h"
+                FROM v$$rman_backup_job_details WHERE status = 'COMPLETED' AND end_time IS NOT NULL GROUP BY input_type
+              metrics:
+                - metric_name: oracle.backup.age
+                  value_column: age_h
+                  value_type: double
+                  unit: h
+                  attribute_columns: [type]
+            - sql: |
+                SELECT COUNT(*) AS "failed" FROM v$$rman_backup_job_details
+                WHERE status LIKE 'FAILED%' AND start_time > SYSDATE - 1
+              metrics:
+                - metric_name: oracle.backup.failed_24h
+                  value_column: failed
+
       # Redis. REDIS_MON=off in host.env disables it, REDIS_PORT for a non-standard port.
       redis:
         rule: type == "hostport" && port == ${env:REDIS_PORT:-6379} && host != "::1" && "${env:REDIS_MON:-on}" != "off"

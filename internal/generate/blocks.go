@@ -76,6 +76,10 @@ func tomcatAccess(glob string) string {
         parse_from: attributes.path
         regex: '^/(?P<webapp>[^/?]*)'
         on_error: send_quiet
+      - type: regex_parser
+        parse_from: attributes.status
+        regex: '^(?P<status_class>[1-5])'
+        on_error: send_quiet
       - type: remove
         if: 'attributes.time != nil'
         field: attributes.time
@@ -148,4 +152,52 @@ func oracleAlertLog(file string) string {
         if: 'attributes.time != nil'
         field: attributes.time
 `, "@INCLUDE@", q(file), 1)
+}
+
+// httpMetricsBlocks (v0.9.0): access log records -> metrics with the signal_to_metrics connector, made cumulative by
+// deltatocumulative (the connector emits per-batch deltas; PromQL rate() needs cumulative counters).
+//
+//	http.server.requests  sum, attributes status_class (1-5), method
+//	http.server.duration  histogram in ms (records with a %{ms}T duration only)
+//	http.server.logins    sum, attribute status_class (only with services.tomcat.login_path)
+func httpMetricsBlocks(loginPath string) string {
+	logins := ""
+	if loginPath != "" {
+		logins = strings.Replace(`
+      - name: http.server.logins
+        description: Login requests (services.tomcat.login_path) by status class
+        conditions:
+          - IsMatch(attributes["path"], "@RE@")
+        attributes:
+          - key: status_class
+            default_value: "0"
+        sum:
+          value: "1"
+          monotonic: true`, "@RE@", loginPath, 1)
+	}
+	return `connectors:
+  signal_to_metrics/http:
+    error_mode: ignore
+    logs:
+      - name: http.server.requests
+        description: HTTP requests from the Tomcat access log by status class
+        attributes:
+          - key: status_class
+            default_value: "0"
+          - key: method
+            default_value: "-"
+        sum:
+          value: "1"
+          monotonic: true
+      - name: http.server.duration
+        description: HTTP response time from the Tomcat access log
+        unit: ms
+        conditions:
+          - attributes["duration_ms"] != nil
+        histogram:
+          buckets: [25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000]
+          value: Double(attributes["duration_ms"])` + logins + `
+processors:
+  deltatocumulative: {}
+`
 }

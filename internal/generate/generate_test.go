@@ -309,3 +309,65 @@ func TestLoadAnswers(t *testing.T) {
 		}
 	}
 }
+
+// HTTP metrics from the access log (v0.9.0): connector + cumulative processor + two pipelines, only with an access log;
+// the login metric only with login_path.
+func TestHTTPMetricsFromAccessLog(t *testing.T) {
+	h := Host{Findings: []detect.Finding{tomcatFinding()}}
+	out, err := Generate(h, Answers{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	y := string(out.HostYAML)
+	for _, want := range []string{"signal_to_metrics/http:", "name: http.server.requests", "name: http.server.duration",
+		"deltatocumulative: {}", "logs/http_metrics:", "receivers: [signal_to_metrics/http]", "exporters: [signal_to_metrics/http]",
+		"parse_from: attributes.status"} {
+		if !strings.Contains(y, want) {
+			t.Errorf("host.yaml lacks %q", want)
+		}
+	}
+	if strings.Contains(y, "http.server.logins") {
+		t.Error("no login metric without login_path")
+	}
+	out, err = Generate(h, Answers{Services: map[string]Service{"tomcat": {LoginPath: "^/app/login"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out.HostYAML), `IsMatch(attributes["path"], "^/app/login")`) {
+		t.Errorf("login condition missing:\n%s", out.HostYAML)
+	}
+	out, _ = Generate(h, Answers{Services: map[string]Service{"tomcat": {AccessLog: "-"}}})
+	if strings.Contains(string(out.HostYAML), "signal_to_metrics") {
+		t.Error("no access log = no HTTP metrics")
+	}
+	if _, err := Generate(h, Answers{Services: map[string]Service{"tomcat": {AccessLog: "-", LoginPath: "^/login"}}}); err == nil {
+		t.Error("login_path without an access log must fail")
+	}
+	for _, bad := range []string{`^/a"b`, "^/a b", "(unclosed"} {
+		if err := (Answers{Services: map[string]Service{"tomcat": {LoginPath: bad}}}).Validate(); err == nil {
+			t.Errorf("login_path %q must fail", bad)
+		}
+	}
+}
+
+// Data Guard + backups (v0.9.0): switches and the service (CDB root when answered).
+func TestOracleDataGuardAndBackups(t *testing.T) {
+	h := Host{Findings: []detect.Finding{oracleFinding()}}
+	out, err := Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "apppdb", User: "C##OTEL_MON", CDBService: "orcl", DataGuard: true, Backups: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := string(out.HostEnv)
+	for _, want := range []string{"ORACLE_DG=on\n", "ORACLE_BACKUP=on\n", "ORACLE_DB_SERVICE=orcl\n"} {
+		if !strings.Contains(e, want) {
+			t.Errorf("host.env lacks %q:\n%s", want, e)
+		}
+	}
+	out, _ = Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "orcl", User: "otel_mon"}}})
+	if strings.Contains(string(out.HostEnv), "ORACLE_DG") || strings.Contains(string(out.HostEnv), "ORACLE_BACKUP") {
+		t.Errorf("off by default:\n%s", out.HostEnv)
+	}
+	if err := (Answers{Services: map[string]Service{"tomcat": {Backups: true}}}).Validate(); err == nil {
+		t.Error("backups on tomcat must fail")
+	}
+}

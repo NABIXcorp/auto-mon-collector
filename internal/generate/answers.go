@@ -40,7 +40,19 @@ type Service struct {
 	Logs      []string `yaml:"logs,omitempty"`       // Tomcat log globs (catalina.out format), e.g. .../catalina.*.log
 	// tomcat: zone of the times in Tomcat's own log (they have no offset); empty = the JVM's (scan), else the host's
 	TimeZone string `yaml:"time_zone,omitempty"`
+	// tomcat (v0.9.0): regular expression of the login request path (e.g. ^/app/login) -> metric http.server.logins
+	// (attribute status_class). Empty = no login metric. Needs the access log.
+	LoginPath string `yaml:"login_path,omitempty"`
+	// oracle (v0.9.0): Data Guard lag (V$DATAGUARD_STATS: apply / transport lag in seconds) -> oracle.dataguard.lag;
+	// meaningful on the standby (the user must be able to log in there: Active Data Guard / read only).
+	DataGuard bool `yaml:"data_guard,omitempty"`
+	// oracle (v0.9.0): RMAN backups (V$RMAN_BACKUP_JOB_DETAILS) -> oracle.backup.age (hours since the last
+	// COMPLETED job per input type) + oracle.backup.failed_24h. Grant V_$RMAN_BACKUP_JOB_DETAILS first.
+	Backups bool `yaml:"backups,omitempty"`
 }
+
+// loginPathRE: a safe regular expression for an OTTL string (no quotes or backslashes).
+var loginPathRE = regexp.MustCompile(`^[A-Za-z0-9^$/._*+?()|\[\]-]{1,200}$`)
 
 // serviceRE: an Oracle service name (letters, digits, _ . -), e.g. orcl, ORCL.example.com. No $ (host.env).
 var serviceRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
@@ -97,6 +109,20 @@ func (a Answers) Validate() error {
 		}
 		if name != "tomcat" && (s.AccessLog != "" || len(s.Logs) > 0 || s.TimeZone != "") {
 			return fmt.Errorf("services.%s: access_log / logs / time_zone are Tomcat settings", name)
+		}
+		if name != "tomcat" && s.LoginPath != "" {
+			return fmt.Errorf("services.%s: login_path is a Tomcat setting", name)
+		}
+		if s.LoginPath != "" {
+			if !loginPathRE.MatchString(s.LoginPath) {
+				return fmt.Errorf("services.tomcat.login_path %q: letters, digits and ^$/._*+?()|[]- only", s.LoginPath)
+			}
+			if _, err := regexp.Compile(s.LoginPath); err != nil {
+				return fmt.Errorf("services.tomcat.login_path: %v", err)
+			}
+		}
+		if name != "oracle" && (s.DataGuard || s.Backups) {
+			return fmt.Errorf("services.%s: data_guard / backups are Oracle settings", name)
 		}
 		if name != "oracle" && s.CDBService != "" {
 			return fmt.Errorf("services.%s: cdb_service is an Oracle setting", name)

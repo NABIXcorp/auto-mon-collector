@@ -253,6 +253,53 @@ jobs:
           [ ! -e /opt/monitoring/config/site.d/99-broken.yaml ] || die "the broken file survived the rollback"
           sudo $amc plan --host-dir examples/oracle-db --no-smoke | tee plan3.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' plan3.txt; then die "after the rollback the host is not back to the good state"; fi
+          # v0.9.0 end to end: access log lines -> signal_to_metrics -> deltatocumulative -> metrics OUT of the real
+          # collector (file exporter instead of the backend). The live collector is stopped meanwhile (same ports);
+          # the test collector keeps its queue in /tmp (no root-owned files in the live data dir).
+          echo "::group::HTTP metrics from the access log"
+          $amc generate --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json --out gen-http > /dev/null
+          must 'signal_to_metrics/http' gen-http/host.yaml
+          sudo install -d /opt/tomcat10/logs /tmp/http-e2e/fs
+          acc=/opt/tomcat10/logs/access_log.$(date +%F).log
+          sudo touch "$acc"
+          printf 'extensions:\n  file_storage:\n    directory: /tmp/http-e2e/fs\nexporters:\n  file/http:\n    path: /tmp/http-e2e/metrics.json\nservice:\n  pipelines:\n    metrics/http:\n      receivers: [signal_to_metrics/http]\n      processors: [deltatocumulative, batch]\n      exporters: [file/http]\n' > http-overlay.yaml
+          sudo systemctl stop monitoring-otelcol
+          sudo bash -c "set -a; . gen-http/host.env; OO_ENDPOINT=http://127.0.0.1:9; OO_AUTH=x; ORACLE_MON_PASSWORD=x; set +a; \
+            exec /opt/monitoring/bin/otelcol-contrib --config assets/config/config.yaml --config gen-http/host.yaml --config http-overlay.yaml" > http-col.log 2>&1 &
+          sleep 6   # start_at: end -> write the lines after the collector is up
+          for i in 1 2 3; do
+            printf '10.0.0.%s - - [%s] "GET /app/a HTTP/1.1" 200 512 40\n10.0.0.%s - - [%s] "POST /app/b HTTP/1.1" 500 99 1200\n' \
+              "$i" "$(date '+%d/%b/%Y:%H:%M:%S %z')" "$i" "$(date '+%d/%b/%Y:%H:%M:%S %z')" | sudo tee -a "$acc" > /dev/null
+            sleep 2
+          done
+          for i in $(seq 1 30); do sudo grep -qs 'http.server.duration' /tmp/http-e2e/metrics.json && break; sleep 1; done
+          sudo pkill -f 'http-overlay.yaml' || true
+          sleep 2
+          echo "::endgroup::"
+          sudo test -s /tmp/http-e2e/metrics.json || { tail -40 http-col.log; die "no metrics written by the connector"; }
+          sudo cat /tmp/http-e2e/metrics.json | python3 -c '
+          import json, sys
+          seen = {}
+          for line in sys.stdin:
+              for rm in json.loads(line).get("resourceMetrics", []):
+                  for sm in rm.get("scopeMetrics", []):
+                      for m in sm.get("metrics", []):
+                          for kind in ("sum", "histogram"):
+                              for dp in m.get(kind, {}).get("dataPoints", []):
+                                  attrs = {a["key"]: a["value"].get("stringValue") for a in dp.get("attributes", [])}
+                                  seen.setdefault(m["name"], []).append((kind, m.get(kind, {}).get("aggregationTemporality"), attrs, dp))
+          req = seen.get("http.server.requests", [])
+          dur = seen.get("http.server.duration", [])
+          assert req, "no http.server.requests"
+          assert {d[2].get("status_class") for d in req} >= {"2", "5"}, "status_class 2 and 5 expected: %s" % [d[2] for d in req]
+          assert all(d[1] == 2 for d in req), "requests must be CUMULATIVE (2) after deltatocumulative: %s" % [d[1] for d in req]
+          assert max(int(d[3].get("asInt", d[3].get("asDouble", 0))) for d in req) >= 3, "counter must accumulate"
+          assert dur and dur[0][0] == "histogram" and "bucketCounts" in dur[-1][3], "http.server.duration histogram missing"
+          print("HTTP metrics OK:", sorted(seen), "points", len(req), len(dur))
+          ' || { tail -40 http-col.log; die "HTTP metrics from the access log are wrong"; }
+          sudo systemctl start monitoring-otelcol
+          for i in $(seq 1 20); do systemctl is-active -q monitoring-otelcol && break; sleep 1; done
+          systemctl is-active monitoring-otelcol || die "live collector did not come back after the HTTP metrics test"
           # Uninstall: check mode first (must change nothing), then everything; afterwards nothing of amc is left.
           echo "::group::uninstall"
           grep -q '"/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log"' /opt/monitoring/amc-state.json || die "ACL not recorded"
