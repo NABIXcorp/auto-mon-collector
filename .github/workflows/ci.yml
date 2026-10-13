@@ -121,6 +121,10 @@ jobs:
           # v0.4.0: the CDB root block is switched on in this example (so the smoke run above built it too)
           $amc generate --answers examples/app-host/answers.yaml --detect-json examples/app-host/detect.json --out gen-app > /dev/null
           must 'ORACLE_CDB_SERVICE=orcl' gen-app/host.env
+          # v0.11.0: checks.tcp joins the listener check in one tcp_check receiver (the smoke run above started it)
+          must 'endpoint: 192.0.2.10:1521' gen-app/host.yaml
+          must 'endpoint: 127.0.0.1:1521' gen-app/host.yaml
+          [ "$(grep -c '^  tcp_check:' gen-app/host.yaml)" = 1 ] || die "one tcp_check receiver expected"
           # v0.8.0: a NON-CDB database (local user + services.oracle.non_cdb): the oracle_db block must start too
           sed -e 's/C##OTEL_MON/otel_mon/' -e 's/^\( *\)cdb_service:.*/\1non_cdb: true/' examples/app-host/answers.yaml > noncdb.yaml
           must 'non_cdb: true' noncdb.yaml

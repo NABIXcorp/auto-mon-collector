@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -21,6 +22,11 @@ type Answers struct {
 	Services map[string]Service `yaml:"services,omitempty"`
 	Checks   struct {
 		HTTP []HTTPCheck `yaml:"http,omitempty"`
+		// TCP (v0.11.0): connect checks from this host to OTHER hosts (host:port), e.g. the database or the next hop
+		// of a request path. Metrics tcpcheck.status (1 = connected) and tcpcheck.duration (ms), attribute
+		// tcpcheck.endpoint = the endpoint as written here. Loopback targets are refused: local services are checked by
+		// their profiles, and the Oracle listener check stays the only 127.0.0.1 endpoint.
+		TCP []TCPCheck `yaml:"tcp,omitempty"`
 	} `yaml:"checks,omitempty"`
 }
 
@@ -69,6 +75,15 @@ type HTTPCheck struct {
 	Comment string `yaml:"comment,omitempty"`
 }
 
+// TCPCheck is one connect check to another host. The endpoint is a label used by dashboards: keep it stable.
+type TCPCheck struct {
+	Endpoint string `yaml:"endpoint"`
+	Comment  string `yaml:"comment,omitempty"`
+}
+
+// tcpEndpointRE: host:port with a DNS name or an IPv4 address, or [IPv6]:port. No scheme, no path.
+var tcpEndpointRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9.-]{0,252}|\[[0-9A-Fa-f:.]{2,45}\]):([0-9]{1,5})$`)
+
 // projectRE: empty (no project) or a plain name. No "," or "=": they separate OTEL_RESOURCE_ATTRIBUTES pairs.
 var projectRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9 ._-]{0,63})?$`)
 
@@ -100,6 +115,24 @@ func (a Answers) Validate() error {
 		if u.User != nil {
 			return fmt.Errorf("checks.http: %q contains credentials: not allowed (they would be printed and stored)", u.Redacted())
 		}
+	}
+	seen := map[string]bool{}
+	for _, c := range a.Checks.TCP {
+		m := tcpEndpointRE.FindStringSubmatch(c.Endpoint)
+		if m == nil {
+			return fmt.Errorf("checks.tcp: %q: use host:port (e.g. db.example.com:1521) or [IPv6]:port", c.Endpoint)
+		}
+		if p, _ := strconv.Atoi(m[2]); p < 1 || p > 65535 {
+			return fmt.Errorf("checks.tcp: %q: port 1-65535", c.Endpoint)
+		}
+		h := strings.ToLower(strings.Trim(m[1], "[]"))
+		if h == "localhost" || strings.HasPrefix(h, "127.") || h == "::1" || h == "0.0.0.0" || h == "::" {
+			return fmt.Errorf("checks.tcp: %q: a loopback target; checks.tcp is for other hosts (local services are checked by their profiles)", c.Endpoint)
+		}
+		if seen[c.Endpoint] {
+			return fmt.Errorf("checks.tcp: %q twice", c.Endpoint)
+		}
+		seen[c.Endpoint] = true
 	}
 	for name, s := range a.Services {
 		switch name {

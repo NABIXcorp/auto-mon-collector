@@ -311,7 +311,17 @@ services:
   redis:   { enabled: false }
 checks:
   http: [http://127.0.0.1:8080/app/]
+  tcp:                                  # v0.11.0: connect checks to other hosts
+    - endpoint: db.example.com:1521
+      comment: Oracle primary
 ```
+
+`checks.tcp` (v0.11.0): TCP connect checks from this host to OTHER hosts (`host:port`, `[IPv6]:port`), e.g. the
+database or the next hop of a request path, so a dashboard can show the state of each link. One `tcp_check` receiver
+holds them together with the local Oracle listener check: metrics `tcpcheck.status` (1 = connected),
+`tcpcheck.duration` (ms), attribute `tcpcheck.endpoint` = the endpoint as written. Loopback targets are refused, so the
+listener stays the only `127.0.0.1:` endpoint: consumers that mean "the listener" filter on that prefix (a neighbour on
+`:1521` must not look like a local listener). Not asked interactively; an interactive run or `amc update` keeps the list.
 
 `project:` (optional, since v0.2.0): a group name (1-64 characters `A-Z a-z 0-9 space . _ -`). amc writes
 `OTEL_RESOURCE_ATTRIBUTES=project=<url-encoded>` into `host.env`; the `env` detector of `resource_detection` turns it

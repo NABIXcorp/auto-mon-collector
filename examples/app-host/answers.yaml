@@ -15,3 +15,6 @@ checks:
       comment: Tomcat directly
     - url: https://app.example.com/app/
       comment: "users' path: proxy + TLS -> Tomcat"
+  tcp:                    # v0.11.0: connect checks to OTHER hosts (host:port): the links of a request path
+    - endpoint: 192.0.2.10:1521
+      comment: database on another host (documentation address)

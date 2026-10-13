@@ -41,14 +41,22 @@ func httpCheck(checks []HTTPCheck) string {
 	return b.String()
 }
 
-func tcpCheck(port int) string {
-	return fmt.Sprintf(`  tcp_check:
-    collection_interval: 30s
-    targets:
-      - endpoint: 127.0.0.1:%d    # Oracle listener
-        dialer:
-          timeout: 5s
-`, port)
+// tcpCheck: the local Oracle listener (port > 0) and the connect checks to other hosts, one receiver.
+// The listener is the only 127.0.0.1 endpoint: dashboards and alerts tell it apart by that prefix.
+func tcpCheck(listenerPort int, checks []TCPCheck) string {
+	var b strings.Builder
+	b.WriteString("  tcp_check:\n    collection_interval: 30s\n    targets:\n")
+	if listenerPort > 0 {
+		fmt.Fprintf(&b, "      - endpoint: 127.0.0.1:%d    # Oracle listener\n        dialer:\n          timeout: 5s\n", listenerPort)
+	}
+	for _, c := range checks {
+		fmt.Fprintf(&b, "      - endpoint: %s", q(c.Endpoint))
+		if c.Comment != "" {
+			fmt.Fprintf(&b, "    # %s", strings.ReplaceAll(c.Comment, "\n", " "))
+		}
+		b.WriteString("\n        dialer:\n          timeout: 5s\n")
+	}
+	return b.String()
 }
 
 func tomcatAccess(glob string) string {

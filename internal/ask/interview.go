@@ -26,6 +26,8 @@ func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate
 	if proj = strings.TrimSpace(proj); proj != "-" {
 		a.Project = proj
 	}
+	// connect checks to other hosts are not asked (answers file only): keep them, a new run must not drop them
+	a.Checks.TCP = prev.Checks.TCP
 	byID := map[string]detect.Finding{}
 	var profiles []string
 	for _, f := range fs {

@@ -172,3 +172,17 @@ func TestNoServices(t *testing.T) {
 		t.Errorf("%+v %v %s", a, err, s.Out.String())
 	}
 }
+
+// checks.tcp is not asked (answers file only): an interactive run keeps the saved list
+func TestInterviewKeepsTCPChecks(t *testing.T) {
+	var prev generate.Answers
+	prev.Checks.TCP = []generate.TCPCheck{{Endpoint: "db.example.com:1521", Comment: "Oracle primary"}}
+	s := &Script{Answers: []string{"", "", "orcl", "", "", "", "", ""}}
+	a, err := Interview(appHost(), prev, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(a.Checks.TCP, prev.Checks.TCP) {
+		t.Errorf("checks.tcp lost: %+v", a.Checks.TCP)
+	}
+}

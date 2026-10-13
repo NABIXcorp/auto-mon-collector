@@ -56,6 +56,7 @@ func Generate(h Host, a Answers) (Output, error) {
 	httpMetrics := ""
 	var metrics, tomcatLogs []string
 	oracleLog := ""
+	listener := 0 // Oracle listener port (local TCP check)
 
 	// ---- Oracle
 	if on("oracle") {
@@ -100,8 +101,7 @@ func Generate(h Host, a Answers) (Output, error) {
 			oracleLog = "file_log/oracle_alert"
 		}
 		if p, err := strconv.Atoi(o.Values["ORACLE_LISTENER_PORT"]); err == nil {
-			recv["tcp_check"] = tcpCheck(p)
-			metrics = append(metrics, "tcp_check")
+			listener = p
 			netconn = append(netconn, p)
 		}
 	}
@@ -201,6 +201,12 @@ func Generate(h Host, a Answers) (Output, error) {
 	if len(checks) > 0 {
 		recv["http_check"] = httpCheck(checks)
 		metrics = append([]string{"http_check"}, metrics...)
+	}
+
+	// ---- TCP checks: the local Oracle listener + connect checks to other hosts (checks.tcp), one receiver
+	if listener > 0 || len(a.Checks.TCP) > 0 {
+		recv["tcp_check"] = tcpCheck(listener, a.Checks.TCP)
+		metrics = append(metrics, "tcp_check")
 	}
 
 	if len(netconn) > 0 {

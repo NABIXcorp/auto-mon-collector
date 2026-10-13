@@ -371,3 +371,55 @@ func TestOracleDataGuardAndBackups(t *testing.T) {
 		t.Error("backups on tomcat must fail")
 	}
 }
+
+func TestTCPChecksToOtherHosts(t *testing.T) {
+	var a Answers
+	a.Checks.TCP = []TCPCheck{{Endpoint: "db.example.com:1521", Comment: "Oracle primary"}, {Endpoint: "[2001:db8::7]:443"}}
+	// no Oracle on this host: the receiver holds the neighbour checks only
+	out, err := Generate(Host{Findings: []detect.Finding{tomcatFinding()}}, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	y := string(out.HostYAML)
+	if strings.Contains(y, "127.0.0.1:1521") || !strings.Contains(y, "endpoint: db.example.com:1521    # Oracle primary") ||
+		!strings.Contains(y, "endpoint: '[2001:db8::7]:443'") {
+		t.Errorf("tcp_check targets:\n%s", y)
+	}
+	recv := pipelines(parse(t, out.HostYAML))["metrics"].(map[string]any)["receivers"].([]any)
+	if recv[len(recv)-1] != "tcp_check" {
+		t.Errorf("tcp_check not in the metrics pipeline: %v", recv)
+	}
+	// with Oracle: the local listener stays the first (and only loopback) target, in the same receiver
+	out, err = Generate(Host{Findings: []detect.Finding{oracleFinding()}}, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	y = string(out.HostYAML)
+	if strings.Count(y, "tcp_check:") != 1 || strings.Index(y, "127.0.0.1:1521") > strings.Index(y, "db.example.com:1521") {
+		t.Errorf("one receiver, listener first:\n%s", y)
+	}
+}
+
+func TestTCPCheckValidation(t *testing.T) {
+	for ep, want := range map[string]string{
+		"db.example.com":       "host:port",
+		"http://db:1521":       "host:port",
+		"db.example.com:70000": "port 1-65535",
+		"127.0.0.1:1521":       "loopback",
+		"localhost:6379":       "loopback",
+		"[::1]:80":             "loopback",
+		"10.0.0.5:1521":        "",
+	} {
+		var a Answers
+		a.Checks.TCP = []TCPCheck{{Endpoint: ep}}
+		err := a.Validate()
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%s: %v (want %q)", ep, err, want)
+		}
+	}
+	var a Answers
+	a.Checks.TCP = []TCPCheck{{Endpoint: "db:1521"}, {Endpoint: "db:1521"}}
+	if err := a.Validate(); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("duplicate: %v", err)
+	}
+}
