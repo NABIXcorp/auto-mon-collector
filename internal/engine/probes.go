@@ -147,7 +147,8 @@ func (e *eng) dropProbeUnit() {
 		e.r.fail("systemctl disable --now %s: %v", name, err)
 		return
 	}
-	if err := os.Remove(link); err != nil {
+	// `systemctl disable` removes a linked unit's link itself; remove it only when it is still there
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
 		e.r.fail("remove %s: %v", link, err)
 		return
 	}
