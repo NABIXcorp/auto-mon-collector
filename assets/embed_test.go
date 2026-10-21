@@ -108,9 +108,32 @@ func TestProbeUnitCapabilityOnlyForPing(t *testing.T) {
 		if !ping && !strings.Contains(s, "CapabilityBoundingSet=\n") {
 			t.Errorf("no ping: capabilities must be empty\n%s", s)
 		}
-		if !strings.Contains(s, "--config_file=/opt/monitoring/config/cloudprober.cfg") || !strings.Contains(s, "NoNewPrivileges=yes") ||
+		if !strings.Contains(s, "--config_file=/opt/monitoring/config/cloudprober/cloudprober.cfg") || !strings.Contains(s, "NoNewPrivileges=yes") ||
 			!strings.Contains(s, "User=otelcol-contrib") {
 			t.Errorf("unit:\n%s", s)
+		}
+	}
+}
+
+// Agent (v0.13.0): not root, no capabilities, writes only its dir and the Cloudprober files; the polkit rule allows
+// only restarting the Cloudprober unit.
+func TestAgentUnitAndPolkitRule(t *testing.T) {
+	b, err := Unit(AgentUnit, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{"User=amc-agent", "NoNewPrivileges=yes", "ProtectSystem=strict", "CapabilityBoundingSet=\n",
+		"ReadWritePaths=/opt/monitoring/agent /opt/monitoring/config/cloudprober\n", "ExecStart=/opt/monitoring/bin/amc agent run --prefix /opt/monitoring"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("agent unit lacks %q:\n%s", want, s)
+		}
+	}
+	r := string(AgentPolkit())
+	for _, want := range []string{`subject.user == "amc-agent"`, `action.lookup("unit") == "monitoring-cloudprober.service"`,
+		`action.lookup("verb") == "restart"`, `"org.freedesktop.systemd1.manage-units"`} {
+		if !strings.Contains(r, want) {
+			t.Errorf("polkit rule lacks %q:\n%s", want, r)
 		}
 	}
 }
