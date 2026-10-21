@@ -342,6 +342,8 @@ disables and unlinks its unit and removes its files (the binary stays until `amc
 - PromQL: up (share of successful probes) = `increase(cloudprober_success[5m]) / increase(cloudprober_total[5m])`;
   average latency in ms = `rate(cloudprober_latency[5m]) / rate(cloudprober_success[5m]) / 1000`; TLS days left =
   `cloudprober_ssl_earliest_cert_expiry_sec / 86400`.
+- v0.13.0: Cloudprober's files live in `config/cloudprober/` (own directory: the agent may replace exactly these files);
+  v0.12.0 files directly in `config/` are removed on the next apply (`REMOVE config/cloudprober.cfg`).
 
 `checks.tcp` (v0.11.0): TCP connect checks from this host to OTHER hosts (`host:port`, `[IPv6]:port`), e.g. the
 database or the next hop of a request path, so a dashboard can show the state of each link. One `tcp_check` receiver
@@ -524,3 +526,74 @@ Existing installations keep running unchanged until phase 5.
 | Maintenance load (issues, pull requests) | contribution guide, rule + fixture template, small core |
 | Signing key loss or leak | key backup offline, documented rotation, short-lived keys via cosign as fallback |
 | Users press Enter through `Apply now?` | only offered after a clean plan, diff shown first, backup + automatic rollback on failure |
+
+---
+
+## 17. Agent (v0.13.0): probe lists from a control plane
+
+`amc agent` lets a control plane (for example a monitoring wall where an admin draws a link and answers "what to
+observe?") change the PROBES of a host within seconds, without SSH and without `amc apply`. The idea is the one of
+tunnel agents: the agent dials out, the host opens no port.
+
+**What it can do, and what never.** It accepts one thing: a signed list of probes (tcp / http / ping, the same schema
+and rules as `probes:`). It never runs commands, never writes a path it gets from the control plane, never installs or
+updates software (that stays `amc apply` / `amc update`, signed releases), never touches the collector, secrets,
+ACLs, SELinux or other units.
+
+**Host owner first.** `answers.yaml` (root) decides:
+
+```yaml
+agent:
+  url: https://agent.example.com/agent/            # https only (http only for 127.0.0.1 / localhost: tests, tunnels)
+  control_plane_key: "ed25519:<base64>"            # the ONLY key that may sign probe lists (pinned here)
+  allow:                                           # host extras, added to the project template (--agent-allow)
+    domains: ["*.example.com", "api.example.org"]  # exact names or *.suffix (any depth); names are not resolved
+    networks: ["192.0.2.0/24"]                     # IP targets must be inside; empty = no IP targets
+    ports: [443, 5432]                             # tcp ports and http(s) URL ports (80 / 443 when not written)
+    max_probes: 30                                 # default 30 (max 100)
+    min_interval_s: 15                             # default 15
+    ping: false                                    # true = ping allowed (the Cloudprober unit gets CAP_NET_RAW)
+```
+
+Project template: `plan` / `apply --agent-allow FILE` (same keys as `allow`, unknown keys are errors) installs it as
+`config/agent-allow.yaml` (root 644); `update` keeps the installed one; without the flag plan / apply remove it (like
+`--site-dir`). Effective list = template + host extras: lists joined, a number set on the host replaces the
+template's, ping allowed when either allows it. `plan` prints it (`agent allowlist: ...`).
+
+**Install** (`apply` with an `agent:` section): user `amc-agent` (system, no shell, no groups), `<prefix>/agent/`
+(amc-agent 700: key + state), `bin/amc` (a copy of the amc that ran the apply; `update` replaces it), unit
+`monitoring-agent` (amc-agent, `NoNewPrivileges`, `ProtectSystem=strict`, writes only `<prefix>/agent` and
+`config/cloudprober/`, no capabilities, `MemoryMax=200M`), `config/cloudprober/` owned root:amc-agent with setgid
+2775, and `/etc/polkit-1/rules.d/50-amc-agent.rules`: amc-agent may `restart` `monitoring-cloudprober.service`,
+nothing else (no polkit on the host = a warning; target-only changes still work, config changes wait for an apply).
+Cloudprober then always runs (with an empty config until the first list). Everything is in `amc-state.json`; the
+agent removed from the answers = unit stopped + unlinked, polkit rule removed (key and state stay until uninstall);
+`uninstall` removes the agent dir, the polkit rule and the user.
+
+**Enrol** (once, root): the control plane shows a one-time token; on the host
+`sudo amc agent enrol --token-stdin` (typed or piped, never an argument). The agent key (Ed25519) is created on the
+host, only its public key is sent; the file is written (amc-agent 600) only after the control plane accepted it. The
+agent picks it up within 15 s.
+
+**Protocol** (`internal/agent/protocol.go` has the exact wire format):
+- `POST <url>v1/enrol {"host","token","public_key"}` (no signature).
+- Every other request is signed with the host key: headers `X-Amc-Host`, `X-Amc-Time` (unix s, ±120 s),
+  `X-Amc-Nonce`, `X-Amc-Signature` = Ed25519 over the lines `METHOD`, `REQUEST-URI`, `time`, `nonce`,
+  `hex(sha256(body))` joined with `\n`. TLS ends at a proxy in many setups, so client certificates would not reach the control plane: signatures work through
+  any proxy.
+- `GET <url>v1/desired?have=N`: long poll (200 = newer signed document, 204 = nothing newer).
+- `POST <url>v1/status {"revision","result":"applied|rejected|error","detail","versions"}`.
+- Document `{host, revision, issued_at, expires_at, probes, sig}`; `sig` = Ed25519 (control-plane key) over the
+  canonical JSON of the received document without `sig` (keys sorted by bytes, no whitespace, no HTML escaping,
+  numbers as received). Shared test vectors: `testdata/agent/canonical.json`.
+
+**Apply rules.** A list is applied only when: signature valid with the PINNED key (the key a control plane sends at
+enrolment is ignored), host = this host, revision > the applied one, not expired, the probe rules pass (the answers'
+own probes + the list: names unique), the allowlist passes, and `cloudprober --configtest` passes on a staged copy.
+Then target files, then the config; Cloudprober restarts only when its config changed (target files are re-read).
+Otherwise the last good list stays and the reason is reported (`rejected` / `error`). Network errors: backoff with
+jitter up to 5 min; the control plane down = probes keep running. `<prefix>/agent/state.json` holds the applied list:
+`plan` / `apply` / `update` generate the same Cloudprober files from it (no drift, an apply does not undo the agent).
+The collector's scrape interval comes from the answers only (a list never changes the collector config).
+
+**Metrics**: as for `probes` (section 9); probe names chosen by the control plane are labels (`target`).

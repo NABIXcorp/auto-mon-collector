@@ -21,7 +21,10 @@ type state struct {
 	Groups      []string `json:"groups_added"`     // usermod -aG
 	FContexts   []string `json:"selinux_fcontext"` // semanage fcontext -a -t bin_t
 	Units       []string `json:"units"`            // linked into /etc/systemd/system
-	Changed     bool     `json:"-"`
+	// agent (v0.13.0)
+	AgentUserCreated bool     `json:"agent_user_created,omitempty"` // amc created the user amc-agent
+	Polkit           []string `json:"polkit_rules,omitempty"`       // polkit rule files written
+	Changed          bool     `json:"-"`
 }
 
 func (e *eng) statePath() string { return e.fs(e.pre(StateFile)) }

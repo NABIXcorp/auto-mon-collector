@@ -30,6 +30,8 @@ type Answers struct {
 	} `yaml:"checks,omitempty"`
 	// Probes (v0.12.0): Cloudprober probes from this host (tcp / http / ping), see probes.go. Empty = not installed.
 	Probes Probes `yaml:"probes,omitempty"`
+	// Agent (v0.13.0): probes from a control plane (signed, inside the allowlist), see agent.go. nil = no agent.
+	Agent *Agent `yaml:"agent,omitempty"`
 }
 
 // Service is one service's answers. Enabled nil = default (on when detected and amc has a profile).
@@ -138,6 +140,11 @@ func (a Answers) Validate() error {
 	}
 	if err := a.Probes.validate(); err != nil {
 		return err
+	}
+	if a.Agent != nil {
+		if err := a.Agent.validate(); err != nil {
+			return err
+		}
 	}
 	for name, s := range a.Services {
 		switch name {

@@ -59,8 +59,10 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	units := st.Units
 	if len(units) == 0 {
 		units = e.unitFiles()
-		if _, err := os.Lstat(e.fs("/etc/systemd/system/" + assets.ProbeUnit + ".service")); err == nil {
-			units = append(units, assets.ProbeUnit+".service")
+		for _, u := range []string{assets.ProbeUnit, assets.AgentUnit} {
+			if _, err := os.Lstat(e.fs("/etc/systemd/system/" + u + ".service")); err == nil {
+				units = append(units, u+".service")
+			}
 		}
 	}
 	e.doCmd("systemctl", append([]string{"stop"}, units...)...)
@@ -87,6 +89,12 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 		e.r.ok("nothing recorded")
 	}
 
+	for _, p := range st.Polkit {
+		if _, err := os.Stat(e.fs(p)); err == nil {
+			e.do("remove "+p, func() error { return os.Remove(e.fs(p)) })
+		}
+	}
+
 	e.r.step("3. SELinux rules")
 	if len(st.FContexts) == 0 {
 		e.r.ok("nothing recorded")
@@ -96,7 +104,7 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	}
 
 	e.r.step("4. files in %s", o.Prefix)
-	remove := []string{"bin", "config", "systemd", "netconn", "VERSION", "answers.yaml", StateFile}
+	remove := []string{"bin", "config", "systemd", "netconn", "agent", "VERSION", "answers.yaml", StateFile}
 	keep := []string{}
 	if u.PurgeData {
 		remove = append(remove, "data", "backup")
@@ -128,6 +136,10 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 			}
 			return nil
 		})
+	}
+
+	if st.AgentUserCreated {
+		e.doCmd("userdel", AgentUser) // the agent's own user: always removed with the agent
 	}
 
 	e.r.step("5. collector user")

@@ -1,0 +1,10 @@
+// /etc/polkit-1/rules.d/50-amc-agent.rules  (installed and removed by amc, v0.13.0; do not edit)
+// The amc agent (user amc-agent) may RESTART the Cloudprober unit. Nothing else: no other unit, no other verb.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "amc-agent" &&
+        action.lookup("unit") == "monitoring-cloudprober.service" &&
+        action.lookup("verb") == "restart") {
+        return polkit.Result.YES;
+    }
+});

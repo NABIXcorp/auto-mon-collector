@@ -14,7 +14,7 @@ import (
 func withProbes(ping bool) Desired {
 	d := desired()
 	d.Probes = &Probes{
-		Config:  []byte("host: \"127.0.0.1\"\nprobe { targets { file_targets { file_path: \"@PREFIX@/config/cloudprober-tcp.json\" } } }\n"),
+		Config:  []byte("host: \"127.0.0.1\"\nprobe { targets { file_targets { file_path: \"@PREFIX@/config/cloudprober/cloudprober-tcp.json\" } } }\n"),
 		Targets: map[string][]byte{"cloudprober-tcp.json": []byte(`{"resource":[]}` + "\n")},
 		Ping:    ping,
 	}
@@ -29,7 +29,7 @@ func TestProbesCheckModeDownloadsAndTestsConfig(t *testing.T) {
 		t.Fatalf("check failed:\n%s", out)
 	}
 	for _, want := range []string{"4b. Cloudprober binary " + cloudprober.Version, "downloaded cloudprober", "cloudprober --configtest: OK",
-		"NEW    config/cloudprober.cfg", "NEW    config/cloudprober-tcp.json", "NEW    systemd/monitoring-cloudprober.service"} {
+		"NEW    config/cloudprober/cloudprober.cfg", "NEW    config/cloudprober/cloudprober-tcp.json", "NEW    systemd/monitoring-cloudprober.service"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -70,7 +70,7 @@ func TestProbesApplyThenRemove(t *testing.T) {
 	if res.Failures != 0 {
 		t.Fatalf("apply failed:\n%s", out)
 	}
-	if got := h.read("/opt/monitoring/config/cloudprober.cfg"); !strings.Contains(got, `"/opt/monitoring/config/cloudprober-tcp.json"`) {
+	if got := h.read("/opt/monitoring/config/cloudprober/cloudprober.cfg"); !strings.Contains(got, `"/opt/monitoring/config/cloudprober/cloudprober-tcp.json"`) {
 		t.Errorf("prefix not filled in:\n%s", got)
 	}
 	if h.read("/opt/monitoring/bin/cloudprober") != "PROBER" {
@@ -92,7 +92,7 @@ func TestProbesApplyThenRemove(t *testing.T) {
 	if res.Failures != 0 {
 		t.Fatalf("second apply failed:\n%s", out)
 	}
-	for _, want := range []string{"REMOVE config/cloudprober.cfg", "REMOVE config/cloudprober-tcp.json",
+	for _, want := range []string{"REMOVE config/cloudprober/cloudprober.cfg", "REMOVE config/cloudprober/cloudprober-tcp.json",
 		"REMOVE systemd/monitoring-cloudprober.service", "stopped, disabled and unlinked"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)

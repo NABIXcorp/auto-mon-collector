@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/NABIXcorp/auto-mon-collector/internal/agent"
 	"github.com/NABIXcorp/auto-mon-collector/internal/ask"
 	"github.com/NABIXcorp/auto-mon-collector/internal/detect"
 	"github.com/NABIXcorp/auto-mon-collector/internal/engine"
@@ -34,6 +35,8 @@ Usage:
                                              when something changes (--plan: stop after the plan)
   amc generate --answers FILE [--out DIR]    only write host.yaml + host.env (nothing installed)
   amc detect [--json]                        read-only: which services this host runs (needs root)
+  amc agent enrol --token-stdin [--prefix DIR]  register this host with the control plane (answers: agent:)
+  amc agent run [--prefix DIR]               the agent daemon (started by the unit monitoring-agent)
   amc uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]   check mode unless --yes
   amc version
 
@@ -41,6 +44,8 @@ Flags (plan / apply / generate):
   --answers FILE      what a scan cannot know: Oracle service name + user, HTTP checks, services on/off
   --detect-json FILE  use a saved "amc detect --json" instead of scanning (offline / review)
   --site-dir DIR      operator overlay *.yaml, installed as config/site.d/ (plan / apply)
+  --agent-allow FILE  project allowlist template for the agent, installed as config/agent-allow.yaml
+                      (plan / apply; without it an installed template is removed; update keeps it)
   --host-dir DIR      instead of --answers: a prepared host part (host.yaml, host.env, site.d/)
   --prefix DIR        install root (default /opt/monitoring)
   --user NAME         collector user (default otelcol-contrib)
@@ -103,6 +108,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return uninstall(args, stdout, stderr)
 	case "detect":
 		return detectCmd(args, stdout, stderr)
+	case "agent":
+		return agentCmd(args, stdout, stderr)
 	case "generate":
 		return generateCmd(args, stdout, stderr)
 	case "sql":
@@ -121,6 +128,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	answers := fs.String("answers", "", "")
 	detectFile := fs.String("detect-json", "", "")
 	siteDir := fs.String("site-dir", "", "")
+	allowFile := fs.String("agent-allow", "", "")
 	prefix := fs.String("prefix", "/opt/monitoring", "")
 	user := fs.String("user", "otelcol-contrib", "")
 	noFetch := fs.Bool("no-fetch", false, "")
@@ -151,7 +159,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	case *answers != "":
 		var a generate.Answers
 		if a, err = generate.LoadAnswers(*answers); err == nil {
-			d, err = desiredFrom(stdout, a, *detectFile, *siteDir)
+			d, err = desiredFrom(stdout, a, *detectFile, *siteDir, inputs{prefix: *prefix, allow: *allowFile})
 		}
 	default: // no answers file: ask on the terminal (previous answers are the defaults)
 		tty, terr := openPrompter()
@@ -161,7 +169,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		}
 		defer tty.Close()
 		p = tty
-		d, secrets, err = interview(stdout, p, *prefix, *detectFile, *siteDir)
+		d, secrets, err = interview(stdout, p, *prefix, *detectFile, *siteDir, inputs{prefix: *prefix, allow: *allowFile})
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "amc: %v\n", err)
@@ -231,7 +239,11 @@ func update(args []string, stdout, stderr io.Writer) int {
 	}
 	siteDir := filepath.Join(*prefix, "config", "site.d")
 	fmt.Fprintf(stdout, "update: answers from %s, site overlay from %s (kept as installed)\n", saved, siteDir)
-	d, err := desiredFrom(stdout, a, *detectFile, siteDir)
+	in := inputs{prefix: *prefix}
+	if t := filepath.Join(*prefix, filepath.FromSlash(generate.AllowFile)); fileExists(t) {
+		in.allow = t // the installed agent allowlist template stays
+	}
+	d, err := desiredFrom(stdout, a, *detectFile, siteDir, in)
 	if err != nil {
 		fmt.Fprintf(stderr, "amc update: %v\n", err)
 		return exitUsage
@@ -307,16 +319,67 @@ func scan(detectPath string) (generate.Host, error) {
 	return generate.Host{Findings: dj.Findings, TimeZone: dj.TimeZone}, nil
 }
 
+// inputs besides the answers: install prefix (agent state) and the agent allowlist template file.
+type inputs struct {
+	prefix string
+	allow  string // --agent-allow FILE ("" = none)
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
 // desiredFrom generates the host part from answers and builds what the engine installs, incl. answers.yaml.
-func desiredFrom(w io.Writer, a generate.Answers, detectPath, siteDir string) (engine.Desired, error) {
+func desiredFrom(w io.Writer, a generate.Answers, detectPath, siteDir string, in inputs) (engine.Desired, error) {
 	h, err := scan(detectPath)
 	if err != nil {
 		return engine.Desired{}, err
 	}
-	return build(w, h, a, siteDir)
+	return build(w, h, a, siteDir, in)
 }
 
-func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string) (engine.Desired, error) {
+// agentInputs (v0.13.0): with an agent section, the effective allowlist (template + host extras, printed) and the
+// probe list the agent applied last, so the generated Cloudprober files are the agent's.
+func agentInputs(w io.Writer, h *generate.Host, a generate.Answers, in inputs) (*engine.Agent, error) {
+	if a.Agent == nil {
+		if in.allow != "" {
+			return nil, fmt.Errorf("--agent-allow without an agent section in the answers")
+		}
+		return nil, nil
+	}
+	var tmpl generate.Allow
+	var raw []byte
+	if in.allow != "" {
+		var err error
+		if tmpl, err = generate.LoadAllow(in.allow); err != nil {
+			return nil, err
+		}
+		if raw, err = os.ReadFile(in.allow); err != nil {
+			return nil, err
+		}
+	}
+	h.AgentAllow = tmpl.Merge(a.Agent.Allow)
+	fmt.Fprintf(w, "  ok    agent allowlist: %s\n", h.AgentAllow)
+	if in.prefix != "" {
+		st, err := agent.LoadState(in.prefix)
+		if err != nil {
+			return nil, fmt.Errorf("%s/%s: %w", in.prefix, agent.StateFile, err)
+		}
+		h.AgentProbes = st.Probes
+		if st.Revision > 0 {
+			fmt.Fprintf(w, "  ok    agent: applied revision %d kept in the Cloudprober files\n", st.Revision)
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return &engine.Agent{AllowTemplate: raw, Binary: exe}, nil
+}
+
+func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string, in inputs) (engine.Desired, error) {
+	ag, err := agentInputs(w, &h, a, in)
+	if err != nil {
+		return engine.Desired{}, err
+	}
 	g, err := generate.Generate(h, a)
 	if err != nil {
 		return engine.Desired{}, err
@@ -333,12 +396,13 @@ func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string) (en
 	if p := g.Probes; p != nil {
 		d.Probes = &engine.Probes{Config: p.Config, Targets: p.Targets, Ping: p.Ping}
 	}
+	d.Agent = ag
 	d.Answers, err = a.Marshal()
 	return d, err
 }
 
 // interview: scan, ask (saved answers = defaults), generate; ask for secrets when the secrets file is missing.
-func interview(w io.Writer, p ask.Prompter, prefix, detectPath, siteDir string) (engine.Desired, map[string]string, error) {
+func interview(w io.Writer, p ask.Prompter, prefix, detectPath, siteDir string, in inputs) (engine.Desired, map[string]string, error) {
 	h, err := scan(detectPath)
 	if err != nil {
 		return engine.Desired{}, nil, err
@@ -355,7 +419,7 @@ func interview(w io.Writer, p ask.Prompter, prefix, detectPath, siteDir string) 
 	if err != nil {
 		return engine.Desired{}, nil, err
 	}
-	d, err := build(w, h, a, siteDir)
+	d, err := build(w, h, a, siteDir, in)
 	if err != nil {
 		return d, nil, err
 	}

@@ -1,0 +1,22 @@
+[
+  {"name": "keys sorted, no spaces",
+   "in": "{ \"b\": 1, \"a\": [3, 2, {\"z\": true, \"y\": null}] }",
+   "out": "{\"a\":[3,2,{\"y\":null,\"z\":true}],\"b\":1}"},
+  {"name": "numbers exactly as received",
+   "in": "{\"x\": 1.50, \"y\": -0, \"z\": 1e3, \"big\": 12345678901234567890}",
+   "out": "{\"big\":12345678901234567890,\"x\":1.50,\"y\":-0,\"z\":1e3}"},
+  {"name": "no HTML escaping, standard escapes",
+   "in": "{\"s\": \"a<b>&c \\\"q\\\" \\\\ \\n\\t\\u0001\"}",
+   "out": "{\"s\":\"a<b>&c \\\"q\\\" \\\\ \\n\\t\\u0001\"}"},
+  {"name": "non-ASCII stays UTF-8, U+2028 escaped",
+   "in": "{\"s\": \"Toshkent ✓ \\u2028\"}",
+   "out": "{\"s\":\"Toshkent ✓ \\u2028\"}"},
+  {"name": "sig dropped (top level only)",
+   "drop": ["sig"],
+   "in": "{\"sig\": \"x\", \"host\": \"h\", \"probes\": {\"sig\": 1}}",
+   "out": "{\"host\":\"h\",\"probes\":{\"sig\":1}}"},
+  {"name": "a probe document",
+   "drop": ["sig"],
+   "in": "{\"host\":\"app-1.example.com\",\"revision\":3,\"issued_at\":1792500000,\"expires_at\":1793104800,\"probes\":{\"interval_s\":30,\"tcp\":[{\"name\":\"link_web_db\",\"host\":\"db.example.com\",\"port\":5432}],\"http\":[{\"name\":\"link_web_api\",\"url\":\"https://api.example.com/health?x=1&y=2\"}],\"ping\":[]},\"sig\":\"AAAA\"}",
+   "out": "{\"expires_at\":1793104800,\"host\":\"app-1.example.com\",\"issued_at\":1792500000,\"probes\":{\"http\":[{\"name\":\"link_web_api\",\"url\":\"https://api.example.com/health?x=1&y=2\"}],\"interval_s\":30,\"ping\":[],\"tcp\":[{\"host\":\"db.example.com\",\"name\":\"link_web_db\",\"port\":5432}]},\"revision\":3}"}
+]

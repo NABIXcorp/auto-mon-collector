@@ -33,7 +33,7 @@ func TestProbesGenerateCloudproberAndScrape(t *testing.T) {
 	cfg := string(out.Probes.Config)
 	for _, want := range []string{
 		`host: "127.0.0.1"`, "port: 9313",
-		`file_path: "@PREFIX@/config/cloudprober-tcp.json"`, "ping_probe { use_datagram_socket: false }",
+		`file_path: "@PREFIX@/config/cloudprober/cloudprober-tcp.json"`, "ping_probe { use_datagram_socket: false }",
 		`name: "http_payments_api"`, "protocol: HTTPS", "port: 443", `relative_url: "/health?x=1"`,
 		`name: "http_local_app"`, "protocol: HTTP", "port: 8080", `ip: "127.0.0.1"`,
 		"interval_msec: 30000", `metrics_prefix: "cloudprober_"`, `value: "@target.label.target@"`,

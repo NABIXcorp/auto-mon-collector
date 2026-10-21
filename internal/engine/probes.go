@@ -13,13 +13,19 @@ import (
 )
 
 // Cloudprober (v0.12.0): installed only when Desired.Probes is set. Its files: bin/cloudprober,
-// config/cloudprober.cfg, config/cloudprober-*.json (targets), systemd/monitoring-cloudprober.service.
+// config/cloudprober/cloudprober.cfg + cloudprober-*.json (targets; v0.12.0 had them in config/ itself: removed
+// as stale on the next apply), systemd/monitoring-cloudprober.service.
 
 var probeTargetRE = regexp.MustCompile(`^cloudprober-[a-z0-9_-]{1,40}\.json$`)
 
-// isProbeFile: a Cloudprober file in config/ (not a collector config: never passed to otelcol validate).
+const probeDir = "config/cloudprober"
+
+// isProbeFile: a Cloudprober file (not a collector config: never passed to otelcol validate).
 func isProbeFile(rel string) bool {
-	return rel == "config/cloudprober.cfg" || (strings.HasPrefix(rel, "config/") && probeTargetRE.MatchString(path.Base(rel)))
+	if strings.HasPrefix(rel, probeDir+"/") {
+		return true
+	}
+	return rel == "config/cloudprober.cfg" || (path.Dir(rel) == "config" && probeTargetRE.MatchString(path.Base(rel)))
 }
 
 // staleProbeFiles: installed Cloudprober files that are no longer wanted (probes removed, or a target list gone).
@@ -29,11 +35,13 @@ func (e *eng) staleProbeFiles() []string {
 		want[f.rel] = true
 	}
 	var out []string
-	entries, _ := os.ReadDir(e.fs(e.pre("config")))
-	for _, en := range entries {
-		rel := "config/" + en.Name()
-		if !en.IsDir() && isProbeFile(rel) && !want[rel] {
-			out = append(out, rel)
+	for _, dir := range []string{"config", probeDir} {
+		entries, _ := os.ReadDir(e.fs(e.pre(dir)))
+		for _, en := range entries {
+			rel := dir + "/" + en.Name()
+			if !en.IsDir() && !strings.HasPrefix(en.Name(), ".") && isProbeFile(rel) && !want[rel] {
+				out = append(out, rel)
+			}
 		}
 	}
 	unit := "systemd/" + assets.ProbeUnit + ".service"
@@ -110,13 +118,17 @@ func (e *eng) probeConfigTest(stage string) bool {
 		return true
 	}
 	cfg := strings.ReplaceAll(string(e.d.Probes.Config), ProbePrefix, filepath.ToSlash(stage))
+	if err := os.MkdirAll(filepath.Join(stage, filepath.FromSlash(probeDir)), 0o700); err != nil {
+		e.r.fail("stage: %v", err)
+		return false
+	}
 	for n, b := range e.d.Probes.Targets {
-		if err := os.WriteFile(filepath.Join(stage, "config", n), b, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(stage, filepath.FromSlash(probeDir), n), b, 0o600); err != nil {
 			e.r.fail("stage: %v", err)
 			return false
 		}
 	}
-	p := filepath.Join(stage, "config", "cloudprober.cfg")
+	p := filepath.Join(stage, filepath.FromSlash(probeDir), "cloudprober.cfg")
 	if err := os.WriteFile(p, []byte(cfg), 0o600); err != nil {
 		e.r.fail("stage: %v", err)
 		return false
@@ -138,20 +150,6 @@ func (e *eng) dropProbeUnit() {
 	if e.d.Probes != nil {
 		return
 	}
-	name := assets.ProbeUnit + ".service"
-	link := e.fs("/etc/systemd/system/" + name)
-	if _, err := os.Lstat(link); err != nil {
-		return
-	}
-	if err := e.o.Runner.Run("systemctl", "disable", "--now", name); err != nil {
-		e.r.fail("systemctl disable --now %s: %v", name, err)
-		return
-	}
-	// `systemctl disable` removes a linked unit's link itself; remove it only when it is still there
-	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
-		e.r.fail("remove %s: %v", link, err)
-		return
-	}
-	e.st.remove(&e.st.Units, name)
-	e.r.ok("no probes: %s stopped, disabled and unlinked", name)
+	// `systemctl disable` removes a linked unit's link itself; dropUnit removes it only when it is still there
+	e.dropUnit(assets.ProbeUnit+".service", "no probes")
 }

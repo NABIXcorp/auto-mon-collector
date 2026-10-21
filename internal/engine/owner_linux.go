@@ -22,3 +22,13 @@ func ownerUID(fi os.FileInfo) (int, bool) {
 	}
 	return int(st.Uid), true
 }
+
+// ownedBy: uid / gid of a file are these. Only checked when amc runs as root (tests run as a normal user in a
+// temp dir: owners cannot be set there).
+func ownedBy(fi os.FileInfo, uid, gid int) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || os.Geteuid() != 0 {
+		return true
+	}
+	return int(st.Uid) == uid && int(st.Gid) == gid
+}

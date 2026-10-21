@@ -87,12 +87,15 @@ type Desired struct {
 	// Probes (v0.12.0): Cloudprober config + target files; nil = no probes (Cloudprober is not installed, an
 	// installed one is stopped and its files removed)
 	Probes *Probes
+	// Agent (v0.13.0): the amc agent (probe lists from a control plane); nil = no agent (an installed one is
+	// stopped, its unit and polkit rule removed)
+	Agent *Agent
 }
 
 // Probes is what Cloudprober runs. Config may contain ProbePrefix (replaced by the install prefix).
 type Probes struct {
 	Config  []byte
-	Targets map[string][]byte // config/<name> (JSON target lists Cloudprober re-reads)
+	Targets map[string][]byte // config/cloudprober/<name> (JSON target lists Cloudprober re-reads)
 	Ping    bool              // ping probes: the unit gets CAP_NET_RAW
 }
 
@@ -197,7 +200,8 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	defer os.RemoveAll(tmp)
 
 	for _, step := range []func(context.Context, string) bool{
-		e.preflight, e.userAndDirs, e.checkSecrets, e.collectorBinary, e.probeBinary, e.installFiles,
+		e.preflight, e.userAndDirs, e.checkSecrets, e.collectorBinary, e.probeBinary,
+		func(context.Context, string) bool { e.agentBinary(); return true }, e.installFiles,
 		e.selinux, e.readAccess, e.validate,
 	} {
 		if !step(ctx, tmp) {
@@ -456,7 +460,7 @@ func (e *eng) desiredFiles() ([]file, error) {
 			return nil, err
 		}
 		files = append(files, file{"systemd/" + assets.ProbeUnit + ".service", b, 0o644},
-			file{"config/cloudprober.cfg", bytes.ReplaceAll(p.Config, []byte(ProbePrefix), []byte(e.o.Prefix)), 0o644})
+			file{probeDir + "/cloudprober.cfg", bytes.ReplaceAll(p.Config, []byte(ProbePrefix), []byte(e.o.Prefix)), 0o644})
 		var names []string
 		for n := range p.Targets {
 			if !probeTargetRE.MatchString(n) {
@@ -466,9 +470,14 @@ func (e *eng) desiredFiles() ([]file, error) {
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			files = append(files, file{"config/" + n, p.Targets[n], 0o644})
+			files = append(files, file{probeDir + "/" + n, p.Targets[n], 0o644})
 		}
 	}
+	af, err := e.agentFiles(ud)
+	if err != nil {
+		return nil, err
+	}
+	files = append(files, af...)
 	files = append(files,
 		file{"netconn/otel-netconn.sh", assets.Netconn(), 0o755},
 		file{"netconn/otel-kmsg.sh", assets.Kmsg(), 0o755},
@@ -516,6 +525,7 @@ func (e *eng) userAndDirs(context.Context, string) bool {
 		e.dir(e.pre(d), 0o750, uid, gid)
 	}
 	e.dir(e.pre("secrets"), 0o700, 0, 0)
+	e.agentUserAndDirs()
 	return true
 }
 
@@ -689,11 +699,11 @@ func (e *eng) installFiles(context.Context, string) bool {
 		e.changedFiles = append(e.changedFiles, "config/site.d/"+n)
 		e.r.line("REMOVE config/site.d/%s (no longer wanted)", n)
 	}
-	staleProbe := e.staleProbeFiles()
+	staleProbe := append(e.staleProbeFiles(), e.staleAgentFiles()...)
 	for _, rel := range staleProbe {
 		changed = true
 		e.changedFiles = append(e.changedFiles, rel)
-		e.r.line("REMOVE %s (no longer wanted: probes)", rel)
+		e.r.line("REMOVE %s (no longer wanted: probes / agent)", rel)
 	}
 	if changed {
 		e.r.changes++
@@ -714,6 +724,7 @@ func (e *eng) installFiles(context.Context, string) bool {
 	}
 	// probes removed: stop + disable the Cloudprober unit while its unit file still exists (disable needs it)
 	e.dropProbeUnit()
+	e.dropAgent()
 	for _, f := range e.files {
 		if err := e.writeFile(e.pre(f.rel), f.data, f.mode); err != nil {
 			e.r.fail("write %s: %v", f.rel, err)
@@ -847,6 +858,9 @@ func (e *eng) selinux(context.Context, string) bool {
 	if e.d.Probes != nil {
 		paths = append(paths, e.pre("bin/cloudprober"))
 	}
+	if e.d.Agent != nil {
+		paths = append(paths, e.pre("bin/amc"))
+	}
 	out, err := e.o.Runner.Output(nil, "stat", append([]string{"-c", "%C"}, paths...)...)
 	if err == nil && allBinT(out, len(paths)) {
 		e.r.ok("labels are bin_t")
@@ -930,7 +944,7 @@ func (e *eng) validate(ctx context.Context, tmp string) bool {
 	stage := filepath.Join(tmp, "stage")
 	args := []string{"validate"}
 	for _, f := range e.files {
-		if !strings.HasPrefix(f.rel, "config/") || strings.HasSuffix(f.rel, ".env") || isProbeFile(f.rel) {
+		if !strings.HasPrefix(f.rel, "config/") || strings.HasSuffix(f.rel, ".env") || isProbeFile(f.rel) || f.rel == allowFile {
 			continue
 		}
 		p := filepath.Join(stage, filepath.FromSlash(f.rel))
@@ -1017,10 +1031,14 @@ func (e *eng) units() {
 
 // unitNames: the units this run manages (the Cloudprober unit only with probes).
 func (e *eng) unitNames() []string {
+	names := append([]string{}, assets.UnitNames...)
 	if e.d.Probes != nil {
-		return append(append([]string{}, assets.UnitNames...), assets.ProbeUnit)
+		names = append(names, assets.ProbeUnit)
 	}
-	return assets.UnitNames
+	if e.d.Agent != nil {
+		names = append(names, assets.AgentUnit)
+	}
+	return names
 }
 
 func (e *eng) unitFiles() []string {

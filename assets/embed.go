@@ -8,7 +8,7 @@ import (
 	"text/template"
 )
 
-//go:embed config/config.yaml netconn/otel-netconn.sh netconn/otel-kmsg.sh netconn/otel-procs.sh netconn/otel-sshd.sh systemd/*.tmpl
+//go:embed config/config.yaml netconn/otel-netconn.sh netconn/otel-kmsg.sh netconn/otel-procs.sh netconn/otel-sshd.sh systemd/*.tmpl polkit/50-amc-agent.rules
 var files embed.FS
 
 // BaseConfig is config/config.yaml (identical on every host).
@@ -50,8 +50,14 @@ func Unit(name string, d UnitData) ([]byte, error) {
 // UnitNames are the systemd units amc manages, in start order.
 var UnitNames = []string{"monitoring-otelcol", "monitoring-netconn", "monitoring-kmsg", "monitoring-procs", "monitoring-sshd"}
 
-// ProbeUnit (v0.12.0) is the Cloudprober unit: managed only when the answers have probes.
+// ProbeUnit (v0.12.0) is the Cloudprober unit: managed only when the answers have probes (or an agent).
 const ProbeUnit = "monitoring-cloudprober"
+
+// AgentUnit (v0.13.0) is the amc agent: managed only when the answers have an agent section.
+const AgentUnit = "monitoring-agent"
+
+// AgentPolkit is the polkit rule that lets the agent restart Cloudprober (only that unit, only restart).
+func AgentPolkit() []byte { return mustRead("polkit/50-amc-agent.rules") }
 
 func mustRead(p string) []byte {
 	b, err := files.ReadFile(p)

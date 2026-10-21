@@ -12,7 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20   # e2e alone ~10 min since v0.12.0 (probes)
+    timeout-minutes: 25   # e2e alone ~10 min since v0.12.0 (probes), + agent (v0.13.0)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -369,12 +369,82 @@ jobs:
           sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr2.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' pr2.txt; then die "plan with probes is not clean after apply"; fi
           sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr3.txt
-          must 'REMOVE config/cloudprober.cfg' pr3.txt
+          must 'REMOVE config/cloudprober/cloudprober.cfg' pr3.txt
           must 'stopped, disabled and unlinked' pr3.txt
           if systemctl is-active -q monitoring-cloudprober; then die "cloudprober still running without probes"; fi
           [ ! -e /etc/systemd/system/monitoring-cloudprober.service ] || die "cloudprober unit link left"
           sudo $amc apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr4.txt
           must 'monitoring-cloudprober.service active' pr4.txt
+          pkill -f "http.server 18080" || true
+          echo "::endgroup::"
+          # v0.13.0 end to end: the agent with a fake control plane (signed lists) -> Cloudprober. Enrol, apply a list
+          # (restart through the polkit rule), reject a tampered list / a target outside the allowlist / an old
+          # revision, survive the control plane going away, plan stays clean, then the agent removed again.
+          echo "::group::agent"
+          sudo apt-get install -y -qq polkitd > /dev/null 2>&1 || true
+          [ -d /etc/polkit-1/rules.d ] || die "polkit missing on the runner"
+          go build -o fakecp ./internal/agent/agenttest/cmd/fakecp
+          ./fakecp -listen 127.0.0.1:18091 -key-out cp.pub > fakecp.log 2>&1 &
+          python3 -m http.server 18080 --bind 127.0.0.1 > /dev/null 2>&1 &
+          sleep 1
+          printf 'domains: ["localhost"]\nnetworks: ["127.0.0.0/8"]\nports: [18080]\nmin_interval_s: 10\n' > allow.yaml
+          { cat $td/answers.yaml; printf 'agent:\n  url: http://127.0.0.1:18091/agent/\n  control_plane_key: "%s"\n' "$(cat cp.pub)"; } > agent.yaml
+          sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag0.txt
+          must 'agent allowlist: domains localhost; networks 127.0.0.0/8; ports 18080' ag0.txt
+          must 'NEW    systemd/monitoring-agent.service' ag0.txt
+          must 'NEW    config/agent-allow.yaml' ag0.txt
+          sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag1.txt
+          must 'monitoring-agent.service active' ag1.txt
+          must 'monitoring-cloudprober.service active' ag1.txt
+          id amc-agent > /dev/null || die "user amc-agent missing"
+          sudo test -f /etc/polkit-1/rules.d/50-amc-agent.rules || die "polkit rule missing"
+          [ "$(stat -c '%a %G' /opt/monitoring/config/cloudprober)" = "2775 amc-agent" ] || die "config/cloudprober not group amc-agent setgid"
+          systemctl show -p User --value monitoring-agent | grep -qx amc-agent || die "agent not run as amc-agent"
+          echo "wrong-token" | sudo $amc agent enrol --token-stdin > ag-bad.txt 2>&1 && die "a wrong token enrolled"
+          echo "test-enrol-token-0123456789" | sudo $amc agent enrol --token-stdin | tee ag2.txt
+          must 'enrolled as' ag2.txt
+          [ "$(sudo stat -c '%a %U' /opt/monitoring/agent/key)" = "600 amc-agent" ] || die "agent key not amc-agent 600"
+          host=$(hostname)
+          publish() { curl -fsS -X POST http://127.0.0.1:18091/_test/publish -d "$1" > /dev/null; }
+          nstatus() { curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; print(len(json.load(sys.stdin) or []))'; }
+          last() { curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; s=json.load(sys.stdin)[-1]; print(s["revision"], s["result"], s.get("detail",""))'; }
+          waitn() { for i in $(seq 1 90); do [ "$(nstatus)" -ge "$1" ] && return 0; sleep 1; done; sudo journalctl -u monitoring-agent -n 30 --no-pager; die "no status $1 from the agent"; }
+          P='"probes":{"interval_s":10,"tcp":[{"name":"link_ci_tcp","host":"127.0.0.1","port":18080}],"http":[{"name":"link_ci_http","url":"http://127.0.0.1:18080/"}],"ping":[]}'
+          publish "{\"host\":\"$host\",$P}"
+          waitn 1; last | tee -a ag-status.txt | grep -q '^1 applied' || die "revision 1 not applied: $(last)"
+          ok=""
+          for i in $(seq 1 60); do
+            m=$(curl -fsS http://127.0.0.1:9313/metrics || true)
+            if echo "$m" | grep -qE '^cloudprober_success\{.*target="link_ci_tcp".*\} [1-9]' &&
+               echo "$m" | grep -qE '^cloudprober_success\{.*target="link_ci_http".*\} [1-9]'; then ok=1; break; fi
+            sleep 1
+          done
+          [ -n "$ok" ] || { echo "$m" | grep '^cloudprober_' ; sudo journalctl -u monitoring-agent -n 20 --no-pager; die "agent probes give no results"; }
+          publish "{\"host\":\"$host\",\"tamper\":true,$P}"
+          waitn 2; last | grep -q '^2 rejected.*signature' || die "tampered list not rejected: $(last)"
+          publish "{\"host\":\"$host\",\"probes\":{\"tcp\":[{\"name\":\"evil\",\"host\":\"198.51.100.1\",\"port\":18080}]}}"
+          waitn 3; last | grep -q '^3 rejected.*allowlist' || die "target outside the allowlist not rejected: $(last)"
+          publish "{\"host\":\"$host\",\"revision\":1,$P}"
+          waitn 4; last | grep -q 'rejected.*not newer' || die "old revision not rejected: $(last)"
+          sudo grep -q '"revision": 1' /opt/monitoring/agent/state.json || die "a rejected list changed the agent state"
+          # control plane gone: the agent keeps running, the probes keep running
+          pkill -f "fakecp -listen" || true
+          before=$(curl -fsS http://127.0.0.1:9313/metrics | grep -E '^cloudprober_total\{.*target="link_ci_tcp"' | awk '{print $2}')
+          sleep 25
+          systemctl is-active -q monitoring-agent || die "agent died without the control plane"
+          after=$(curl -fsS http://127.0.0.1:9313/metrics | grep -E '^cloudprober_total\{.*target="link_ci_tcp"' | awk '{print $2}')
+          [ "${after%.*}" -gt "${before%.*}" ] || die "probes stopped without the control plane ($before -> $after)"
+          # amc plan now includes the agent's applied list: nothing to change
+          sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag3.txt
+          must 'agent: applied revision 1 kept' ag3.txt
+          if grep -E '^  (CHANGE|NEW|REMOVE) ' ag3.txt; then die "plan after an agent change is not clean"; fi
+          # agent removed from the answers: unit + polkit rule gone, Cloudprober stays only with own probes (none: removed)
+          sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee ag4.txt
+          must 'no agent: monitoring-agent.service stopped, disabled and unlinked' ag4.txt
+          if systemctl is-active -q monitoring-agent; then die "agent still running"; fi
+          [ ! -e /etc/polkit-1/rules.d/50-amc-agent.rules ] || die "polkit rule left"
+          sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag5.txt
+          must 'monitoring-agent.service active' ag5.txt
           pkill -f "http.server 18080" || true
           echo "::endgroup::"
           # Uninstall: check mode first (must change nothing), then everything; afterwards nothing of amc is left.
@@ -392,6 +462,9 @@ jobs:
           if systemctl is-active -q monitoring-cloudprober; then die "cloudprober still running"; fi
           [ ! -e /opt/monitoring ] || die "/opt/monitoring left"
           if id otelcol-contrib 2>/dev/null; then die "collector user left"; fi
+          if id amc-agent 2>/dev/null; then die "agent user left"; fi
+          [ ! -e /etc/polkit-1/rules.d/50-amc-agent.rules ] || die "polkit rule left after uninstall"
+          [ ! -e /etc/systemd/system/monitoring-agent.service ] || die "agent unit link left"
           for p in "$alert" /u01 /u01/app/oracle/diag/rdbms/orcl/ORCL/trace; do
             if sudo getfacl -p --omit-header "$p" | grep -E '^user:[^:]+:'; then die "ACL entry left on $p"; fi
           done

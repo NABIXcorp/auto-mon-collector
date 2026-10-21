@@ -14,6 +14,10 @@ import (
 type Host struct {
 	Findings []detect.Finding
 	TimeZone string
+	// agent (v0.13.0, only with answers.agent): the effective allowlist (template + host extras) and the probe list
+	// the agent applied last (<prefix>/agent/state.json), so the generated Cloudprober files match the agent's
+	AgentAllow  Allow
+	AgentProbes Probes
 }
 
 // Output is the generated host part plus what the operator should confirm.
@@ -210,8 +214,24 @@ func Generate(h Host, a Answers) (Output, error) {
 		metrics = append(metrics, "tcp_check")
 	}
 
-	// ---- probes (v0.12.0): Cloudprober next to the collector, scraped on 127.0.0.1
-	if out.Probes = probeFiles(a.Probes); out.Probes != nil {
+	// ---- probes (v0.12.0): Cloudprober next to the collector, scraped on 127.0.0.1. With the agent (v0.13.0) also
+	// the control plane's last applied list (h.AgentProbes) and Cloudprober runs even without any probe yet, so the
+	// generated files are exactly what the agent writes (a plan after an agent change shows no diff).
+	probes := a.Probes
+	if a.Agent != nil {
+		remote := h.AgentProbes
+		if err := remote.CheckAllow(h.AgentAllow); err != nil && !remote.Empty() {
+			out.Defaults = append(out.Defaults, "agent: the applied list is outside the allowlist now ("+err.Error()+"): left out")
+			remote = Probes{}
+		}
+		probes = MergeProbes(a.Probes, remote)
+		if err := probes.validate(); err != nil {
+			return out, fmt.Errorf("answers probes + the agent's list: %w", err)
+		}
+	}
+	if out.Probes = ProbeFilesFor(probes, a.Agent != nil); out.Probes != nil {
+		out.Probes.Ping = out.Probes.Ping || (a.Agent != nil && h.AgentAllow.Ping)
+		// scrape interval from the answers only: a list from the control plane never changes the collector config
 		recv["prometheus/cloudprober"] = probeScrape(a.Probes)
 		metrics = append(metrics, "prometheus/cloudprober")
 	}
