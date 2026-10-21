@@ -314,7 +314,34 @@ checks:
   tcp:                                  # v0.11.0: connect checks to other hosts
     - endpoint: db.example.com:1521
       comment: Oracle primary
+probes:                                 # v0.12.0: Cloudprober probes from this host (optional)
+  interval_s: 30                        # 10-3600, default 30
+  tcp:
+    - {name: db_primary, host: db.example.com, port: 1521}
+  http:
+    - {name: payments_api, url: "https://api.example.com/health"}
+  ping:
+    - {name: gateway, host: 192.0.2.1}
 ```
+
+`probes` (v0.12.0): active probes run by [Cloudprober](https://github.com/cloudprober/cloudprober) (Apache-2.0), a
+second small agent next to the collector. Empty = Cloudprober is not installed; removing all probes later stops,
+disables and unlinks its unit and removes its files (the binary stays until `amc uninstall`).
+- Install: pinned v0.14.6 (`internal/cloudprober`, release tarball checked against the pinned SHA-256, only the
+  binary is extracted) -> `bin/cloudprober`; `config/cloudprober.cfg` (generated) + `config/cloudprober-tcp.json` /
+  `cloudprober-ping.json` (file targets, re-read every 30 s: a later version can change the list without a restart);
+  unit `monitoring-cloudprober` (collector user, sandboxed, `MemoryMax=150M`; `CAP_NET_RAW` only when there are ping
+  probes: raw ICMP socket, `net.ipv4.ping_group_range` is not touched). `plan` runs `cloudprober --configtest`.
+- Metrics: Cloudprober listens on `127.0.0.1:9313` only; the collector scrapes it (`prometheus/cloudprober`, interval =
+  `interval_s`) and keeps `cloudprober_total`, `_success`, `_failure`, `_timeouts`, `_latency` (cumulative
+  MICROseconds of the successful probes), `_resp_code{code}`, `_ssl_earliest_cert_expiry_sec`. Labels: `probe`
+  (`tcp`, `ping`, `http_<name>`), `dst` (`host:port` / host), `target` (the name above; keep names stable, they are
+  labels).
+- Names: `a-z 0-9 _`, unique over all probes. Hosts: a DNS name or an IP; URLs: http(s) without credentials. Loopback
+  targets are allowed (unlike `checks.tcp`). Not asked interactively; an interactive run or `amc update` keeps them.
+- PromQL: up (share of successful probes) = `increase(cloudprober_success[5m]) / increase(cloudprober_total[5m])`;
+  average latency in ms = `rate(cloudprober_latency[5m]) / rate(cloudprober_success[5m]) / 1000`; TLS days left =
+  `cloudprober_ssl_earliest_cert_expiry_sec / 86400`.
 
 `checks.tcp` (v0.11.0): TCP connect checks from this host to OTHER hosts (`host:port`, `[IPv6]:port`), e.g. the
 database or the next hop of a request path, so a dashboard can show the state of each link. One `tcp_check` receiver

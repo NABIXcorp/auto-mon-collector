@@ -93,3 +93,24 @@ func TestJournalAccessOnlyForKmsg(t *testing.T) {
 		}
 	}
 }
+
+// Cloudprober (v0.12.0): CAP_NET_RAW only with ping probes, metrics on 127.0.0.1 only (in its config).
+func TestProbeUnitCapabilityOnlyForPing(t *testing.T) {
+	for _, ping := range []bool{false, true} {
+		b, err := Unit(ProbeUnit, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib", Ping: ping})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(b)
+		if got := strings.Contains(s, "AmbientCapabilities=CAP_NET_RAW"); got != ping {
+			t.Errorf("ping=%v: AmbientCapabilities present=%v\n%s", ping, got, s)
+		}
+		if !ping && !strings.Contains(s, "CapabilityBoundingSet=\n") {
+			t.Errorf("no ping: capabilities must be empty\n%s", s)
+		}
+		if !strings.Contains(s, "--config_file=/opt/monitoring/config/cloudprober.cfg") || !strings.Contains(s, "NoNewPrivileges=yes") ||
+			!strings.Contains(s, "User=otelcol-contrib") {
+			t.Errorf("unit:\n%s", s)
+		}
+	}
+}

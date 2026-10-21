@@ -20,8 +20,9 @@ type Host struct {
 type Output struct {
 	HostYAML []byte
 	HostEnv  []byte
-	Enabled  []string // services that will be monitored
-	Defaults []string // values taken from a default or a guess (the questions in interactive mode)
+	Enabled  []string    // services that will be monitored
+	Defaults []string    // values taken from a default or a guess (the questions in interactive mode)
+	Probes   *ProbeFiles // Cloudprober config + targets (nil = no probes, Cloudprober not installed)
 }
 
 const defaultOracleUser = "otel_mon"
@@ -209,6 +210,12 @@ func Generate(h Host, a Answers) (Output, error) {
 		metrics = append(metrics, "tcp_check")
 	}
 
+	// ---- probes (v0.12.0): Cloudprober next to the collector, scraped on 127.0.0.1
+	if out.Probes = probeFiles(a.Probes); out.Probes != nil {
+		recv["prometheus/cloudprober"] = probeScrape(a.Probes)
+		metrics = append(metrics, "prometheus/cloudprober")
+	}
+
 	if len(netconn) > 0 {
 		env = append(env, `NETCONN_PORTS="`+joinInts(uniqSorted(netconn))+`"`)
 	}
@@ -226,7 +233,7 @@ func Generate(h Host, a Answers) (Output, error) {
 	}
 	if len(recv) > 0 {
 		y.WriteString("receivers:\n")
-		for _, name := range []string{"http_check", "tcp_check", "file_log/tomcat_access", "file_log/catalina", "file_log/oracle_alert"} {
+		for _, name := range []string{"http_check", "tcp_check", "prometheus/cloudprober", "file_log/tomcat_access", "file_log/catalina", "file_log/oracle_alert"} {
 			if r, ok := recv[name]; ok {
 				y.WriteString(r)
 				y.WriteString("\n")

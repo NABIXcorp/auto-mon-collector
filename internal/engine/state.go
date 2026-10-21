@@ -50,6 +50,16 @@ func (s *state) add(list *[]string, v string) {
 	s.Changed = true
 }
 
+func (s *state) remove(list *[]string, v string) {
+	for i, x := range *list {
+		if x == v {
+			*list = append((*list)[:i], (*list)[i+1:]...)
+			s.Changed = true
+			return
+		}
+	}
+}
+
 // saveState writes the state (apply mode only, root 644).
 func (e *eng) saveState() error {
 	if e.st == nil || !e.st.Changed {

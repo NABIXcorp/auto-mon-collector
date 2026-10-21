@@ -2,7 +2,7 @@
 //
 // It is a Go port of the install.sh that ran this layout in production, step for step:
 //
-//	1 preflight  2 user + dirs  3 secrets (keys only)  4 collector binary  5 files (diff, backup, write)
+//	1 preflight  2 user + dirs  3 secrets (keys only)  4 collector (+ Cloudprober) binary  5 files (diff, backup, write)
 //	6 SELinux  7 read access (single-file ACLs, groups)  8 validate  9 systemd units  10 start + check
 //
 // Without Options.Apply nothing on the system changes ("check mode"): every action is printed as "would:".
@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/NABIXcorp/auto-mon-collector/assets"
+	"github.com/NABIXcorp/auto-mon-collector/internal/cloudprober"
 	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 	"github.com/NABIXcorp/auto-mon-collector/internal/envfile"
 )
@@ -66,6 +67,8 @@ type Options struct {
 	Now           func() time.Time
 	Chown         func(path string, uid, gid int) error
 	Fetcher       func(context.Context, collector.Asset, string) (string, error)
+	// ProbeFetcher downloads the pinned Cloudprober for an architecture into a directory (default cloudprober.Fetch)
+	ProbeFetcher func(ctx context.Context, arch, dir string) (string, error)
 
 	// CheckHint: the hint after a clean check (default: run `amc apply`); "-" = none (the caller prints its own)
 	CheckHint string
@@ -81,7 +84,20 @@ type Desired struct {
 	Groups     []string          // extra groups for the collector user (e.g. the Tomcat group for its logs)
 	Version    []byte            // VERSION file content
 	Answers    []byte            // <prefix>/answers.yaml (the operator's answers, no secrets); nil = not managed
+	// Probes (v0.12.0): Cloudprober config + target files; nil = no probes (Cloudprober is not installed, an
+	// installed one is stopped and its files removed)
+	Probes *Probes
 }
+
+// Probes is what Cloudprober runs. Config may contain ProbePrefix (replaced by the install prefix).
+type Probes struct {
+	Config  []byte
+	Targets map[string][]byte // config/<name> (JSON target lists Cloudprober re-reads)
+	Ping    bool              // ping probes: the unit gets CAP_NET_RAW
+}
+
+// ProbePrefix in Probes.Config is replaced by the install prefix (generate.ProbePrefix).
+const ProbePrefix = "@PREFIX@"
 
 // Result of a run.
 type Result struct {
@@ -107,10 +123,12 @@ type eng struct {
 	bin     string            // collector binary usable for validate ("" = none)
 
 	// what this apply changed, for the rollback
-	firstInstall bool   // there was no config.yaml before
-	backupDir    string // backup of the files before this apply ("" = files unchanged)
-	binReplaced  bool   // the previous binary is in bin/otelcol-contrib.previous
-	rolledBack   bool
+	firstInstall     bool   // there was no config.yaml before
+	backupDir        string // backup of the files before this apply ("" = files unchanged)
+	binReplaced      bool   // the previous binary is in bin/otelcol-contrib.previous
+	probeBin         string // Cloudprober binary usable for --configtest ("" = none)
+	probeBinReplaced bool   // the previous Cloudprober is in bin/cloudprober.previous
+	rolledBack       bool
 
 	st    *state // what amc changed outside <prefix> (amc-state.json), for uninstall
 	files []file
@@ -149,6 +167,9 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	if o.Fetcher == nil {
 		o.Fetcher = collector.Fetch
 	}
+	if o.ProbeFetcher == nil {
+		o.ProbeFetcher = cloudprober.Fetch
+	}
 	if o.Runner == nil {
 		return Result{}, errors.New("engine: no Runner")
 	}
@@ -176,7 +197,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	defer os.RemoveAll(tmp)
 
 	for _, step := range []func(context.Context, string) bool{
-		e.preflight, e.userAndDirs, e.checkSecrets, e.collectorBinary, e.installFiles,
+		e.preflight, e.userAndDirs, e.checkSecrets, e.collectorBinary, e.probeBinary, e.installFiles,
 		e.selinux, e.readAccess, e.validate,
 	} {
 		if !step(ctx, tmp) {
@@ -428,6 +449,26 @@ func (e *eng) desiredFiles() ([]file, error) {
 		}
 		files = append(files, file{"systemd/" + u + ".service", b, 0o644})
 	}
+	if p := e.d.Probes; p != nil {
+		ud.Ping = p.Ping
+		b, err := assets.Unit(assets.ProbeUnit, ud)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file{"systemd/" + assets.ProbeUnit + ".service", b, 0o644},
+			file{"config/cloudprober.cfg", bytes.ReplaceAll(p.Config, []byte(ProbePrefix), []byte(e.o.Prefix)), 0o644})
+		var names []string
+		for n := range p.Targets {
+			if !probeTargetRE.MatchString(n) {
+				return nil, fmt.Errorf("invalid probe target file name %q", n)
+			}
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			files = append(files, file{"config/" + n, p.Targets[n], 0o644})
+		}
+	}
 	files = append(files,
 		file{"netconn/otel-netconn.sh", assets.Netconn(), 0o755},
 		file{"netconn/otel-kmsg.sh", assets.Kmsg(), 0o755},
@@ -648,6 +689,12 @@ func (e *eng) installFiles(context.Context, string) bool {
 		e.changedFiles = append(e.changedFiles, "config/site.d/"+n)
 		e.r.line("REMOVE config/site.d/%s (no longer wanted)", n)
 	}
+	staleProbe := e.staleProbeFiles()
+	for _, rel := range staleProbe {
+		changed = true
+		e.changedFiles = append(e.changedFiles, rel)
+		e.r.line("REMOVE %s (no longer wanted: probes)", rel)
+	}
 	if changed {
 		e.r.changes++
 	}
@@ -674,6 +721,11 @@ func (e *eng) installFiles(context.Context, string) bool {
 	for _, n := range stale {
 		if err := os.Remove(e.fs(e.pre("config/site.d", n))); err != nil {
 			e.r.fail("remove site.d/%s: %v", n, err)
+		}
+	}
+	for _, rel := range staleProbe {
+		if err := os.Remove(e.fs(e.pre(rel))); err != nil {
+			e.r.fail("remove %s: %v", rel, err)
 		}
 	}
 	e.r.ok("files installed")
@@ -790,6 +842,9 @@ func (e *eng) selinux(context.Context, string) bool {
 	paths := append(append([]string{}, dirs...), e.pre("bin/otelcol-contrib"), e.pre("netconn/otel-netconn.sh"),
 		e.pre("netconn/otel-kmsg.sh"), e.pre("netconn/otel-procs.sh"),
 		e.pre("netconn/otel-sshd.sh"))
+	if e.d.Probes != nil {
+		paths = append(paths, e.pre("bin/cloudprober"))
+	}
 	out, err := e.o.Runner.Output(nil, "stat", append([]string{"-c", "%C"}, paths...)...)
 	if err == nil && allBinT(out, len(paths)) {
 		e.r.ok("labels are bin_t")
@@ -873,7 +928,7 @@ func (e *eng) validate(ctx context.Context, tmp string) bool {
 	stage := filepath.Join(tmp, "stage")
 	args := []string{"validate"}
 	for _, f := range e.files {
-		if !strings.HasPrefix(f.rel, "config/") || strings.HasSuffix(f.rel, ".env") {
+		if !strings.HasPrefix(f.rel, "config/") || strings.HasSuffix(f.rel, ".env") || isProbeFile(f.rel) {
 			continue
 		}
 		p := filepath.Join(stage, filepath.FromSlash(f.rel))
@@ -914,6 +969,9 @@ func (e *eng) validate(ctx context.Context, tmp string) bool {
 		return false
 	}
 	e.r.ok("otelcol-contrib validate: VALID")
+	if !e.probeConfigTest(stage) {
+		return false
+	}
 	if e.o.Smoke {
 		return e.smoke(ctx, tmp, args[1:], env)
 	}
@@ -924,8 +982,9 @@ func (e *eng) validate(ctx context.Context, tmp string) bool {
 
 func (e *eng) units() {
 	e.r.step("9. systemd units")
+	e.dropProbeUnit()
 	var names []string
-	for _, u := range assets.UnitNames {
+	for _, u := range e.unitNames() {
 		name := u + ".service"
 		names = append(names, name)
 		e.st.add(&e.st.Units, name)
@@ -955,9 +1014,17 @@ func (e *eng) units() {
 	e.r.ok("linked + enabled: %s", strings.Join(names, " "))
 }
 
-func unitFiles() []string {
+// unitNames: the units this run manages (the Cloudprober unit only with probes).
+func (e *eng) unitNames() []string {
+	if e.d.Probes != nil {
+		return append(append([]string{}, assets.UnitNames...), assets.ProbeUnit)
+	}
+	return assets.UnitNames
+}
+
+func (e *eng) unitFiles() []string {
 	var names []string
-	for _, u := range assets.UnitNames {
+	for _, u := range e.unitNames() {
 		names = append(names, u+".service")
 	}
 	return names
@@ -973,7 +1040,7 @@ func (e *eng) start(ctx context.Context) {
 
 // restartAndCheck restarts the units, waits, and reports. quiet = rollback check (no failure counted again).
 func (e *eng) restartAndCheck(ctx context.Context, quiet bool) bool {
-	names := unitFiles()
+	names := e.unitFiles()
 	if err := e.o.Runner.Run("systemctl", append([]string{"restart"}, names...)...); err != nil && !quiet {
 		e.r.fail("systemctl restart: %v", err)
 	}

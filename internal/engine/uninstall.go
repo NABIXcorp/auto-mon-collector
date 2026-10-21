@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/NABIXcorp/auto-mon-collector/assets"
 )
 
 // UninstallOptions: what to remove besides the installation itself. Defaults keep everything that cannot
@@ -56,7 +58,10 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	e.r.step("1. systemd units")
 	units := st.Units
 	if len(units) == 0 {
-		units = unitFiles()
+		units = e.unitFiles()
+		if _, err := os.Lstat(e.fs("/etc/systemd/system/" + assets.ProbeUnit + ".service")); err == nil {
+			units = append(units, assets.ProbeUnit+".service")
+		}
 	}
 	e.doCmd("systemctl", append([]string{"stop"}, units...)...)
 	e.doCmd("systemctl", append([]string{"disable"}, units...)...)

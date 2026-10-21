@@ -28,6 +28,8 @@ type Answers struct {
 		// their profiles, and the Oracle listener check stays the only 127.0.0.1 endpoint.
 		TCP []TCPCheck `yaml:"tcp,omitempty"`
 	} `yaml:"checks,omitempty"`
+	// Probes (v0.12.0): Cloudprober probes from this host (tcp / http / ping), see probes.go. Empty = not installed.
+	Probes Probes `yaml:"probes,omitempty"`
 }
 
 // Service is one service's answers. Enabled nil = default (on when detected and amc has a profile).
@@ -133,6 +135,9 @@ func (a Answers) Validate() error {
 			return fmt.Errorf("checks.tcp: %q twice", c.Endpoint)
 		}
 		seen[c.Endpoint] = true
+	}
+	if err := a.Probes.validate(); err != nil {
+		return err
 	}
 	for name, s := range a.Services {
 		switch name {

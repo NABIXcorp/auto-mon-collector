@@ -13,7 +13,7 @@ import (
 //	nothing changed          -> nothing to undo: the failure was there before this apply
 func (e *eng) rollback(ctx context.Context) {
 	e.r.step("10b. rollback (a unit is not active)")
-	names := unitFiles()
+	names := e.unitFiles()
 	switch {
 	case e.firstInstall:
 		for _, args := range [][]string{append([]string{"stop"}, names...), append([]string{"disable"}, names...)} {
@@ -26,7 +26,7 @@ func (e *eng) rollback(ctx context.Context) {
 		e.r.ok("first install: units stopped and disabled (no restart loop); files kept for diagnosis")
 		e.r.line("next: journalctl -u %s, fix, then amc apply --start again", names[0])
 		return
-	case e.backupDir == "" && !e.binReplaced:
+	case e.backupDir == "" && !e.binReplaced && !e.probeBinReplaced:
 		e.r.line("nothing to undo: this apply changed no file and no binary (the problem existed before)")
 		return
 	}
@@ -59,6 +59,14 @@ func (e *eng) rollback(ctx context.Context) {
 			return
 		}
 		e.r.ok("previous collector binary restored")
+	}
+	if e.probeBinReplaced {
+		bin := e.fs(e.pre("bin/cloudprober"))
+		if err := os.Rename(bin+".previous", bin); err != nil {
+			e.r.fail("rollback cloudprober binary: %v", err)
+			return
+		}
+		e.r.ok("previous cloudprober binary restored")
 	}
 	if err := e.o.Runner.Run("systemctl", "daemon-reload"); err != nil {
 		e.r.fail("systemctl daemon-reload: %v", err)

@@ -28,6 +28,9 @@ type fakeRunner struct {
 	stopped  bool // the stop callback asked for an early stop
 	inactive int  // the next N `systemctl is-active` calls report "not active"
 	acl      bool // getfacl shows an entry for the collector user
+
+	probeVersion string // output of cloudprober --version ("" = not installed)
+	configtest   error  // cloudprober --configtest result
 }
 
 func (f *fakeRunner) Timed(_ context.Context, env []string, _ time.Duration, stop func(string) bool,
@@ -63,6 +66,13 @@ func (f *fakeRunner) Run(name string, args ...string) error {
 func (f *fakeRunner) Output(env []string, name string, args ...string) ([]byte, error) {
 	f.cmds = append(f.cmds, "OUT "+filepath.Base(name)+" "+strings.Join(args, " "))
 	switch {
+	case filepath.Base(name) == "cloudprober" && len(args) == 1 && args[0] == "--version":
+		return []byte(f.probeVersion + "\n"), nil
+	case filepath.Base(name) == "cloudprober" && len(args) > 0 && args[0] == "--configtest":
+		if f.configtest != nil {
+			return []byte("Config test failed. Err: unknown field: protocol\n"), f.configtest
+		}
+		return nil, nil
 	case len(args) == 1 && args[0] == "--version":
 		return []byte("otelcol-contrib version " + f.version + "\n"), nil
 	case name == "getfacl":
@@ -146,6 +156,11 @@ func run(t *testing.T, h host, r *fakeRunner, apply, start, fetch bool) (Result,
 
 func runSmoke(t *testing.T, h host, r *fakeRunner, apply, start, fetch, smoke bool) (Result, string) {
 	t.Helper()
+	return runWith(t, h, r, apply, start, fetch, smoke, desired())
+}
+
+func runWith(t *testing.T, h host, r *fakeRunner, apply, start, fetch, smoke bool, d Desired) (Result, string) {
+	t.Helper()
 	var out bytes.Buffer
 	res, err := Run(context.Background(), Options{
 		Root: h.root, Apply: apply, Start: start, Fetch: fetch, Smoke: smoke, Rollback: true, Arch: "amd64",
@@ -156,7 +171,11 @@ func runSmoke(t *testing.T, h host, r *fakeRunner, apply, start, fetch, smoke bo
 			p := filepath.Join(dir, "otelcol-contrib")
 			return p, os.WriteFile(p, []byte("BIN"), 0o755)
 		},
-	}, desired())
+		ProbeFetcher: func(_ context.Context, _, dir string) (string, error) {
+			p := filepath.Join(dir, "cloudprober")
+			return p, os.WriteFile(p, []byte("PROBER"), 0o755)
+		},
+	}, d)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -330,6 +330,9 @@ func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string) (en
 	if err != nil {
 		return d, err
 	}
+	if p := g.Probes; p != nil {
+		d.Probes = &engine.Probes{Config: p.Config, Targets: p.Targets, Ping: p.Ping}
+	}
 	d.Answers, err = a.Marshal()
 	return d, err
 }

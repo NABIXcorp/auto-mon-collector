@@ -31,6 +31,7 @@ type UnitData struct {
 	Prefix      string   // install root, e.g. /opt/monitoring
 	User        string   // collector user, e.g. otelcol-contrib
 	SiteConfigs []string // extra --config files (site.d overlay), absolute paths
+	Ping        bool     // monitoring-cloudprober: ping probes need CAP_NET_RAW
 }
 
 // Unit renders systemd/<name>.service.tmpl.
@@ -48,6 +49,9 @@ func Unit(name string, d UnitData) ([]byte, error) {
 
 // UnitNames are the systemd units amc manages, in start order.
 var UnitNames = []string{"monitoring-otelcol", "monitoring-netconn", "monitoring-kmsg", "monitoring-procs", "monitoring-sshd"}
+
+// ProbeUnit (v0.12.0) is the Cloudprober unit: managed only when the answers have probes.
+const ProbeUnit = "monitoring-cloudprober"
 
 func mustRead(p string) []byte {
 	b, err := files.ReadFile(p)

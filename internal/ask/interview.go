@@ -28,6 +28,7 @@ func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate
 	}
 	// connect checks to other hosts are not asked (answers file only): keep them, a new run must not drop them
 	a.Checks.TCP = prev.Checks.TCP
+	a.Probes = prev.Probes // Cloudprober probes (v0.12.0): answers file only, kept the same way
 	byID := map[string]detect.Finding{}
 	var profiles []string
 	for _, f := range fs {

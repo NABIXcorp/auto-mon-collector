@@ -3,7 +3,7 @@
 **An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
 up monitoring for what it finds.** It is not a collector distribution of its own.
 
-> **Status: v0.11.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.12.0, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
@@ -27,6 +27,10 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > configuration); the connection-count helper sets its file mode itself (a default ACL could make it world-writable).
 > v0.11.0: `checks.tcp` in answers.yaml: connect checks to other hosts (`host:port`): the links of a request path
 > (`tcpcheck.status` / `tcpcheck.duration`, attribute `tcpcheck.endpoint`); the Oracle listener stays the only `127.0.0.1` target.
+> v0.12.0: `probes:` in answers.yaml: TCP / HTTP(S) / ping probes run by [Cloudprober](https://github.com/cloudprober/cloudprober)
+> (pinned v0.14.6, sha256-checked, unit `monitoring-cloudprober`, only installed when there are probes; CAP_NET_RAW only for
+> ping), scraped by the local collector: `cloudprober_total` / `_success` / `_latency` (µs) / `_resp_code` /
+> `_ssl_earliest_cert_expiry_sec`, labels `probe`, `dst`, `target`. See [docs/design.md](docs/design.md#9-answers-file-no-secrets).
 
 ## What it does
 
