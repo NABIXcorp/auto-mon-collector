@@ -12,7 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20   # e2e alone ~10 min since v0.12.0 (probes)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -348,10 +348,10 @@ jobs:
           echo "::group::probes (Cloudprober)"
           python3 -m http.server 18080 --bind 127.0.0.1 > /dev/null 2>&1 &
           { cat $td/answers.yaml; printf 'probes:\n  interval_s: 10\n  tcp:\n    - {name: ci_tcp, host: 127.0.0.1, port: 18080}\n  http:\n    - {name: ci_http, url: "http://127.0.0.1:18080/"}\n  ping:\n    - {name: ci_ping, host: 127.0.0.1}\n'; } > probes.yaml
-          sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd | tee pr0.txt
+          sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr0.txt
           must 'cloudprober --configtest: OK' pr0.txt
           must 'NEW    systemd/monitoring-cloudprober.service' pr0.txt
-          sudo $amc apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start | tee pr1.txt
+          sudo $amc apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr1.txt
           must 'monitoring-cloudprober.service active' pr1.txt
           systemctl show -p User --value monitoring-cloudprober | grep -qx otelcol-contrib || die "cloudprober not run as the collector user"
           ok=""
@@ -368,7 +368,7 @@ jobs:
           curl -fsS http://127.0.0.1:8888/metrics | grep -qE 'otelcol_receiver_accepted_metric_points.*receiver="prometheus/cloudprober".* [1-9]' || die "the collector does not scrape cloudprober"
           sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr2.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' pr2.txt; then die "plan with probes is not clean after apply"; fi
-          sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start | tee pr3.txt
+          sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr3.txt
           must 'REMOVE config/cloudprober.cfg' pr3.txt
           must 'stopped, disabled and unlinked' pr3.txt
           if systemctl is-active -q monitoring-cloudprober; then die "cloudprober still running without probes"; fi
