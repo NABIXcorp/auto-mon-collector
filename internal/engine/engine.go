@@ -712,6 +712,8 @@ func (e *eng) installFiles(context.Context, string) bool {
 	} else {
 		e.firstInstall = true
 	}
+	// probes removed: stop + disable the Cloudprober unit while its unit file still exists (disable needs it)
+	e.dropProbeUnit()
 	for _, f := range e.files {
 		if err := e.writeFile(e.pre(f.rel), f.data, f.mode); err != nil {
 			e.r.fail("write %s: %v", f.rel, err)
@@ -982,7 +984,6 @@ func (e *eng) validate(ctx context.Context, tmp string) bool {
 
 func (e *eng) units() {
 	e.r.step("9. systemd units")
-	e.dropProbeUnit()
 	var names []string
 	for _, u := range e.unitNames() {
 		name := u + ".service"

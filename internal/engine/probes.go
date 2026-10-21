@@ -132,7 +132,8 @@ func (e *eng) probeConfigTest(stage string) bool {
 	return true
 }
 
-// dropProbeUnit: probes removed from the answers -> stop + disable the Cloudprober unit and unlink it.
+// dropProbeUnit: probes removed from the answers -> stop + disable the Cloudprober unit and unlink it. Runs in
+// apply BEFORE the files are written: `systemctl disable` needs the unit file that is removed with them.
 func (e *eng) dropProbeUnit() {
 	if e.d.Probes != nil {
 		return
@@ -143,7 +144,8 @@ func (e *eng) dropProbeUnit() {
 		return
 	}
 	if err := e.o.Runner.Run("systemctl", "disable", "--now", name); err != nil {
-		e.r.warn("systemctl disable --now %s: %v", name, err)
+		e.r.fail("systemctl disable --now %s: %v", name, err)
+		return
 	}
 	if err := os.Remove(link); err != nil {
 		e.r.fail("remove %s: %v", link, err)
