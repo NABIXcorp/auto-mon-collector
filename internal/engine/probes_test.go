@@ -76,6 +76,9 @@ func TestProbesApplyThenRemove(t *testing.T) {
 	if h.read("/opt/monitoring/bin/cloudprober") != "PROBER" {
 		t.Error("cloudprober binary not installed")
 	}
+	if u := h.read("/opt/monitoring/systemd/monitoring-cloudprober.service"); !strings.Contains(u, "--config_file=/opt/monitoring/config/cloudprober/cloudprober.cfg") {
+		t.Errorf("unit does not run the installed config:\n%s", u)
+	}
 	if u := h.read("/opt/monitoring/systemd/monitoring-cloudprober.service"); !strings.Contains(u, "AmbientCapabilities=CAP_NET_RAW") {
 		t.Errorf("ping unit without CAP_NET_RAW:\n%s", u)
 	}

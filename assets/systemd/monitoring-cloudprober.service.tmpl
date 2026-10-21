@@ -10,7 +10,7 @@ Wants=network-online.target
 Type=simple
 User={{.User}}
 Group={{.User}}
-ExecStart={{.Prefix}}/bin/cloudprober --config_file={{.Prefix}}/config/cloudprober.cfg --logfmt=text
+ExecStart={{.Prefix}}/bin/cloudprober --config_file={{.Prefix}}/config/cloudprober/cloudprober.cfg --logfmt=text
 Restart=on-failure
 RestartSec=10
 NoNewPrivileges=yes
