@@ -84,6 +84,7 @@ type Desired struct {
 	Groups     []string          // extra groups for the collector user (e.g. the Tomcat group for its logs)
 	Version    []byte            // VERSION file content
 	Answers    []byte            // <prefix>/answers.yaml (the operator's answers, no secrets); nil = not managed
+	Inventory  []byte            // <prefix>/inventory.json (v0.15.0, services for the agent); nil = not managed
 	// Probes (v0.12.0): Cloudprober config + target files; nil = no probes (Cloudprober is not installed, an
 	// installed one is stopped and its files removed)
 	Probes *Probes
@@ -108,8 +109,9 @@ type Result struct {
 	Changes            int // check mode: what would change ("would" actions + changed files); 0 = up to date
 	Applied            bool
 	RolledBack         bool // the units did not start; the previous state was restored (or a first install stopped)
-	// VersionOnly: the only change is the VERSION file (a new installer, identical configuration): no restart needed
-	VersionOnly bool
+	// NoRestart: only files no unit reads changed (VERSION = a new installer, inventory.json = the services found
+	// by the scan); the configuration is identical: write them, no restart needed
+	NoRestart bool
 }
 
 type file struct {
@@ -211,7 +213,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	// ACLs / groups / labels set above stay even if a later step fails: record them for uninstall now.
 	e.persistState()
 	res := Result{Failures: e.r.failures, Warnings: e.r.warnings, Changes: e.r.changes,
-		VersionOnly: e.r.changes == 1 && len(e.changedFiles) == 1 && e.changedFiles[0] == "VERSION"}
+		NoRestart: e.r.changes == 1 && e.onlyNoRestartFiles()}
 	if e.r.failures > 0 {
 		fmt.Fprintf(o.Out, "\nSTOP: %d failure(s), %d warning(s). Nothing restarted.\n", e.r.failures, e.r.warnings)
 		return res, nil
@@ -487,7 +489,23 @@ func (e *eng) desiredFiles() ([]file, error) {
 	if e.d.Answers != nil {
 		files = append(files, file{"answers.yaml", e.d.Answers, 0o644})
 	}
+	if e.d.Inventory != nil {
+		files = append(files, file{inventoryFile, e.d.Inventory, 0o644})
+	}
 	return files, nil
+}
+
+// inventoryFile = generate.InventoryFile (the engine does not import the generator).
+const inventoryFile = "inventory.json"
+
+// onlyNoRestartFiles: the changed files are all ones no unit reads (see Result.NoRestart).
+func (e *eng) onlyNoRestartFiles() bool {
+	for _, f := range e.changedFiles {
+		if f != "VERSION" && f != inventoryFile {
+			return false
+		}
+	}
+	return len(e.changedFiles) > 0
 }
 
 // ---- 2. user + directories ------------------------------------------------------------------------------

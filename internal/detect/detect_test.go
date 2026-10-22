@@ -92,7 +92,14 @@ func TestTomcatAndOracleHost(t *testing.T) {
 	h := newFake()
 	h.proc(100, "tnslsnr", []string{"tnslsnr", "LISTENER"}, nil, 1521)
 	h.proc(200, "ora_pmon_ORCL", []string{"ora_pmon_ORCL"}, map[string]string{"ORACLE_BASE": "/u01/app/oracle"})
+	h.proc(201, "ora_pmon_TEST2", []string{"ora_pmon_TEST2"}, nil)
 	h.m.Files["/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log"] = "x"
+	// webapps: exploded dirs, a WAR, a versioned and a nested name, a stray file; a context descriptor
+	for _, f := range []string{"ROOT/index.jsp", "shop/WEB-INF/web.xml", "shop.war", "api##v2.war", "shop#admin/x",
+		"notes.txt", ".hidden/x"} {
+		h.m.Files["/opt/tomcat/webapps/"+f] = "x"
+	}
+	h.m.Files["/opt/tomcat/conf/Catalina/localhost/reports.xml"] = "x"
 	h.proc(300, "java", []string{"/usr/bin/java", "-javaagent:/opt/jmx_exporter/jmx_prometheus_javaagent-1.0.1.jar=127.0.0.1:9404:/opt/jmx_exporter/tomcat.yml",
 		"-javaagent:/opt/otel/opentelemetry-javaagent-2.31.1.jar", "-Dcatalina.base=/opt/tomcat", "-Dcatalina.home=/opt/tomcat",
 		"org.apache.catalina.startup.Bootstrap", "start"}, nil, 8080, 8005, 9404)
@@ -118,6 +125,9 @@ func TestTomcatAndOracleHost(t *testing.T) {
 	if tc.Values["TOMCAT_JULI_LOGS"] != "" {
 		t.Errorf("catalina.out exists: the daily files are not used: %q", tc.Values["TOMCAT_JULI_LOGS"])
 	}
+	if got := strings.Join(tc.Apps, " "); got != "/ /api /reports /shop /shop/admin" {
+		t.Errorf("apps = %q", got)
+	}
 	if !strings.Contains(strings.Join(tc.Notes, " "), "OpenTelemetry Java agent") {
 		t.Errorf("otel agent not noticed: %v", tc.Notes)
 	}
@@ -125,6 +135,9 @@ func TestTomcatAndOracleHost(t *testing.T) {
 	if o == nil || o.Values["ORACLE_SID"] != "ORCL" || o.Values["ORACLE_SERVICE"] != "orcl" ||
 		o.Values["ORACLE_ALERT_LOG"] != "/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log" {
 		t.Errorf("oracle: %+v", o)
+	}
+	if o != nil && strings.Join(o.Instances, " ") != "ORCL TEST2" {
+		t.Errorf("oracle instances = %v", o.Instances)
 	}
 }
 

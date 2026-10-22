@@ -41,8 +41,8 @@ func TestUpdate(t *testing.T) {
 		{name: "--plan stops after the plan", extra: []string{"--plan"}, plan: engine.Result{Changes: 2}, code: exitOK, runs: 1, inOut: "2 change(s) planned"},
 		{name: "failures: nothing applied", plan: engine.Result{Failures: 1, Changes: 2}, code: exitPlan, runs: 1, inOut: "nothing was changed"},
 		{name: "not installed", missing: true, code: exitUsage, runs: 0},
-		{name: "only VERSION: apply without restart", plan: engine.Result{Changes: 1, VersionOnly: true}, code: exitOK, runs: 2, inOut: "NOT restarted"},
-		{name: "--plan, only VERSION", extra: []string{"--plan"}, plan: engine.Result{Changes: 1, VersionOnly: true}, code: exitOK, runs: 1, inOut: "no restart"},
+		{name: "only VERSION: apply without restart", plan: engine.Result{Changes: 1, NoRestart: true}, code: exitOK, runs: 2, inOut: "NOT restarted"},
+		{name: "--plan, only VERSION", extra: []string{"--plan"}, plan: engine.Result{Changes: 1, NoRestart: true}, code: exitOK, runs: 1, inOut: "no restart"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -76,7 +76,7 @@ func TestUpdate(t *testing.T) {
 			if calls[0].CheckHint != "-" {
 				t.Errorf("update prints its own hint, not the engine's `amc apply`: %q", calls[0].CheckHint)
 			}
-			if c.runs == 2 && (!calls[1].Apply || calls[1].Start == c.plan.VersionOnly || !calls[1].Rollback || calls[1].Smoke) {
+			if c.runs == 2 && (!calls[1].Apply || calls[1].Start == c.plan.NoRestart || !calls[1].Rollback || calls[1].Smoke) {
 				t.Errorf("second run = apply + rollback, start unless only VERSION changed, no second smoke run: %+v", calls[1])
 			}
 			if string(got.Site["10-site.yaml"]) != "processors: {}\n" || len(got.Site) != 1 {

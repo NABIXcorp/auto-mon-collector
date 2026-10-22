@@ -268,18 +268,18 @@ func update(args []string, stdout, stderr io.Writer) int {
 	case res.Changes == 0:
 		fmt.Fprintln(stdout, "\nupdate: up to date: nothing to change, nothing restarted.")
 		return exitOK
-	case *planOnly && res.VersionOnly:
-		fmt.Fprintln(stdout, "\nupdate: only the installer version changed (configuration identical): the update writes VERSION, no restart.")
+	case *planOnly && res.NoRestart:
+		fmt.Fprintln(stdout, "\nupdate: only the installer version / the service inventory changed (configuration identical): the update writes them, no restart.")
 		return exitOK
 	case *planOnly:
 		fmt.Fprintf(stdout, "\nupdate: %d change(s) planned. Apply: run the same command without --plan.\n", res.Changes)
 		return exitOK
 	}
-	// only VERSION differs: the running collector already has this configuration -> write it, do not restart
-	// (a restart resets cumulative counters for nothing)
-	opts.Apply, opts.Start = true, !res.VersionOnly
+	// only VERSION / inventory.json differ: the running collector already has this configuration -> write them, do
+	// not restart (a restart resets cumulative counters for nothing)
+	opts.Apply, opts.Start = true, !res.NoRestart
 	opts.Smoke = false // the identical configuration passed the smoke run seconds ago
-	versionOnly := res.VersionOnly
+	noRestart := res.NoRestart
 	if res, err = runEngine(ctx, opts, d); err != nil {
 		fmt.Fprintf(stderr, "amc update: %v\n", err)
 		return exitUsage
@@ -287,8 +287,8 @@ func update(args []string, stdout, stderr io.Writer) int {
 	if res.Failures > 0 || res.RolledBack {
 		return exitPlan
 	}
-	if versionOnly {
-		fmt.Fprintln(stdout, "\nupdate: only the installer version changed: VERSION written, collector NOT restarted.")
+	if noRestart {
+		fmt.Fprintln(stdout, "\nupdate: only the installer version / the service inventory changed: written, collector NOT restarted.")
 	}
 	return exitOK
 }
@@ -306,7 +306,8 @@ var openPrompter = func() (promptCloser, error) { return ask.OpenTTY() }
 func scan(detectPath string) (generate.Host, error) {
 	if detectPath == "" {
 		snap := detect.Collect(detectSource)
-		return generate.Host{Findings: detect.Detect(snap, detectSource), TimeZone: snap.TimeZone}, nil
+		return generate.Host{Findings: detect.Detect(snap, detectSource), TimeZone: snap.TimeZone, OS: snap.OS,
+			Listen: snap.Listens}, nil
 	}
 	b, err := os.ReadFile(detectPath)
 	if err != nil {
@@ -316,7 +317,7 @@ func scan(detectPath string) (generate.Host, error) {
 	if err := json.Unmarshal(b, &dj); err != nil {
 		return generate.Host{}, fmt.Errorf("%s: %w", detectPath, err)
 	}
-	return generate.Host{Findings: dj.Findings, TimeZone: dj.TimeZone}, nil
+	return generate.Host{Findings: dj.Findings, TimeZone: dj.TimeZone, OS: dj.OS, Listen: dj.Listen}, nil
 }
 
 // inputs besides the answers: install prefix (agent state) and the agent allowlist template file.
@@ -397,6 +398,7 @@ func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string, in 
 		d.Probes = &engine.Probes{Config: p.Config, Targets: p.Targets, Ping: p.Ping}
 	}
 	d.Agent = ag
+	d.Inventory = g.Inventory
 	d.Answers, err = a.Marshal()
 	return d, err
 }
@@ -440,6 +442,7 @@ type detectJSON struct {
 	OS       string           `json:"os"`
 	TimeZone string           `json:"time_zone"`
 	Ports    []int            `json:"listening_ports"`
+	Listen   []detect.Listen  `json:"listen,omitempty"` // v0.15.0: with the bind address (inventory)
 	Notes    []string         `json:"notes,omitempty"`
 	Findings []detect.Finding `json:"findings"`
 }
@@ -523,7 +526,7 @@ func detectCmd(args []string, stdout, stderr io.Writer) int {
 	if *asJSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(detectJSON{snap.OS, snap.TimeZone, snap.PortsListening(), snap.Notes, found}); err != nil {
+		if err := enc.Encode(detectJSON{snap.OS, snap.TimeZone, snap.PortsListening(), snap.Listens, snap.Notes, found}); err != nil {
 			fmt.Fprintf(stderr, "amc: %v\n", err)
 			return exitUsage
 		}

@@ -147,6 +147,7 @@ func desired() Desired {
 		ReadFiles:  []string{"/var/log/app/alert.log"},
 		Groups:     []string{"tomcat"},
 		Version:    []byte("installer=amc test\ncollector=" + collector.Version + "\n"),
+		Inventory:  []byte("{\"schema\": 1}\n"),
 	}
 }
 
@@ -645,12 +646,17 @@ func TestCheckCountsChanges(t *testing.T) {
 	}
 	// a new installer, identical configuration: only VERSION differs
 	h.write("/opt/monitoring/VERSION", "installer=amc older\n", 0o644)
-	if res, out := run(t, h, r, false, false, false); res.Changes != 1 || !res.VersionOnly {
-		t.Errorf("only VERSION changed: changes %d, VersionOnly %v, want 1 / true:\n%s", res.Changes, res.VersionOnly, out)
+	if res, out := run(t, h, r, false, false, false); res.Changes != 1 || !res.NoRestart {
+		t.Errorf("only VERSION changed: changes %d, NoRestart %v, want 1 / true:\n%s", res.Changes, res.NoRestart, out)
+	}
+	// v0.15.0: the inventory (a new webapp found by the scan) is not read by any unit either
+	h.write("/opt/monitoring/inventory.json", "{}\n", 0o644)
+	if res, out := run(t, h, r, false, false, false); res.Changes != 1 || !res.NoRestart {
+		t.Errorf("VERSION + inventory.json changed: changes %d, NoRestart %v, want 1 / true:\n%s", res.Changes, res.NoRestart, out)
 	}
 	h.write("/opt/monitoring/config/host.yaml", "receivers: {x: 1}\n", 0o644)
-	if res, out := run(t, h, r, false, false, false); res.Changes != 1 || res.VersionOnly {
-		t.Errorf("VERSION + host.yaml changed: changes %d (one files step), VersionOnly %v, want 1 / false:\n%s", res.Changes, res.VersionOnly, out)
+	if res, out := run(t, h, r, false, false, false); res.Changes != 1 || res.NoRestart {
+		t.Errorf("VERSION + host.yaml changed: changes %d (one files step), NoRestart %v, want 1 / false:\n%s", res.Changes, res.NoRestart, out)
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 type Host struct {
 	Findings []detect.Finding
 	TimeZone string
+	OS       string          // PRETTY_NAME (inventory only)
+	Listen   []detect.Listen // listening sockets with their bind address (inventory only)
 	// agent (v0.13.0, only with answers.agent): the effective allowlist (template + host extras) and the probe list
 	// the agent applied last (<prefix>/agent/state.json), so the generated Cloudprober files match the agent's
 	AgentAllow  Allow
@@ -27,6 +29,9 @@ type Output struct {
 	Enabled  []string    // services that will be monitored
 	Defaults []string    // values taken from a default or a guess (the questions in interactive mode)
 	Probes   *ProbeFiles // Cloudprober config + targets (nil = no probes, Cloudprober not installed)
+	// Inventory (v0.15.0): <prefix>/inventory.json, the services found by the scan; the agent sends it to the
+	// control plane (services per host). No collector unit reads it.
+	Inventory []byte
 }
 
 const defaultOracleUser = "otel_mon"
@@ -286,6 +291,7 @@ func Generate(h Host, a Answers) (Output, error) {
 		e.WriteString(kv + "\n")
 	}
 	out.HostEnv = []byte(e.String())
+	out.Inventory = Inventory(h, out.Enabled)
 	return out, nil
 }
 

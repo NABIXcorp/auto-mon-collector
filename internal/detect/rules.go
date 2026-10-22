@@ -19,6 +19,10 @@ type Finding struct {
 	PIDs       []int             `json:"pids"`
 	Values     map[string]string `json:"values,omitempty"`
 	Notes      []string          `json:"notes,omitempty"`
+	// v0.15.0, for the inventory (services per host): Oracle = every SID (ora_pmon_*, v1 monitors the first),
+	// Tomcat = the webapp context paths (webapps/ + conf/Catalina/localhost/*.xml)
+	Instances []string `json:"instances,omitempty"`
+	Apps      []string `json:"apps,omitempty"`
 }
 
 var (
@@ -81,12 +85,11 @@ func oracle(snap Snapshot, s Source) []Finding {
 		f.Notes = append(f.Notes, "listener only, no instance (ora_pmon_*) on this host")
 		return []Finding{f}
 	}
+	for _, i := range insts {
+		f.Instances = append(f.Instances, i.sid)
+	}
 	if len(insts) > 1 {
-		var sids []string
-		for _, i := range insts {
-			sids = append(sids, i.sid)
-		}
-		f.Notes = append(f.Notes, fmt.Sprintf("%d instances (%s): v1 monitors one, the first is used", len(insts), strings.Join(sids, ", ")))
+		f.Notes = append(f.Notes, fmt.Sprintf("%d instances (%s): v1 monitors one, the first is used", len(insts), strings.Join(f.Instances, ", ")))
 	}
 	in := insts[0]
 	f.PIDs = append(f.PIDs, in.p.PID)
@@ -197,8 +200,46 @@ func tomcat(snap Snapshot, s Source) []Finding {
 				f.Notes = append(f.Notes, "no catalina.out or catalina.<date>.log in "+logs+": answer services.tomcat.logs")
 			}
 		}
+		f.Apps = webapps(s, base)
 		out = append(out, f)
 	}
+	return out
+}
+
+// webapps lists the context paths Tomcat deploys from its base: webapps/<dir or .war> and
+// conf/Catalina/localhost/<name>.xml. Names follow Tomcat's rules: ROOT = /, "a#b" = /a/b, "##v2" = a version.
+func webapps(s Source, base string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		if name == "" || name[0] == '.' {
+			return
+		}
+		name, _, _ = strings.Cut(name, "##")
+		c := "/" + strings.ReplaceAll(name, "#", "/")
+		if name == "ROOT" {
+			c = "/"
+		}
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	names, _ := s.ReadDir(base + "/webapps")
+	for _, n := range names {
+		switch path.Ext(n) {
+		case ".war":
+			add(strings.TrimSuffix(n, ".war"))
+		case ".xml", ".txt", ".log", ".bak", ".old", ".tmp", ".gz", ".zip":
+		default:
+			add(n) // an exploded webapp directory
+		}
+	}
+	xmls, _ := s.Glob(base + "/conf/Catalina/localhost/*.xml")
+	for _, x := range xmls {
+		add(strings.TrimSuffix(path.Base(x), ".xml"))
+	}
+	sort.Strings(out)
 	return out
 }
 

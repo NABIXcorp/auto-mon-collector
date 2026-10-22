@@ -11,9 +11,9 @@ import (
 
 // Listen is one listening TCP socket.
 type Listen struct {
-	IP    string
-	Port  int
-	Inode string
+	IP    string `json:"ip"`
+	Port  int    `json:"port"`
+	Inode string `json:"-"`
 }
 
 // Proc is one process. Env holds ONLY the keys in envKeys: the environment of other processes can contain

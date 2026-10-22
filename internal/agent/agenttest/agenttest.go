@@ -26,6 +26,8 @@ const Token = "test-enrol-token-0123456789"
 type Server struct {
 	Priv ed25519.PrivateKey
 	Poll time.Duration // long poll (default 2 s)
+	// NoInventory: answer /v1/inventory with 404 (a control plane older than amc v0.15.0)
+	NoInventory bool
 
 	mu       sync.Mutex
 	hosts    map[string]ed25519.PublicKey
@@ -34,6 +36,8 @@ type Server struct {
 	maxRev   map[string]int64
 	force    map[string]bool // serve the stored document even when it is not newer than ?have= (replay test)
 	statuses []agent.Status
+	invs     []agent.Inventory
+	invCalls int
 	wake     chan struct{}
 	refuse   int // answer the next N signed requests with 401 (a proxy re-sending an old request after a restart)
 }
@@ -94,6 +98,13 @@ func (s *Server) Statuses() []agent.Status {
 	return append([]agent.Status{}, s.statuses...)
 }
 
+// Inventories received so far, and the number of inventory requests (incl. the refused ones).
+func (s *Server) Inventories() ([]agent.Inventory, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]agent.Inventory{}, s.invs...), s.invCalls
+}
+
 // Enrolled reports whether host has a key.
 func (s *Server) Enrolled(host string) bool {
 	s.mu.Lock()
@@ -122,7 +133,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.hosts[in.Host] = k
 		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"host": in.Host, "control_plane_key": "ed25519:IGNORED"})
-	case "/agent/v1/desired", "/agent/v1/status":
+	case "/agent/v1/desired", "/agent/v1/status", "/agent/v1/inventory":
 		host, body, ok := s.verify(r)
 		s.mu.Lock()
 		if s.refuse > 0 {
@@ -132,6 +143,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/agent/v1/inventory" {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.invCalls++
+			if s.NoInventory {
+				http.NotFound(w, r)
+				return
+			}
+			var inv agent.Inventory
+			if err := json.Unmarshal(body, &inv); err != nil {
+				http.Error(w, "bad inventory", http.StatusBadRequest)
+				return
+			}
+			s.invs = append(s.invs, inv)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if r.URL.Path == "/agent/v1/status" {

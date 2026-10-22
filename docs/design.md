@@ -149,8 +149,9 @@ rollback to the backup.
   (kept as is; `plan` / `apply` without `--site-dir` would remove it). Scan again, check run (validate + smoke);
   only after a clean check that changes something: apply + start + rollback (no second smoke run). An
   up-to-date host is NOT restarted (a restart resets cumulative counters). `--plan` stops after the check.
-  v0.10.1: only `VERSION` differs (`Result.VersionOnly`: a new installer, identical configuration) = apply
-  WITHOUT start (VERSION written, the running collector already has this configuration).
+  v0.10.1: only `VERSION` differs (a new installer, identical configuration) = apply WITHOUT start (VERSION
+  written, the running collector already has this configuration). v0.15.0: the same for `inventory.json`
+  (`Result.NoRestart`: only files no unit reads changed).
   No answers.yaml (install via `--host-dir`) = stop with exit 2. Changing answers / site.d is still
   `plan` / `apply --answers F [--site-dir D]`. The engine reports `Result.Changes` (check mode: "would"
   actions + changed files) for this decision.
@@ -599,6 +600,15 @@ agent picks it up within 15 s.
   any proxy.
 - `GET <url>v1/desired?have=N`: long poll (200 = newer signed document, 204 = nothing newer).
 - `POST <url>v1/status {"revision","result":"applied|rejected|error","detail","versions"}`.
+- v0.15.0: `POST <url>v1/inventory {"versions","revision","inventory","inventory_error"}`: at start and whenever the
+  body changes (a new revision applied, a new inventory.json after `amc update`). `inventory` = `<prefix>/inventory.json`
+  compacted (`null` + `inventory_error` when missing / larger than 48 KiB / not JSON). A 4xx (404 = a control plane
+  without the endpoint) is not retried until the body changes; other errors are retried with the next poll.
+  inventory.json (schema 1, root 644, written by plan / apply / update as root: the agent cannot read other users'
+  processes): `{"schema", "os", "services": [{"id", "monitored", "ports", "http_port", "instances" (Oracle SIDs),
+  "apps" (Tomcat context paths)}], "listen": [{"ip", "port", "service"}], "truncated"}` (max 256 sockets). An
+  allowlist of fields: no file paths, environment, pids or time stamps, so an unchanged host gives the same bytes.
+  The scan runs at plan / apply / update only: a service started later shows up after the next `amc update`.
 - Document `{host, revision, issued_at, expires_at, probes, sig}`; `sig` = Ed25519 (control-plane key) over the
   canonical JSON of the received document without `sig` (keys sorted by bytes, no whitespace, no HTML escaping,
   numbers as received). Shared test vectors: `testdata/agent/canonical.json`.

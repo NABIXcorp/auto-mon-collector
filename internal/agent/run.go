@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -128,6 +132,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	seen := int64(0) // highest revision handled (applied or rejected): never fetch the same one again
 	unauth := 0      // 401s in a row
+	sentInv := ""    // hash of the last inventory the control plane took (or refused): sent again only when it changes
 	for ctx.Err() == nil {
 		local, err := LoadLocal(cfg.Prefix)
 		if err != nil {
@@ -152,6 +157,21 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		seen = max(seen, st.Revision)
 		cl := &Client{Base: local.Agent.URL, Host: cfg.Host, Key: key, HTTP: cfg.HTTP, Now: cfg.Now}
+		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision); sum != sentInv {
+			var refused *RefusedError
+			switch err := cl.SendInventory(ctx, body); {
+			case err == nil:
+				sentInv = sum
+				lg.Printf("agent: inventory sent (revision %d)", st.Revision)
+			case errors.As(err, &refused):
+				sentInv = sum // the same body gets the same answer: wait for a change (or the next start)
+				lg.Printf("agent: inventory: %v (not sent again until it changes)", err)
+			case ctx.Err() != nil:
+				return nil
+			default:
+				lg.Printf("agent: inventory: %v (retried with the next poll)", err)
+			}
+		}
 		raw, err := cl.Desired(ctx, seen)
 		switch {
 		case ctx.Err() != nil:
@@ -219,6 +239,32 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	return nil
+}
+
+// maxInventory: a larger inventory.json is not sent (the control plane caps request bodies).
+const maxInventory = 48 << 10
+
+// inventoryBody builds the inventory request and its hash.
+func inventoryBody(prefix string, versions map[string]string, revision int64) ([]byte, string) {
+	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null")}
+	b, err := os.ReadFile(filepath.Join(prefix, generate.InventoryFile))
+	switch {
+	case os.IsNotExist(err):
+		inv.Error = generate.InventoryFile + " missing: run `amc update` (v0.15.0+)"
+	case err != nil:
+		inv.Error = err.Error()
+	case len(b) > maxInventory:
+		inv.Error = fmt.Sprintf("%s too large (%d bytes)", generate.InventoryFile, len(b))
+	case !json.Valid(b):
+		inv.Error = generate.InventoryFile + " is not valid JSON"
+	default:
+		var c bytes.Buffer
+		_ = json.Compact(&c, b)
+		inv.Services = c.Bytes()
+	}
+	body, _ := json.Marshal(inv)
+	sum := sha256.Sum256(body)
+	return body, hex.EncodeToString(sum[:])
 }
 
 // Enrol creates the host key, registers it with a one-time token and writes it (owner uid:gid, mode 600) only after

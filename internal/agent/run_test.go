@@ -104,6 +104,64 @@ func TestRunAgainstFakeControlPlane(t *testing.T) {
 	}
 }
 
+// v0.15.0: the inventory (versions + revision + inventory.json) goes out at start and again when it changes
+// (a new revision applied); a control plane without the endpoint (404) is asked once only.
+func TestInventorySent(t *testing.T) {
+	for _, old := range []bool{false, true} {
+		cp := agenttest.New()
+		cp.Poll = 200 * time.Millisecond
+		cp.NoInventory = old
+		srv := httptest.NewServer(cp)
+		pre := setupPrefix(t, cp.PublicKey(), srv.URL+"/agent/")
+		if err := os.WriteFile(filepath.Join(pre, generate.InventoryFile), []byte("{\n  \"schema\": 1,\n  \"services\": []\n}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := agent.Enrol(context.Background(), pre, "app-1", agenttest.Token, os.Getuid(), os.Getgid(), nil); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			_ = agent.Run(ctx, agent.Config{Prefix: pre, Host: "app-1", Run: (&fakeRun2{}).run,
+				Versions: map[string]string{"amc": "v-test"}, NotEnrolledWait: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond})
+			close(done)
+		}()
+		waitFor := func(what string, ok func() bool) {
+			t.Helper()
+			for i := 0; i < 150 && !ok(); i++ {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if !ok() {
+				invs, calls := cp.Inventories()
+				t.Fatalf("old=%v: %s: %d calls, %+v", old, what, calls, invs)
+			}
+		}
+		waitFor("inventory at start", func() bool { _, n := cp.Inventories(); return n >= 1 })
+		cp.Publish("app-1", 0, generate.Probes{TCP: []generate.TCPProbe{{Name: "link_web_db", Host: "db.example.com", Port: 5432}}}, 0, false, false)
+		waitFor("status", func() bool { return len(cp.Statuses()) == 1 })
+		if old {
+			time.Sleep(600 * time.Millisecond) // a few more polls
+			if _, n := cp.Inventories(); n != 2 {
+				t.Errorf("404: asked at start and once after the new revision (body changed), got %d calls", n)
+			}
+		} else {
+			waitFor("inventory after the revision", func() bool { i, _ := cp.Inventories(); return len(i) >= 2 })
+			invs, _ := cp.Inventories()
+			if invs[0].Revision != 0 || invs[0].Versions["amc"] != "v-test" || string(invs[0].Services) != `{"schema":1,"services":[]}` ||
+				invs[1].Revision != 1 {
+				t.Errorf("inventories: %+v", invs)
+			}
+			time.Sleep(600 * time.Millisecond)
+			if i, _ := cp.Inventories(); len(i) != 2 {
+				t.Errorf("an unchanged inventory was sent again: %d", len(i))
+			}
+		}
+		cancel()
+		srv.Close()
+		<-done
+	}
+}
+
 // v0.14.0: the FIRST 401 is retried quickly (a proxy re-sent the open long poll with the same nonce after a
 // control-plane restart); before, the agent waited its whole backoff (up to 5 min).
 func TestFirst401RetriedQuickly(t *testing.T) {

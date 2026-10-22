@@ -120,6 +120,40 @@ type Status struct {
 	Versions map[string]string `json:"versions,omitempty"`
 }
 
+// Inventory (v0.15.0) is sent at start and whenever it changes: the agent's versions, the revision it runs and the
+// host's services (<prefix>/inventory.json, written by amc apply / update as root).
+type Inventory struct {
+	Versions map[string]string `json:"versions,omitempty"`
+	Revision int64             `json:"revision"`
+	Services json.RawMessage   `json:"inventory"`                 // the file as written; null = missing (installed before v0.15.0)
+	Error    string            `json:"inventory_error,omitempty"` // why Services is null
+}
+
+// RefusedError: the control plane answered 4xx (not 401 / 429), e.g. 404 = an older control plane without
+// the endpoint. Sending the same body again would get the same answer.
+type RefusedError struct{ Code int }
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("control plane refused it: HTTP %d", e.Code)
+}
+
+// SendInventory posts an inventory.
+func (c *Client) SendInventory(ctx context.Context, body []byte) error {
+	resp, err := c.do(ctx, http.MethodPost, "v1/inventory", body, true)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode/100 == 2:
+		return nil
+	case resp.StatusCode/100 == 4:
+		return &RefusedError{resp.StatusCode}
+	default:
+		return fmt.Errorf("inventory: HTTP %d", resp.StatusCode)
+	}
+}
+
 // Report sends a status.
 func (c *Client) Report(ctx context.Context, s Status) error {
 	if len(s.Detail) > 500 {
