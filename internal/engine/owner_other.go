@@ -12,3 +12,5 @@ func ownerUID(os.FileInfo) (int, bool) { return 0, true }
 func rootOnly600(os.FileInfo, int) (bool, string) { return true, "not checked on this OS" }
 
 func ownedBy(os.FileInfo, int, int) bool { return true }
+
+func keepOwner(os.FileInfo, string) error { return nil }

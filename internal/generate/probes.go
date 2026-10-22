@@ -18,8 +18,9 @@ import (
 //	cloudprober_latency                                     cumulative MICROseconds of the successful probes
 //	cloudprober_resp_code{code}, cloudprober_ssl_earliest_cert_expiry_sec   HTTP probes
 //
-// Labels: probe (tcp, ping, http_<name>), dst (host:port, host), target (the name below). Names are labels used by
-// dashboards and alerts: keep them stable.
+// Labels: probe (tcp, ping_<name>, http_<name>), dst (host:port, host), target (the name below), path (v0.14.0, only
+// when a probe sets it: private | public | other = which address of the peer is checked, a mesh "strand"). Names are
+// labels used by dashboards and alerts: keep them stable.
 type Probes struct {
 	IntervalS int         `yaml:"interval_s,omitempty" json:"interval_s"` // default 30 (10-3600)
 	TCP       []TCPProbe  `yaml:"tcp,omitempty" json:"tcp"`
@@ -31,17 +32,23 @@ type TCPProbe struct {
 	Name string `yaml:"name" json:"name"`
 	Host string `yaml:"host" json:"host"`
 	Port int    `yaml:"port" json:"port"`
+	Path string `yaml:"path,omitempty" json:"path,omitempty"` // v0.14.0: private | public | other (metrics label)
 }
 
 type HTTPProbe struct {
 	Name string `yaml:"name" json:"name"`
 	URL  string `yaml:"url" json:"url"`
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
 }
 
 type PingProbe struct {
 	Name string `yaml:"name" json:"name"`
 	Host string `yaml:"host" json:"host"`
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
 }
+
+// probePaths: the allowed values of `path` ("" = no label).
+var probePaths = map[string]bool{"": true, "private": true, "public": true, "other": true}
 
 // ProbePort is Cloudprober's own HTTP port (metrics), on 127.0.0.1 only.
 const ProbePort = 9313
@@ -94,9 +101,18 @@ func (p Probes) validate() error {
 		seen[n] = true
 		return nil
 	}
+	path := func(kind, n, v string) error {
+		if !probePaths[v] {
+			return fmt.Errorf("probes.%s %s: path %q: private, public or other", kind, n, v)
+		}
+		return nil
+	}
 	tcp := map[string]bool{}
 	for _, t := range p.TCP {
 		if err := name("tcp", t.Name); err != nil {
+			return err
+		}
+		if err := path("tcp", t.Name, t.Path); err != nil {
 			return err
 		}
 		if !validProbeHost(t.Host) {
@@ -115,6 +131,9 @@ func (p Probes) validate() error {
 		if err := name("http", h.Name); err != nil {
 			return err
 		}
+		if err := path("http", h.Name, h.Path); err != nil {
+			return err
+		}
 		u, err := url.Parse(h.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || !validProbeHost(u.Hostname()) {
 			return fmt.Errorf("probes.http %s: %q is not an http(s) URL", h.Name, h.URL)
@@ -129,6 +148,9 @@ func (p Probes) validate() error {
 	ping := map[string]bool{}
 	for _, g := range p.Ping {
 		if err := name("ping", g.Name); err != nil {
+			return err
+		}
+		if err := path("ping", g.Name, g.Path); err != nil {
 			return err
 		}
 		if !validProbeHost(g.Host) {
@@ -165,8 +187,10 @@ func ipOf(h string) string {
 	return ""
 }
 
-// probeFiles builds the Cloudprober config (textproto) and its target files. TCP and ping use file targets: they
-// are re-read every 30 s, so a later version can change the list without a restart (mesh).
+// probeFiles builds the Cloudprober config (textproto) and its target files. TCP uses file targets: they are re-read
+// every 30 s, so the agent can change the list without a restart (mesh). Ping: one probe per target with FIXED labels
+// (v0.14.0): Cloudprober drops the target's labels when a ping target's DNS name does not resolve ("Bad target"), so a
+// ping of an unresolvable name came out as target="" (tested 2026-10-22, Cloudprober v0.14.6).
 func probeFiles(p Probes) *ProbeFiles {
 	if p.Empty() {
 		return nil
@@ -184,32 +208,48 @@ func probeFiles(p Probes) *ProbeFiles {
 	common := func(name, ptype string) {
 		fmt.Fprintf(&b, "probe {\n  name: %q\n  type: %s\n", name, ptype)
 	}
-	tail := func() {
-		fmt.Fprintf(&b, "  interval_msec: %d\n  timeout_msec: %d\n", iv*1000, timeout)
-		b.WriteString("  additional_label { key: \"target\" value: \"@target.label.target@\" }\n}\n\n")
-	}
-	fileProbe := func(name, ptype, file, extra string) {
-		common(name, ptype)
-		fmt.Fprintf(&b, "  targets { file_targets { file_path: \"%s/%s/%s\" re_eval_sec: 30 } }\n", ProbePrefix, ProbeDir, file)
-		b.WriteString("  targets_update_sec: 30\n" + extra)
-		tail()
+	timing := func() { fmt.Fprintf(&b, "  interval_msec: %d\n  timeout_msec: %d\n", iv*1000, timeout) }
+	// tail: labels taken from the target (file / endpoint targets) + optional fixed labels, then close the probe
+	tail := func(fromTarget []string, fixed [][2]string) {
+		timing()
+		for _, k := range fromTarget {
+			fmt.Fprintf(&b, "  additional_label { key: %q value: \"@target.label.%s@\" }\n", k, k)
+		}
+		for _, kv := range fixed {
+			fmt.Fprintf(&b, "  additional_label { key: %q value: %q }\n", kv[0], kv[1])
+		}
+		b.WriteString("}\n\n")
 	}
 	if len(p.TCP) > 0 {
 		var ts []fileTarget
+		withPath := false
 		for _, t := range p.TCP {
-			ts = append(ts, fileTarget{Name: t.Host, IP: ipOf(t.Host), Port: t.Port, Labels: map[string]string{"target": t.Name}})
+			l := map[string]string{"target": t.Name}
+			if t.Path != "" {
+				l["path"], withPath = t.Path, true
+			}
+			ts = append(ts, fileTarget{Name: t.Host, IP: ipOf(t.Host), Port: t.Port, Labels: l})
 		}
 		pf.Targets["cloudprober-tcp.json"] = targetsJSON(ts)
-		fileProbe("tcp", "TCP", "cloudprober-tcp.json", "")
-	}
-	if len(p.Ping) > 0 {
-		var ts []fileTarget
-		for _, g := range p.Ping {
-			ts = append(ts, fileTarget{Name: g.Host, IP: ipOf(g.Host), Labels: map[string]string{"target": g.Name}})
+		common("tcp", "TCP")
+		fmt.Fprintf(&b, "  targets { file_targets { file_path: \"%s/%s/%s\" re_eval_sec: 30 } }\n", ProbePrefix, ProbeDir, "cloudprober-tcp.json")
+		b.WriteString("  targets_update_sec: 30\n")
+		labels := []string{"target"}
+		if withPath {
+			labels = append(labels, "path") // only then: hosts without paths keep exactly the v0.13.0 metrics
 		}
-		pf.Targets["cloudprober-ping.json"] = targetsJSON(ts)
+		tail(labels, nil)
+	}
+	for _, g := range p.Ping {
+		common("ping_"+g.Name, "PING")
+		fmt.Fprintf(&b, "  targets { host_names: %q }\n", g.Host)
 		// raw socket + CAP_NET_RAW (the datagram socket would need net.ipv4.ping_group_range, a system setting)
-		fileProbe("ping", "PING", "cloudprober-ping.json", "  ping_probe { use_datagram_socket: false }\n")
+		b.WriteString("  ping_probe { use_datagram_socket: false }\n")
+		fixed := [][2]string{{"target", g.Name}}
+		if g.Path != "" {
+			fixed = append(fixed, [2]string{"path", g.Path})
+		}
+		tail(nil, fixed)
 	}
 	for _, h := range p.HTTP {
 		u, _ := url.Parse(h.URL)
@@ -231,7 +271,11 @@ func probeFiles(p Probes) *ProbeFiles {
 		}
 		fmt.Fprintf(&b, " labels { key: \"target\" value: %q } } }\n", h.Name)
 		fmt.Fprintf(&b, "  http_probe {\n    protocol: %s\n    port: %s\n    relative_url: %q\n  }\n", strings.ToUpper(u.Scheme), port, rel)
-		tail()
+		var fixed [][2]string
+		if h.Path != "" {
+			fixed = [][2]string{{"path", h.Path}}
+		}
+		tail([]string{"target"}, fixed)
 	}
 	b.WriteString(probeSurfacer)
 	pf.Config = []byte(b.String())

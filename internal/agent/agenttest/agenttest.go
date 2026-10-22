@@ -35,6 +35,14 @@ type Server struct {
 	force    map[string]bool // serve the stored document even when it is not newer than ?have= (replay test)
 	statuses []agent.Status
 	wake     chan struct{}
+	refuse   int // answer the next N signed requests with 401 (a proxy re-sending an old request after a restart)
+}
+
+// Refuse401 makes the next n signed requests fail with 401 ("nonce reused" after a control-plane restart).
+func (s *Server) Refuse401(n int) {
+	s.mu.Lock()
+	s.refuse = n
+	s.mu.Unlock()
 }
 
 // New makes a fake with a fresh control-plane key.
@@ -116,6 +124,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"host": in.Host, "control_plane_key": "ed25519:IGNORED"})
 	case "/agent/v1/desired", "/agent/v1/status":
 		host, body, ok := s.verify(r)
+		s.mu.Lock()
+		if s.refuse > 0 {
+			s.refuse--
+			ok = false
+		}
+		s.mu.Unlock()
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

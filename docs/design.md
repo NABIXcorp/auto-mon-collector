@@ -328,15 +328,16 @@ probes:                                 # v0.12.0: Cloudprober probes from this 
 second small agent next to the collector. Empty = Cloudprober is not installed; removing all probes later stops,
 disables and unlinks its unit and removes its files (the binary stays until `amc uninstall`).
 - Install: pinned v0.14.6 (`internal/cloudprober`, release tarball checked against the pinned SHA-256, only the
-  binary is extracted) -> `bin/cloudprober`; `config/cloudprober.cfg` (generated) + `config/cloudprober-tcp.json` /
-  `cloudprober-ping.json` (file targets, re-read every 30 s: a later version can change the list without a restart);
+  binary is extracted) -> `bin/cloudprober`; `config/cloudprober.cfg` (generated) + `config/cloudprober-tcp.json`
+  (file targets, re-read every 30 s: the agent changes the list without a restart); ping = one probe per target with
+  fixed labels (v0.14.0, see below);
   unit `monitoring-cloudprober` (collector user, sandboxed, `MemoryMax=150M`; `CAP_NET_RAW` only when there are ping
   probes: raw ICMP socket, `net.ipv4.ping_group_range` is not touched). `plan` runs `cloudprober --configtest`.
 - Metrics: Cloudprober listens on `127.0.0.1:9313` only; the collector scrapes it (`prometheus/cloudprober`, interval =
   `interval_s`) and keeps `cloudprober_total`, `_success`, `_failure`, `_timeouts`, `_latency` (cumulative
   MICROseconds of the successful probes), `_resp_code{code}`, `_ssl_earliest_cert_expiry_sec`. Labels: `probe`
-  (`tcp`, `ping`, `http_<name>`), `dst` (`host:port` / host), `target` (the name above; keep names stable, they are
-  labels).
+  (`tcp`, `ping_<name>`, `http_<name>`), `dst` (`host:port` / host), `target` (the name above; keep names stable, they
+  are labels), `path` (v0.14.0, only when a probe sets it).
 - Names: `a-z 0-9 _`, unique over all probes. Hosts: a DNS name or an IP; URLs: http(s) without credentials. Loopback
   targets are allowed (unlike `checks.tcp`). Not asked interactively; an interactive run or `amc update` keeps them.
 - PromQL: up (share of successful probes) = `increase(cloudprober_success[5m]) / increase(cloudprober_total[5m])`;
@@ -344,6 +345,15 @@ disables and unlinks its unit and removes its files (the binary stays until `amc
   `cloudprober_ssl_earliest_cert_expiry_sec / 86400`.
 - v0.13.0: Cloudprober's files live in `config/cloudprober/` (own directory: the agent may replace exactly these files);
   v0.12.0 files directly in `config/` are removed on the next apply (`REMOVE config/cloudprober.cfg`).
+- v0.14.0: optional `path: private | public | other` per tcp / http / ping probe (answers or the agent's list) = which
+  address of a peer is checked (a mesh "strand": the same peer over its private and its public address). It becomes
+  the metrics label `path` (tcp: file-target label + `additional_label`; http / ping: a fixed `additional_label`);
+  without any `path` the config and the metrics are exactly as before. A control plane may send `path` only to agents
+  >= v0.14.0: older agents refuse unknown fields.
+- v0.14.0: ping = one Cloudprober probe per target (`ping_<name>`) with FIXED `target` / `path` labels. Before, all
+  pings shared one probe with file targets, and Cloudprober drops a file target's labels when its DNS name does not
+  resolve ("Bad target") -> `target=""` (tested with Cloudprober v0.14.6). The probe label changes `ping` ->
+  `ping_<name>`; `target` is unchanged.
 
 `checks.tcp` (v0.11.0): TCP connect checks from this host to OTHER hosts (`host:port`, `[IPv6]:port`), e.g. the
 database or the next hop of a request path, so a dashboard can show the state of each link. One `tcp_check` receiver
@@ -530,6 +540,12 @@ Existing installations keep running unchanged until phase 5.
 ---
 
 ## 17. Agent (v0.13.0): probe lists from a control plane
+
+v0.14.0 changes: (1) after the FIRST 401 the agent retries once after 12 s with a new request (fresh nonce) before
+its backoff (up to 5 min): right after a control-plane restart a proxy can re-send the open long poll with the SAME
+nonce -> "nonce reused"; (2) probes may carry `path` (see 9); (3) backup / rollback copies keep owner, setgid and the
+exact file mode (a rollback restored `config/cloudprober` as a plain root 0775 directory: the agent could no longer
+replace its files until the next apply).
 
 `amc agent` lets a control plane (for example a monitoring wall where an admin draws a link and answers "what to
 observe?") change the PROBES of a host within seconds, without SSH and without `amc apply`. The idea is the one of

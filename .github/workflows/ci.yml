@@ -409,14 +409,15 @@ jobs:
           nstatus() { curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; print(len(json.load(sys.stdin) or []))'; }
           last() { curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; s=json.load(sys.stdin)[-1]; print(s["revision"], s["result"], s.get("detail",""))'; }
           waitn() { for i in $(seq 1 90); do [ "$(nstatus)" -ge "$1" ] && return 0; sleep 1; done; sudo journalctl -u monitoring-agent -n 30 --no-pager; die "no status $1 from the agent"; }
-          P='"probes":{"interval_s":10,"tcp":[{"name":"link_ci_tcp","host":"127.0.0.1","port":18080}],"http":[{"name":"link_ci_http","url":"http://127.0.0.1:18080/"}],"ping":[]}'
+          # v0.14.0: `path` (mesh strand) on the probes -> label path="private" / "public" in the metrics
+          P='"probes":{"interval_s":10,"tcp":[{"name":"link_ci_tcp","host":"127.0.0.1","port":18080,"path":"private"}],"http":[{"name":"link_ci_http","url":"http://127.0.0.1:18080/","path":"public"}],"ping":[]}'
           publish "{\"host\":\"$host\",$P}"
           waitn 1; last | tee -a ag-status.txt | grep -q '^1 applied' || die "revision 1 not applied: $(last)"
           ok=""
           for i in $(seq 1 60); do
             m=$(curl -fsS http://127.0.0.1:9313/metrics || true)
-            if echo "$m" | grep -qE '^cloudprober_success\{.*target="link_ci_tcp".*\} [1-9]' &&
-               echo "$m" | grep -qE '^cloudprober_success\{.*target="link_ci_http".*\} [1-9]'; then ok=1; break; fi
+            if echo "$m" | grep -E '^cloudprober_success\{.*target="link_ci_tcp".*\} [1-9]' | grep -q 'path="private"' &&
+               echo "$m" | grep -E '^cloudprober_success\{.*target="link_ci_http".*\} [1-9]' | grep -q 'path="public"'; then ok=1; break; fi
             sleep 1
           done
           [ -n "$ok" ] || { echo "$m" | grep '^cloudprober_' ; sudo journalctl -u monitoring-agent -n 20 --no-pager; die "agent probes give no results"; }

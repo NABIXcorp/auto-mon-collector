@@ -33,6 +33,7 @@ type Config struct {
 	// test knobs (0 = defaults)
 	NotEnrolledWait time.Duration // 15 s
 	MaxBackoff      time.Duration // 5 min
+	UnauthRetry     time.Duration // 12 s: one quick retry after the FIRST 401 (v0.14.0)
 }
 
 // Local is the host owner's side: answers (own probes + agent section) and the effective allowlist.
@@ -81,6 +82,9 @@ func (c *Config) defaults() {
 	if c.MaxBackoff == 0 {
 		c.MaxBackoff = 5 * time.Minute
 	}
+	if c.UnauthRetry == 0 {
+		c.UnauthRetry = 12 * time.Second
+	}
 }
 
 func loadKey(prefix string) (ed25519.PrivateKey, error) {
@@ -123,6 +127,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return sleep(ctx, backoff/2+time.Duration(mrand.Int64N(int64(backoff/2)+1))) // jitter
 	}
 	seen := int64(0) // highest revision handled (applied or rejected): never fetch the same one again
+	unauth := 0      // 401s in a row
 	for ctx.Err() == nil {
 		local, err := LoadLocal(cfg.Prefix)
 		if err != nil {
@@ -152,6 +157,16 @@ func Run(ctx context.Context, cfg Config) error {
 		case ctx.Err() != nil:
 			return nil
 		case errors.Is(err, ErrUnauthorized):
+			// One quick retry first (a new request = a fresh nonce): right after a control-plane restart a proxy can
+			// re-send the open long poll with the SAME nonce -> 401 "nonce reused"; before v0.14.0 the agent then
+			// waited its full backoff (up to 5 min). A real refusal (revoked, clock skew) gets 401 again -> backoff.
+			if unauth++; unauth == 1 {
+				lg.Printf("agent: %v: retrying once in %s", err, cfg.UnauthRetry)
+				if !sleep(ctx, cfg.UnauthRetry) {
+					return nil
+				}
+				continue
+			}
 			lg.Printf("agent: %v", err)
 			wait(cfg.MaxBackoff)
 			continue
@@ -160,10 +175,10 @@ func Run(ctx context.Context, cfg Config) error {
 			wait(0)
 			continue
 		case raw == nil:
-			backoff = 0
+			backoff, unauth = 0, 0
 			continue
 		}
-		backoff = 0
+		backoff, unauth = 0, 0
 		doc, verr := Verify(raw, ed25519.PublicKey(cpKey), cfg.Host, st.Revision, cfg.Now(), local.Allow)
 		status := Status{Revision: doc.Revision, Versions: cfg.Versions}
 		var rej *Reject

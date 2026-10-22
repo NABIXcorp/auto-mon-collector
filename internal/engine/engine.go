@@ -785,11 +785,15 @@ func copyTree(src, dst string) error {
 		return err
 	}
 	if fi.IsDir() {
-		// keep the directory mode: a restored config/ must stay readable for the collector user
+		// keep the directory mode, setgid and owner: a restored config/ must stay readable for the collector user,
+		// a restored config/cloudprober/ must stay root:amc-agent 2775 for the agent (lost before v0.14.0)
 		if err := os.MkdirAll(dst, fi.Mode().Perm()); err != nil {
 			return err
 		}
-		if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
+		if err := keepOwner(fi, dst); err != nil {
+			return err
+		}
+		if err := os.Chmod(dst, fi.Mode().Perm()|(fi.Mode()&os.ModeSetgid)); err != nil {
 			return err
 		}
 		entries, err := os.ReadDir(src)
@@ -813,7 +817,13 @@ func copyTree(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(dst, b, fi.Mode().Perm())
+	if err := os.WriteFile(dst, b, fi.Mode().Perm()); err != nil {
+		return err
+	}
+	if err := os.Chmod(dst, fi.Mode().Perm()); err != nil { // WriteFile applies the umask (0664 -> 0644)
+		return err
+	}
+	return keepOwner(fi, dst)
 }
 
 // ---- 6. SELinux -----------------------------------------------------------------------------------------

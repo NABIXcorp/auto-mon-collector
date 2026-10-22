@@ -31,6 +31,9 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > (pinned v0.14.6, sha256-checked, unit `monitoring-cloudprober`, only installed when there are probes; CAP_NET_RAW only for
 > ping), scraped by the local collector: `cloudprober_total` / `_success` / `_latency` (µs) / `_resp_code` /
 > `_ssl_earliest_cert_expiry_sec`, labels `probe`, `dst`, `target`. See [docs/design.md](docs/design.md#9-answers-file-no-secrets).
+> v0.14.0: probes may carry `path: private | public | other` (label `path` in the metrics: mesh per address); ping =
+> one probe per target (a ping of an unresolvable name lost its `target` label); the agent retries once quickly after
+> the first 401; backup / rollback keep owner, setgid and file modes (agent directory after a rollback).
 > v0.13.0: `amc agent`: a control plane changes a host's PROBES online (signed lists, long poll, outbound only, no open
 > port). Data only (no commands, no paths), user `amc-agent` without root (polkit: may restart Cloudprober only),
 > allowlist owned by the host (`agent.allow` + project template `--agent-allow FILE`), `cloudprober --configtest` before

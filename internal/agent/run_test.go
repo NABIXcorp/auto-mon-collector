@@ -103,3 +103,35 @@ func TestRunAgainstFakeControlPlane(t *testing.T) {
 		t.Fatal("agent did not stop")
 	}
 }
+
+// v0.14.0: the FIRST 401 is retried quickly (a proxy re-sent the open long poll with the same nonce after a
+// control-plane restart); before, the agent waited its whole backoff (up to 5 min).
+func TestFirst401RetriedQuickly(t *testing.T) {
+	cp := agenttest.New()
+	cp.Poll = 300 * time.Millisecond
+	srv := httptest.NewServer(cp)
+	defer srv.Close()
+	pre := setupPrefix(t, cp.PublicKey(), srv.URL+"/agent/")
+	if err := agent.Enrol(context.Background(), pre, "app-1", agenttest.Token, os.Getuid(), os.Getgid(), nil); err != nil {
+		t.Fatal(err)
+	}
+	cp.Refuse401(1)
+	cp.Publish("app-1", 0, generate.Probes{TCP: []generate.TCPProbe{{Name: "link_web_db", Host: "db.example.com", Port: 5432}}}, 0, false, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		// a long MaxBackoff: if the agent backed off after the first 401 the status would not arrive in time
+		_ = agent.Run(ctx, agent.Config{Prefix: pre, Host: "app-1", Run: (&fakeRun2{}).run,
+			NotEnrolledWait: 50 * time.Millisecond, MaxBackoff: time.Hour, UnauthRetry: 100 * time.Millisecond})
+		close(done)
+	}()
+	for i := 0; i < 150 && len(cp.Statuses()) == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s := cp.Statuses(); len(s) == 0 || s[0].Result != "applied" {
+		t.Fatalf("after one 401 the list should be applied within ~3 s: %+v", s)
+	}
+	cancel()
+	<-done
+}

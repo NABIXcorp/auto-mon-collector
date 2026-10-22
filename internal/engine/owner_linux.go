@@ -23,6 +23,16 @@ func ownerUID(fi os.FileInfo) (int, bool) {
 	return int(st.Uid), true
 }
 
+// keepOwner gives dst the owner of src (backup / rollback copies: the agent's config/cloudprober is root:amc-agent).
+// Only as root; a normal user (tests) cannot chown.
+func keepOwner(src os.FileInfo, dst string) error {
+	st, ok := src.Sys().(*syscall.Stat_t)
+	if !ok || os.Geteuid() != 0 {
+		return nil
+	}
+	return os.Lchown(dst, int(st.Uid), int(st.Gid))
+}
+
 // ownedBy: uid / gid of a file are these. Only checked when amc runs as root (tests run as a normal user in a
 // temp dir: owners cannot be set there).
 func ownedBy(fi os.FileInfo, uid, gid int) bool {
