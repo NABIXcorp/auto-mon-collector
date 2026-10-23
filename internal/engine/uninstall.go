@@ -104,7 +104,7 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	}
 
 	e.r.step("4. files in %s", o.Prefix)
-	remove := []string{"bin", "config", "systemd", "netconn", "agent", "VERSION", "answers.yaml", StateFile}
+	remove := []string{"bin", "config", "systemd", "netconn", "agent", "VERSION", "answers.yaml", inventoryFile, StateFile}
 	keep := []string{}
 	if u.PurgeData {
 		remove = append(remove, "data", "backup")

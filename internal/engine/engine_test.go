@@ -526,6 +526,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 		t.Error("user removed without --purge")
 	}
 	for _, gone := range []string{"opt/monitoring/bin", "opt/monitoring/config", "opt/monitoring/amc-state.json",
+		"opt/monitoring/inventory.json", // v0.15.0: CI e2e found it left behind (prefix not empty)
 		"etc/systemd/system/monitoring-otelcol.service"} {
 		if _, err := os.Lstat(filepath.Join(h.root, gone)); err == nil {
 			t.Errorf("%s still there", gone)
