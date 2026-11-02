@@ -481,3 +481,38 @@ jobs:
           grep " gitleaks_${v}_linux_x64.tar.gz$" "gitleaks_${v}_checksums.txt" | sha256sum -c -
           tar -xzf "gitleaks_${v}_linux_x64.tar.gz" gitleaks
           ./gitleaks detect --source . --no-banner --redact -v
+
+  # Phase D1: our own collector build (collector/, OCB) with the netconn + procs receivers. Separate Go modules,
+  # so the root `go test ./...` does not see them.
+  collector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # cold OCB build ~11 min (module download), warm ~1 min
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: collector/receiver/netconnreceiver/go.mod
+          cache-dependency-path: collector/receiver/*/go.sum
+      - name: vet + test our receivers
+        run: |
+          for m in collector/receiver/*/; do (cd "$m" && go vet ./... && go test -race ./...); done
+      - name: OCB build (linux amd64, static)
+        run: |
+          v=$(awk '/^  version:/ {print $2}' collector/builder-config.yaml)
+          go install "go.opentelemetry.io/collector/cmd/builder@v$v"
+          cd collector && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 builder --config builder-config.yaml
+          ls -l _build/monitoring-collector
+          ./_build/monitoring-collector --version
+      - name: validate + smoke run (debug exporter, nothing is sent)
+        run: |
+          set -euo pipefail
+          b=collector/_build/monitoring-collector
+          $b validate --config collector/testdata/smoke.yaml
+          python3 -m http.server 8080 --bind 127.0.0.1 >/dev/null 2>&1 & s=$!
+          sleep 1; exec 3<>/dev/tcp/127.0.0.1/8080
+          timeout 10 $b --config collector/testdata/smoke.yaml > smoke.log 2>&1 || true
+          kill $s
+          grep -q 'log_type: Str(netconn)' smoke.log || { tail -n 40 smoke.log; echo "::error::no netconn records"; exit 1; }
+          grep -q 'log_type: Str(processes)' smoke.log || { tail -n 40 smoke.log; echo "::error::no procs records"; exit 1; }
+          grep -E -m1 -A3 'port: Str\(8080\)' smoke.log
+          if grep -qiE '"level":"error"|\terror\t' smoke.log; then grep -iE 'error' smoke.log | head; exit 1; fi

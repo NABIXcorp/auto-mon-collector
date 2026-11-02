@@ -3,3 +3,4 @@
 /amc.exe
 *.secrets
 .env
+/collector/_build/

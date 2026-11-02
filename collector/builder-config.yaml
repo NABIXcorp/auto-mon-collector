@@ -1,0 +1,41 @@
+# monitoring-collector: our own OpenTelemetry Collector build (OCB), phase D1.
+# Build: go install go.opentelemetry.io/collector/cmd/builder@v0.160.0 (builder version = dist version), then
+#   cd collector && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 builder --config builder-config.yaml
+# Component list = what the generated host config uses today (otelcol-contrib 0.160.0) + our receivers below.
+# Bump: change every v0.160.0 / v1.66.0 together, rebuild, run the CI smoke test.
+dist:
+  name: monitoring-collector
+  description: auto-mon-collector OpenTelemetry Collector distribution
+  output_path: ./_build
+  version: 0.160.0
+  module: github.com/NABIXcorp/auto-mon-collector/collector/_build
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/filelogreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/receivercreator v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/oracledbreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/sqlqueryreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/redisreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/httpcheckreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/tcpcheckreceiver v0.160.0
+  - gomod: github.com/NABIXcorp/auto-mon-collector/collector/receiver/netconnreceiver v0.0.0
+    path: ./receiver/netconnreceiver
+  - gomod: github.com/NABIXcorp/auto-mon-collector/collector/receiver/procsreceiver v0.0.0
+    path: ./receiver/procsreceiver
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.160.0
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor v0.160.0
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.160.0
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.160.0
+extensions:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/observer/hostobserver v0.160.0
+providers:
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.66.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.66.0

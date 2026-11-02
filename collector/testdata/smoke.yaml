@@ -1,0 +1,20 @@
+# CI smoke test: our receivers -> debug exporter, nothing leaves the machine.
+receivers:
+  netconn:
+    collection_interval: 2s
+    ports: [22, 8080, 443]
+  procs:
+    collection_interval: 3s
+    window: 1s
+    top: 5
+exporters:
+  debug:
+    verbosity: detailed
+service:
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    logs:
+      receivers: [netconn, procs]
+      exporters: [debug]
