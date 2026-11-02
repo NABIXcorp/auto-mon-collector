@@ -237,7 +237,11 @@ jobs:
           sudo $amc detect
           sudo $amc detect --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert 4317 in d["listening_ports"], d' \
             || die "detect did not see the collector port 4317"
-          sudo runuser -u otelcol-contrib -- test -r "$alert" || die "alert log not readable for the collector"
+          # a real read, not `test -r`: since the Ubuntu 26.04 runner `test -r` failed although the ACL grants r
+          # (2026-11-02, also on the last green commit); the two diagnostic lines show what `test` is
+          test --version 2>&1 | head -1 || true
+          sudo runuser -u otelcol-contrib -- test -r "$alert" && echo "test -r: yes" || echo "test -r: no (ACL ignored?)"
+          sudo runuser -u otelcol-contrib -- head -c 1 "$alert" > /dev/null || die "alert log not readable for the collector"
           if id -nG otelcol-contrib | grep -qwE 'root|sudo|adm'; then die "collector user in an admin group"; fi
           echo "::group::plan again (must be unchanged)"
           sudo $amc plan --host-dir examples/oracle-db | tee plan2.txt
