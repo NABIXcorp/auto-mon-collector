@@ -31,6 +31,14 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > (pinned v0.14.6, sha256-checked, unit `monitoring-cloudprober`, only installed when there are probes; CAP_NET_RAW only for
 > ping), scraped by the local collector: `cloudprober_total` / `_success` / `_latency` (µs) / `_resp_code` /
 > `_ssl_earliest_cert_expiry_sec`, labels `probe`, `dst`, `target`. See [docs/design.md](docs/design.md#9-answers-file-no-secrets).
+> v0.16.0 (unreleased): remote amc update through the agent, OFF by default. The control plane may ask a host to update
+> amc to a signed release (`update {version, id}` in the signed document); the agent only starts the root oneshot unit
+> `monitoring-update` (polkit: start that unit only), which runs `amc self-update`: it re-verifies the request as root
+> with the key pinned in `answers.yaml`, applies the host owner's policy (`agent.update: {allow, downgrade, window}`, read
+> from `answers.yaml` only), downloads the release from this repository only, checks `SHA256SUMS.sig` with the release
+> key embedded in amc (the same check as `get.sh`), keeps `bin/amc.before-<version>`, then runs the new `amc update`;
+> the old binary goes back when the new one fails. `apply` / `update` / `self-update` never run at the same time
+> (`<prefix>/.amc.lock`). See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
 > v0.15.0: `<prefix>/inventory.json` = the services the scan found (ids, ports, Oracle SIDs, Tomcat context paths, bind
 > addresses; no paths, no environment), written by plan / apply / update; the agent sends it with its versions at start and
 > when it changes (`POST v1/inventory`). An update that only changes VERSION / inventory.json does not restart anything.

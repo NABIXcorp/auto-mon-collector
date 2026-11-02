@@ -14,6 +14,9 @@
 //   - POST <url>v1/status {"revision","result":"applied|rejected|error","detail","versions"}.
 //   - document {"host","revision","issued_at","expires_at","probes":{...},"sig"}, times in unix seconds; sig =
 //     standard base64 Ed25519 (control-plane key) over the canonical JSON of the document without "sig".
+//   - v0.16.0: the document may carry "update":{"version":"vX.Y.Z","id":"..."} (remote amc update, signed like the
+//     rest); the status may carry "update":{"id","result","detail","from","to"} and the inventory "update_allowed".
+//     An agent before v0.16.0 rejects a document with "update" (unknown field): send it only to v0.16.0+ agents.
 package agent
 
 import (
@@ -26,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"time"
@@ -121,8 +125,22 @@ type Doc struct {
 	Issued   int64           `json:"issued_at"`
 	Expires  int64           `json:"expires_at"`
 	Probes   generate.Probes `json:"probes"`
+	Update   *UpdateRequest  `json:"update,omitempty"` // v0.16.0: remote amc update (nil = none)
 	Sig      string          `json:"sig"`
 }
+
+// UpdateRequest (v0.16.0): "update amc to this signed release". The only argument is the version: the download
+// URL, the release key and the commands are compiled into amc (internal/selfupdate), never sent.
+type UpdateRequest struct {
+	Version string `json:"version"` // release tag, e.g. v0.16.0
+	ID      string `json:"id"`      // chosen by the control plane, reported back with the result
+}
+
+// updateIDRE: an update id (it goes into files and status lines, never into a path).
+var updateIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+
+// ValidUpdateID reports whether id has the allowed form.
+func ValidUpdateID(id string) bool { return updateIDRE.MatchString(id) }
 
 // Reject is a list the agent refuses (reported as "rejected", the last good list stays).
 type Reject struct{ Reason string }
@@ -133,6 +151,22 @@ func reject(format string, a ...any) error { return &Reject{fmt.Sprintf(format, 
 
 // Verify checks a received document: signature (pinned key), host, revision, expiry, probe rules, allowlist.
 func Verify(raw []byte, cpKey ed25519.PublicKey, host string, applied int64, now time.Time, allow generate.Allow) (Doc, error) {
+	d, err := VerifySigned(raw, cpKey, host, applied, now)
+	if err != nil {
+		return d, err
+	}
+	if err := d.Probes.Validate(); err != nil {
+		return d, reject("%v", err)
+	}
+	if err := d.Probes.CheckAllow(allow); err != nil {
+		return d, reject("outside the allowlist: %v", err)
+	}
+	return d, nil
+}
+
+// VerifySigned checks what every document needs, whatever it asks for: signature (pinned key), host, revision >
+// applied, not expired. `amc self-update` (root) uses it to re-verify an update request the agent saved.
+func VerifySigned(raw []byte, cpKey ed25519.PublicKey, host string, applied int64, now time.Time) (Doc, error) {
 	var d Doc
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -157,12 +191,6 @@ func Verify(raw []byte, cpKey ed25519.PublicKey, host string, applied int64, now
 		return d, reject("revision %d is not newer than the applied %d", d.Revision, applied)
 	case now.Unix() >= d.Expires:
 		return d, reject("document expired at %s", time.Unix(d.Expires, 0).UTC().Format(time.RFC3339))
-	}
-	if err := d.Probes.Validate(); err != nil {
-		return d, reject("%v", err)
-	}
-	if err := d.Probes.CheckAllow(allow); err != nil {
-		return d, reject("outside the allowlist: %v", err)
 	}
 	return d, nil
 }

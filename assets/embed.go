@@ -56,7 +56,12 @@ const ProbeUnit = "monitoring-cloudprober"
 // AgentUnit (v0.13.0) is the amc agent: managed only when the answers have an agent section.
 const AgentUnit = "monitoring-agent"
 
-// AgentPolkit is the polkit rule that lets the agent restart Cloudprober (only that unit, only restart).
+// UpdateUnit (v0.16.0) is the root oneshot `amc self-update`, started by the agent (polkit: start only). Managed
+// with the agent; linked but never enabled, restarted or checked by apply.
+const UpdateUnit = "monitoring-update"
+
+// AgentPolkit is the polkit rule that lets the agent restart Cloudprober and start the self-update unit (only those
+// units, only those verbs).
 func AgentPolkit() []byte { return mustRead("polkit/50-amc-agent.rules") }
 
 func mustRead(p string) []byte {

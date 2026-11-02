@@ -289,6 +289,7 @@ docs:
 amc plan      [--answers F] [--secrets-file F] [--only a,b] [--skip c]   # default command, read-only
 amc apply     [--start] [same flags] [--yes]                              # changes the system
 amc update    [--plan] [--detect-json F]                                  # saved answers + installed site.d
+amc self-update --request F [--prefix D]                                  # root, v0.16.0: signed request from the agent (section 17)
 amc detect    [--json]                                                    # findings only
 amc sql <profile>                                                         # print DB grants
 amc uninstall [--keep-secrets]
@@ -555,7 +556,8 @@ tunnel agents: the agent dials out, the host opens no port.
 **What it can do, and what never.** It accepts one thing: a signed list of probes (tcp / http / ping, the same schema
 and rules as `probes:`). It never runs commands, never writes a path it gets from the control plane, never installs or
 updates software (that stays `amc apply` / `amc update`, signed releases), never touches the collector, secrets,
-ACLs, SELinux or other units.
+ACLs, SELinux or other units. One exception since v0.16.0, off by default: it may hand a signed "update amc to
+release X" request to root (see "Remote amc update" below); root checks everything again.
 
 **Host owner first.** `answers.yaml` (root) decides:
 
@@ -623,3 +625,55 @@ jitter up to 5 min; the control plane down = probes keep running. `<prefix>/agen
 The collector's scrape interval comes from the answers only (a list never changes the collector config).
 
 **Metrics**: as for `probes` (section 9); probe names chosen by the control plane are labels (`target`).
+
+### Remote amc update (v0.16.0, unreleased; off by default)
+
+One action with one argument: "update amc to signed release X". The control plane adds
+`"update": {"version": "vX.Y.Z", "id": "<8-64 chars A-Za-z0-9_->"}` to a signed document (signed like the rest; an
+agent before v0.16.0 rejects such a document as an unknown field, so a control plane sends it only to v0.16.0+
+agents: the inventory reports their version and `update_allowed`). The host owner decides in `answers.yaml` (root);
+the project template `config/agent-allow.yaml` cannot switch it on:
+
+```yaml
+agent:
+  update:
+    allow: false        # default: every request is refused
+    downgrade: false    # default: only a release newer than the running amc
+    window: ""          # "HH:MM-HH:MM" host local time, may span midnight (e.g. "22:00-04:00"); "" = any time
+```
+
+**Agent (user amc-agent, not trusted with the update).** For a verified, applied document whose update id it has not
+handled yet: checks `allow`, the version syntax and "no downgrade", saves the id in `agent/state.json`, writes the
+WHOLE signed document to `<prefix>/agent/update-request.json` (600) and runs
+`systemctl start --no-block monitoring-update.service` (polkit: amc-agent may `start` that unit, nothing else). It
+reports `update {id, result: started | refused | failed, detail, from, to}` with the revision's status. A later
+revision with the same id is not started again. Root's result (`agent/update-result.json`) is reported once in a
+status `{revision (the applied one), result: "applied", update {id, result, detail, from, to}}`.
+
+**Root (`amc self-update --request FILE`, oneshot unit `monitoring-update`, `TimeoutStartSec=15min`, never enabled).**
+Inputs: only the request file and the prefix. No URL, key, path or command comes from the request or the command line.
+1. `answers.yaml` must be a root-owned plain file nobody else can write; the control-plane key and `agent.update` come
+   from it. The request file is opened without following links (one link only, at most 256 KiB).
+2. The document is verified again: Ed25519 signature with the pinned key, host = this host, not expired, revision
+   above the last one root handled (`<prefix>/self-update.json`, root 644), an `update` with a valid id (not the last
+   handled id) and version `^vMAJOR.MINOR.PATCH$`.
+3. Policy: `allow`, no downgrade (unless `downgrade: true`; a non-release running build then refuses), window.
+4. Lock `<prefix>/.amc.lock` (flock; `amc apply` / `amc update` take it too; the `amc update` started below inherits
+   it as fd 3, `AMC_LOCK_FD=3`). From here the request counts as handled.
+5. Download from `https://github.com/NABIXcorp/auto-mon-collector/releases/download/<version>/` (compiled in):
+   `SHA256SUMS`, `SHA256SUMS.sig` (verified first), then `amc-linux-<amd64|arm64>` (limits 64 KiB / 1 KiB / 128 MiB,
+   10 min; redirects never from https to http). `SHA256SUMS.sig` must be a DER ECDSA P-256 signature over
+   sha256(SHA256SUMS) by the release key embedded in amc (`keys/amc-release.pub`, the same bytes get.sh checks), and the
+   asset's sha256 must match its one line. Any failure: result `failed`, nothing changed.
+6. Install: `bin/amc` -> `bin/amc.before-<old version>` (copy), the new binary written atomically (root 755); its
+   `amc version` must report the requested version, then the new `amc update --prefix <prefix>` runs (backup, plan,
+   smoke run, rollback as always). Either fails: the old binary goes back (`rolled_back`).
+7. Result `<prefix>/agent/update-result.json` (root 644, written atomically: a link the agent placed there is
+   replaced, not followed): `{id, from, to, result: ok | failed | rolled_back | refused, detail, at, revision}`; then
+   `systemctl try-restart monitoring-agent.service` when the binary changed. A request without a verified id, or one
+   handled already, does not overwrite the result file.
+
+Threat notes: a compromised amc-agent can start the unit and write any request, but root accepts only a document signed
+by the pinned control-plane key, for this host, not replayed, inside the owner's policy, and installs only a release
+signed by the release key. A compromised control plane can at most trigger an update to a real signed release (no
+downgrade unless the owner allows it). `uninstall` removes the unit link, `self-update.json` and `.amc.lock`.

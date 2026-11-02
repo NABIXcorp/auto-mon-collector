@@ -118,6 +118,19 @@ type Status struct {
 	Result   string            `json:"result"` // applied | rejected | error
 	Detail   string            `json:"detail,omitempty"`
 	Versions map[string]string `json:"versions,omitempty"`
+	Update   *UpdateStatus     `json:"update,omitempty"` // v0.16.0: about an update request (see UpdateStatus)
+}
+
+// UpdateStatus (v0.16.0) reports an update request: the agent's own answer ("started" = handed to root, "refused" =
+// its cheap checks failed, "failed" = the root unit could not be started), then once root's result
+// (<prefix>/agent/update-result.json: ok | failed | rolled_back | refused). A status that only carries root's result
+// repeats the applied revision with result "applied".
+type UpdateStatus struct {
+	ID     string `json:"id"`
+	Result string `json:"result"`
+	Detail string `json:"detail,omitempty"`
+	From   string `json:"from,omitempty"`
+	To     string `json:"to,omitempty"`
 }
 
 // Inventory (v0.15.0) is sent at start and whenever it changes: the agent's versions, the revision it runs and the
@@ -127,6 +140,8 @@ type Inventory struct {
 	Revision int64             `json:"revision"`
 	Services json.RawMessage   `json:"inventory"`                 // the file as written; null = missing (installed before v0.15.0)
 	Error    string            `json:"inventory_error,omitempty"` // why Services is null
+	// UpdateAllowed (v0.16.0): answers.yaml agent.update.allow, so the control plane can grey out "Update"
+	UpdateAllowed bool `json:"update_allowed"`
 }
 
 // RefusedError: the control plane answered 4xx (not 401 / 429), e.g. 404 = an older control plane without
@@ -154,10 +169,15 @@ func (c *Client) SendInventory(ctx context.Context, body []byte) error {
 	}
 }
 
-// Report sends a status.
+// Report sends a status. A 4xx answer (not 401 / 429) is a *RefusedError.
 func (c *Client) Report(ctx context.Context, s Status) error {
 	if len(s.Detail) > 500 {
 		s.Detail = s.Detail[:500]
+	}
+	if s.Update != nil && len(s.Update.Detail) > 500 {
+		u := *s.Update
+		u.Detail = u.Detail[:500]
+		s.Update = &u
 	}
 	body, _ := json.Marshal(s)
 	resp, err := c.do(ctx, http.MethodPost, "v1/status", body, true)
@@ -165,8 +185,12 @@ func (c *Client) Report(ctx context.Context, s Status) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
+	switch {
+	case resp.StatusCode/100 == 2:
+		return nil
+	case resp.StatusCode/100 == 4:
+		return &RefusedError{resp.StatusCode}
+	default:
 		return fmt.Errorf("status: HTTP %d", resp.StatusCode)
 	}
-	return nil
 }

@@ -13,7 +13,9 @@ import (
 // The amc agent (v0.13.0): installed only when Desired.Agent is set. Its parts: user amc-agent (system, no
 // shell), <prefix>/agent/ (key + state, amc-agent 700), bin/amc (a copy of this amc), unit monitoring-agent,
 // config/agent-allow.yaml (the project's allowlist template, optional), the polkit rule that lets it restart
-// Cloudprober, and write access to config/cloudprober/ (group amc-agent, setgid) - nothing else.
+// Cloudprober, and write access to config/cloudprober/ (group amc-agent, setgid) - nothing else. v0.16.0: the root
+// oneshot unit monitoring-update (`amc self-update`), linked but never enabled; the polkit rule lets the agent
+// START it (a remote amc update, re-verified by root).
 
 // AgentUser runs the agent.
 const AgentUser = "amc-agent"
@@ -111,7 +113,7 @@ func (e *eng) agentBinary() {
 		return
 	}
 	e.r.changes++
-	if e.do("write "+PolkitRule+" (amc-agent may restart monitoring-cloudprober, nothing else)",
+	if e.do("write "+PolkitRule+" (amc-agent may restart monitoring-cloudprober and start monitoring-update, nothing else)",
 		func() error { return e.writeFile(PolkitRule, rule, 0o644) }) && e.o.Apply {
 		e.st.add(&e.st.Polkit, PolkitRule)
 	}
@@ -126,7 +128,11 @@ func (e *eng) agentFiles(ud assets.UnitData) ([]file, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []file{{"systemd/" + assets.AgentUnit + ".service", b, 0o644}}
+	u, err := assets.Unit(assets.UpdateUnit, ud)
+	if err != nil {
+		return nil, err
+	}
+	out := []file{{"systemd/" + assets.AgentUnit + ".service", b, 0o644}, {"systemd/" + assets.UpdateUnit + ".service", u, 0o644}}
 	if t := e.d.Agent.AllowTemplate; t != nil {
 		out = append(out, file{allowFile, t, 0o644})
 	}
@@ -140,7 +146,7 @@ func (e *eng) staleAgentFiles() []string {
 		want[f.rel] = true
 	}
 	var out []string
-	for _, rel := range []string{"systemd/" + assets.AgentUnit + ".service", allowFile} {
+	for _, rel := range []string{"systemd/" + assets.AgentUnit + ".service", "systemd/" + assets.UpdateUnit + ".service", allowFile} {
 		if _, err := os.Stat(e.fs(e.pre(rel))); err == nil && !want[rel] {
 			out = append(out, rel)
 		}
@@ -155,6 +161,7 @@ func (e *eng) dropAgent() {
 		return
 	}
 	e.dropUnit(assets.AgentUnit+".service", "no agent")
+	e.unlinkUnit(assets.UpdateUnit+".service", "no agent")
 	for _, p := range append([]string{}, e.st.Polkit...) {
 		if err := os.Remove(e.fs(p)); err != nil && !os.IsNotExist(err) {
 			e.r.fail("remove %s: %v", p, err)
@@ -163,6 +170,30 @@ func (e *eng) dropAgent() {
 		e.st.remove(&e.st.Polkit, p)
 		e.r.ok("no agent: %s removed", p)
 	}
+}
+
+// unlinkUnit removes the link of a unit that is never enabled (monitoring-update) and forgets it.
+func (e *eng) unlinkUnit(name, why string) {
+	link := e.fs("/etc/systemd/system/" + name)
+	if _, err := os.Lstat(link); err != nil {
+		e.st.remove(&e.st.Units, name)
+		return
+	}
+	if err := os.Remove(link); err != nil {
+		e.r.fail("remove %s: %v", link, err)
+		return
+	}
+	e.st.remove(&e.st.Units, name)
+	e.r.ok("%s: %s unlinked", why, name)
+}
+
+// linkOnly: units linked into /etc/systemd/system but never enabled, (re)started or checked by apply: the agent
+// starts monitoring-update itself (v0.16.0).
+func (e *eng) linkOnly() []string {
+	if e.d.Agent == nil {
+		return nil
+	}
+	return []string{assets.UpdateUnit + ".service"}
 }
 
 // dropUnit stops, disables and unlinks a linked unit (it must still have its unit file: disable needs it).

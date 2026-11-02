@@ -498,6 +498,13 @@ func (e *eng) desiredFiles() ([]file, error) {
 // inventoryFile = generate.InventoryFile (the engine does not import the generator).
 const inventoryFile = "inventory.json"
 
+// v0.16.0, removed by uninstall: root's record of the last self-update request (selfupdate.RecordFile) and the lock
+// of apply / update / self-update (lockfile.Name)
+const (
+	selfUpdateRecord = "self-update.json"
+	lockFile         = ".amc.lock"
+)
+
 // onlyNoRestartFiles: the changed files are all ones no unit reads (see Result.NoRestart).
 func (e *eng) onlyNoRestartFiles() bool {
 	for _, f := range e.changedFiles {
@@ -1028,8 +1035,9 @@ func (e *eng) units() {
 	e.r.step("9. systemd units")
 	var names []string
 	for _, u := range e.unitNames() {
-		name := u + ".service"
-		names = append(names, name)
+		names = append(names, u+".service")
+	}
+	for _, name := range append(append([]string{}, names...), e.linkOnly()...) {
 		e.st.add(&e.st.Units, name)
 		link := e.fs("/etc/systemd/system/" + name)
 		target := e.pre("systemd", name)
@@ -1055,6 +1063,9 @@ func (e *eng) units() {
 		return
 	}
 	e.r.ok("linked + enabled: %s", strings.Join(names, " "))
+	if lo := e.linkOnly(); len(lo) > 0 {
+		e.r.ok("linked (started on demand, not enabled): %s", strings.Join(lo, " "))
+	}
 }
 
 // unitNames: the units this run manages (the Cloudprober unit only with probes).

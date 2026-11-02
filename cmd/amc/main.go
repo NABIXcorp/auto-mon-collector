@@ -37,6 +37,9 @@ Usage:
   amc detect [--json]                        read-only: which services this host runs (needs root)
   amc agent enrol --token-stdin [--prefix DIR]  register this host with the control plane (answers: agent:)
   amc agent run [--prefix DIR]               the agent daemon (started by the unit monitoring-agent)
+  amc self-update --request FILE [--prefix DIR]  root: a signed update request saved by the agent: verify it,
+                                             download + verify the signed release, install it, amc update
+                                             (run by the unit monitoring-update; answers: agent.update)
   amc uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]   check mode unless --yes
   amc version
 
@@ -110,6 +113,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return detectCmd(args, stdout, stderr)
 	case "agent":
 		return agentCmd(args, stdout, stderr)
+	case "self-update":
+		return selfUpdateCmd(args, stdout, stderr)
 	case "generate":
 		return generateCmd(args, stdout, stderr)
 	case "sql":
@@ -175,6 +180,14 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "amc: %v\n", err)
 		return exitUsage
 	}
+	if apply {
+		lk, err := lockInstall(*prefix)
+		if err != nil {
+			fmt.Fprintf(stderr, "amc: %v\n", err)
+			return exitUsage
+		}
+		defer lk.Release()
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	opts := engine.Options{
@@ -187,6 +200,12 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		// docs/design.md 6a: finish in one run, but only after a clean plan, the diff shown first
 		yes, aerr := p.YesNo("\nApply now? (backup first, start, automatic rollback if it does not start)", true)
 		if aerr == nil && yes {
+			lk, lerr := lockInstall(*prefix)
+			if lerr != nil {
+				fmt.Fprintf(stderr, "amc: %v\n", lerr)
+				return exitUsage
+			}
+			defer lk.Release()
 			opts.Apply, opts.Start, opts.Rollback = true, true, true
 			opts.Smoke = false // the identical configuration passed the smoke run seconds ago
 			res, err = runEngine(ctx, opts, d)
@@ -237,6 +256,12 @@ func update(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "amc update: %v\n", err)
 		return exitUsage
 	}
+	lk, err := lockInstall(*prefix)
+	if err != nil {
+		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		return exitUsage
+	}
+	defer lk.Release()
 	siteDir := filepath.Join(*prefix, "config", "site.d")
 	fmt.Fprintf(stdout, "update: answers from %s, site overlay from %s (kept as installed)\n", saved, siteDir)
 	in := inputs{prefix: *prefix}

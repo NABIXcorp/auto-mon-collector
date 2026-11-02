@@ -95,8 +95,24 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	if err != nil || fi.Mode()&os.ModeSetgid == 0 || fi.Mode().Perm() != 0o775 {
 		t.Errorf("config/cloudprober mode: %v %v", fi.Mode(), err)
 	}
+	// v0.16.0: the self-update unit is written and linked, but never enabled, restarted or checked
+	if u := h.read("/opt/monitoring/systemd/monitoring-update.service"); !strings.Contains(u, "Type=oneshot") {
+		t.Errorf("update unit:\n%s", u)
+	}
+	if l, err := os.Readlink(filepath.Join(h.root, "etc/systemd/system/monitoring-update.service")); err != nil ||
+		l != "/opt/monitoring/systemd/monitoring-update.service" {
+		t.Errorf("update unit link: %q %v", l, err)
+	}
+	for _, c := range r.cmds {
+		if strings.Contains(c, "monitoring-update") {
+			t.Errorf("apply ran a command on the update unit: %s", c)
+		}
+	}
+	if rule := h.read(PolkitRule); !strings.Contains(rule, `"monitoring-update.service"`) || !strings.Contains(rule, `"start"`) {
+		t.Errorf("polkit rule:\n%s", rule)
+	}
 	st := h.read("/opt/monitoring/" + StateFile)
-	for _, want := range []string{"monitoring-agent.service", PolkitRule} {
+	for _, want := range []string{"monitoring-agent.service", "monitoring-update.service", PolkitRule} {
 		if !strings.Contains(st, want) {
 			t.Errorf("state lacks %s:\n%s", want, st)
 		}
@@ -116,7 +132,8 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	if res.Failures != 0 {
 		t.Fatalf("second apply failed:\n%s", out)
 	}
-	for _, want := range []string{"REMOVE systemd/monitoring-agent.service", "REMOVE config/agent-allow.yaml",
+	for _, want := range []string{"REMOVE systemd/monitoring-agent.service", "REMOVE systemd/monitoring-update.service",
+		"no agent: monitoring-update.service unlinked", "REMOVE config/agent-allow.yaml",
 		"no agent: monitoring-agent.service stopped, disabled and unlinked", "no agent: " + PolkitRule + " removed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
@@ -124,6 +141,12 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(h.root, filepath.FromSlash(PolkitRule))); err == nil {
 		t.Error("polkit rule left")
+	}
+	if _, err := os.Lstat(filepath.Join(h.root, "etc/systemd/system/monitoring-update.service")); err == nil {
+		t.Error("update unit link left")
+	}
+	if strings.Contains(h.read("/opt/monitoring/"+StateFile), "monitoring-update") {
+		t.Error("update unit still in the state")
 	}
 	fi, _ = os.Stat(filepath.Join(h.root, "opt/monitoring/config/cloudprober"))
 	if fi.Mode()&os.ModeSetgid != 0 || fi.Mode().Perm() != 0o755 {
@@ -151,7 +174,13 @@ func TestUninstallRemovesTheAgent(t *testing.T) {
 	if !ru.has("userdel amc-agent") {
 		t.Errorf("agent user not removed: %v", ru.cmds)
 	}
-	for _, gone := range []string{"opt/monitoring/agent", filepath.FromSlash(PolkitRule)[1:], "etc/systemd/system/monitoring-agent.service"} {
+	for _, c := range ru.cmds {
+		if strings.HasPrefix(c, "systemctl disable") && strings.Contains(c, "monitoring-update") {
+			t.Errorf("never enabled, so not disabled: %s", c)
+		}
+	}
+	for _, gone := range []string{"opt/monitoring/agent", filepath.FromSlash(PolkitRule)[1:], "etc/systemd/system/monitoring-agent.service",
+		"etc/systemd/system/monitoring-update.service"} {
 		if _, err := os.Lstat(filepath.Join(h.root, gone)); err == nil {
 			t.Errorf("%s still there", gone)
 		}

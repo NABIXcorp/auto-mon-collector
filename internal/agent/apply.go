@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 )
@@ -124,6 +123,9 @@ type State struct {
 	Revision int64           `json:"revision"`
 	Probes   generate.Probes `json:"probes"`
 	At       int64           `json:"applied_at"`
+	// v0.16.0: the last update request handled (never handled twice) and the last root result reported
+	UpdateID       string `json:"update_id,omitempty"`
+	UpdateReported string `json:"update_reported,omitempty"`
 }
 
 // StateFile below the prefix.
@@ -142,8 +144,8 @@ func LoadState(prefix string) (State, error) {
 	return s, json.Unmarshal(b, &s)
 }
 
+// saveState writes s as given (the caller sets At when it applied a revision).
 func saveState(prefix string, s State) error {
-	s.At = time.Now().Unix()
 	b, _ := json.MarshalIndent(s, "", "  ")
 	return writeAtomic(filepath.Join(prefix, filepath.FromSlash(StateFile)), append(b, '\n'), 0o640)
 }

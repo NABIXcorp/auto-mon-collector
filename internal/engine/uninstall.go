@@ -59,14 +59,20 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	units := st.Units
 	if len(units) == 0 {
 		units = e.unitFiles()
-		for _, u := range []string{assets.ProbeUnit, assets.AgentUnit} {
+		for _, u := range []string{assets.ProbeUnit, assets.AgentUnit, assets.UpdateUnit} {
 			if _, err := os.Lstat(e.fs("/etc/systemd/system/" + u + ".service")); err == nil {
 				units = append(units, u+".service")
 			}
 		}
 	}
 	e.doCmd("systemctl", append([]string{"stop"}, units...)...)
-	e.doCmd("systemctl", append([]string{"disable"}, units...)...)
+	var enabled []string // monitoring-update is never enabled (no [Install]): nothing to disable
+	for _, n := range units {
+		if n != assets.UpdateUnit+".service" {
+			enabled = append(enabled, n)
+		}
+	}
+	e.doCmd("systemctl", append([]string{"disable"}, enabled...)...)
 	for _, n := range units {
 		link := "/etc/systemd/system/" + n
 		if _, err := os.Lstat(e.fs(link)); err == nil {
@@ -104,7 +110,8 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	}
 
 	e.r.step("4. files in %s", o.Prefix)
-	remove := []string{"bin", "config", "systemd", "netconn", "agent", "VERSION", "answers.yaml", inventoryFile, StateFile}
+	remove := []string{"bin", "config", "systemd", "netconn", "agent", "VERSION", "answers.yaml", inventoryFile, StateFile,
+		selfUpdateRecord, lockFile}
 	keep := []string{}
 	if u.PurgeData {
 		remove = append(remove, "data", "backup")

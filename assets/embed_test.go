@@ -131,9 +131,32 @@ func TestAgentUnitAndPolkitRule(t *testing.T) {
 	}
 	r := string(AgentPolkit())
 	for _, want := range []string{`subject.user == "amc-agent"`, `action.lookup("unit") == "monitoring-cloudprober.service"`,
-		`action.lookup("verb") == "restart"`, `"org.freedesktop.systemd1.manage-units"`} {
+		`action.lookup("verb") == "restart"`, `"org.freedesktop.systemd1.manage-units"`,
+		// v0.16.0: start (only) of the self-update unit
+		"action.lookup(\"unit\") == \"monitoring-update.service\" &&\n        action.lookup(\"verb\") == \"start\")"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("polkit rule lacks %q:\n%s", want, r)
 		}
+	}
+	if strings.Count(r, "polkit.Result.YES") != 2 || strings.Count(r, `subject.user == "amc-agent"`) != 2 {
+		t.Errorf("polkit rule: every YES must be bound to amc-agent, one unit and one verb:\n%s", r)
+	}
+}
+
+// Self-update unit (v0.16.0): root oneshot, started on demand only (no [Install]: never enabled), fixed arguments.
+func TestUpdateUnit(t *testing.T) {
+	b, err := Unit(UpdateUnit, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{"Type=oneshot\n", "User=root\n", "NoNewPrivileges=yes\n", "PrivateTmp=yes\n", "TimeoutStartSec=15min\n",
+		"ExecStart=/opt/monitoring/bin/amc self-update --prefix /opt/monitoring --request /opt/monitoring/agent/update-request.json\n"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("update unit lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "[Install]") || strings.Contains(s, "{{") {
+		t.Errorf("update unit must have no [Install] section:\n%s", s)
 	}
 }

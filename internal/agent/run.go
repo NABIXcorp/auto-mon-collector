@@ -157,7 +157,10 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		seen = max(seen, st.Revision)
 		cl := &Client{Base: local.Agent.URL, Host: cfg.Host, Key: key, HTTP: cfg.HTTP, Now: cfg.Now}
-		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision); sum != sentInv {
+		if !reportUpdateResult(ctx, cfg, cl, &st) {
+			return nil
+		}
+		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -215,7 +218,17 @@ func Run(ctx context.Context, cfg Config) error {
 			case aerr != nil:
 				status.Result, status.Detail = "error", aerr.Error()
 			default:
-				if err := saveState(cfg.Prefix, State{Revision: doc.Revision, Probes: doc.Probes}); err != nil {
+				next := st
+				next.Revision, next.Probes, next.At = doc.Revision, doc.Probes, cfg.Now().Unix()
+				// v0.16.0: an update request is handled once per id (a later revision may repeat it until the
+				// control plane has the result). The id is saved BEFORE the root unit starts.
+				var upd *UpdateStatus
+				start := false
+				if u := doc.Update; u != nil && u.ID != st.UpdateID {
+					us, ok := prepareUpdate(cfg.Prefix, local.Agent.Update, cfg.Versions["amc"], u, raw)
+					upd, start, next.UpdateID = &us, ok, u.ID
+				}
+				if err := saveState(cfg.Prefix, next); err != nil {
 					status.Result, status.Detail = "error", "applied, but "+StateFile+": "+err.Error()
 					break
 				}
@@ -223,6 +236,14 @@ func Run(ctx context.Context, cfg Config) error {
 				status.Result, status.Detail = "applied", fmt.Sprintf("%d probes", n)
 				if restarted {
 					status.Detail += ", Cloudprober restarted"
+				}
+				if start {
+					us := startUpdate(cfg.Run, *upd)
+					upd = &us
+				}
+				if upd != nil {
+					status.Update = upd
+					lg.Printf("agent: update %s to %s: %s: %s", upd.ID, upd.To, upd.Result, upd.Detail)
 				}
 			}
 		}
@@ -241,12 +262,47 @@ func Run(ctx context.Context, cfg Config) error {
 	return nil
 }
 
+// reportUpdateResult (v0.16.0) sends root's update result once (<prefix>/agent/update-result.json, id not reported
+// yet). A refusal (4xx) also counts as reported; other errors are retried with the next poll. false = ctx ended.
+func reportUpdateResult(ctx context.Context, cfg Config, cl *Client, st *State) bool {
+	r, err := LoadUpdateResult(cfg.Prefix)
+	if err != nil {
+		cfg.Log.Printf("agent: %s: %v", UpdateResultFile, err)
+		return true
+	}
+	if r.ID == "" || r.ID == st.UpdateReported {
+		return true
+	}
+	s := Status{Revision: st.Revision, Result: "applied", Detail: "update " + r.ID + ": " + r.Result, Versions: cfg.Versions,
+		Update: &UpdateStatus{ID: r.ID, Result: r.Result, Detail: r.Detail, From: r.From, To: r.To}}
+	var refused *RefusedError
+	switch err := cl.Report(ctx, s); {
+	case ctx.Err() != nil:
+		return false
+	case err == nil, errors.As(err, &refused):
+		if err != nil {
+			cfg.Log.Printf("agent: update %s result: %v (not sent again)", r.ID, err)
+		}
+		next := *st
+		next.UpdateReported = r.ID
+		if err := saveState(cfg.Prefix, next); err != nil {
+			cfg.Log.Printf("agent: %s: %v", StateFile, err)
+			return true
+		}
+		*st = next
+		cfg.Log.Printf("agent: update %s (%s -> %s): %s reported", r.ID, r.From, r.To, r.Result)
+	default:
+		cfg.Log.Printf("agent: update %s result: %v (retried with the next poll)", r.ID, err)
+	}
+	return true
+}
+
 // maxInventory: a larger inventory.json is not sent (the control plane caps request bodies).
 const maxInventory = 48 << 10
 
 // inventoryBody builds the inventory request and its hash.
-func inventoryBody(prefix string, versions map[string]string, revision int64) ([]byte, string) {
-	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null")}
+func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed bool) ([]byte, string) {
+	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed}
 	b, err := os.ReadFile(filepath.Join(prefix, generate.InventoryFile))
 	switch {
 	case os.IsNotExist(err):

@@ -62,6 +62,15 @@ func (s *Server) PublicKey() string { return agent.EncodeKey(s.Priv.Public().(ed
 // Publish signs a document for host. tamper = change it after signing; key = sign with another key; expires = 0
 // means +1 h. Returns the revision.
 func (s *Server) Publish(host string, rev int64, p generate.Probes, expires int64, tamper, otherKey bool) int64 {
+	return s.publish(host, rev, p, expires, tamper, otherKey, nil)
+}
+
+// PublishUpdate (v0.16.0) signs a newer document for host that also asks for an amc update.
+func (s *Server) PublishUpdate(host string, p generate.Probes, version, id string) int64 {
+	return s.publish(host, 0, p, 0, false, false, map[string]any{"version": version, "id": id})
+}
+
+func (s *Server) publish(host string, rev int64, p generate.Probes, expires int64, tamper, otherKey bool, update map[string]any) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.force[host] = rev != 0 && rev <= s.revs[host] // an explicit old revision = a replay: served anyway
@@ -74,6 +83,9 @@ func (s *Server) Publish(host string, rev int64, p generate.Probes, expires int6
 		expires = now + 3600
 	}
 	doc := map[string]any{"host": host, "revision": rev, "issued_at": now, "expires_at": expires, "probes": p}
+	if update != nil {
+		doc["update"] = update
+	}
 	b, _ := json.Marshal(doc)
 	c, _ := agent.CanonicalJSON(b)
 	key := s.Priv

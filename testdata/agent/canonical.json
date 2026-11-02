@@ -22,5 +22,9 @@
   {"name": "mesh probes with a path (v0.14.0)",
    "drop": ["sig"],
    "in": "{\"host\":\"app-1.example.com\",\"revision\":4,\"issued_at\":1792600000,\"expires_at\":1793204800,\"probes\":{\"interval_s\":30,\"tcp\":[{\"name\":\"mesh_db_1_private_5432\",\"host\":\"198.51.100.31\",\"port\":5432,\"path\":\"private\"},{\"name\":\"mesh_db_1_public_5432\",\"host\":\"203.0.113.31\",\"port\":5432,\"path\":\"public\"}],\"http\":[],\"ping\":[{\"name\":\"mesh_db_1_private\",\"host\":\"198.51.100.31\",\"path\":\"private\"}]},\"sig\":\"AAAA\"}",
-   "out": "{\"expires_at\":1793204800,\"host\":\"app-1.example.com\",\"issued_at\":1792600000,\"probes\":{\"http\":[],\"interval_s\":30,\"ping\":[{\"host\":\"198.51.100.31\",\"name\":\"mesh_db_1_private\",\"path\":\"private\"}],\"tcp\":[{\"host\":\"198.51.100.31\",\"name\":\"mesh_db_1_private_5432\",\"path\":\"private\",\"port\":5432},{\"host\":\"203.0.113.31\",\"name\":\"mesh_db_1_public_5432\",\"path\":\"public\",\"port\":5432}]},\"revision\":4}"}
+   "out": "{\"expires_at\":1793204800,\"host\":\"app-1.example.com\",\"issued_at\":1792600000,\"probes\":{\"http\":[],\"interval_s\":30,\"ping\":[{\"host\":\"198.51.100.31\",\"name\":\"mesh_db_1_private\",\"path\":\"private\"}],\"tcp\":[{\"host\":\"198.51.100.31\",\"name\":\"mesh_db_1_private_5432\",\"path\":\"private\",\"port\":5432},{\"host\":\"203.0.113.31\",\"name\":\"mesh_db_1_public_5432\",\"path\":\"public\",\"port\":5432}]},\"revision\":4}"},
+  {"name": "an update request (v0.16.0)",
+   "drop": ["sig"],
+   "in": "{\"host\":\"app-1.example.com\",\"revision\":5,\"issued_at\":1792700000,\"expires_at\":1792703600,\"probes\":{\"interval_s\":30,\"tcp\":[],\"http\":[],\"ping\":[]},\"update\":{\"version\":\"v0.16.1\",\"id\":\"u-7f3a9c2e1b\"},\"sig\":\"AAAA\"}",
+   "out": "{\"expires_at\":1792703600,\"host\":\"app-1.example.com\",\"issued_at\":1792700000,\"probes\":{\"http\":[],\"interval_s\":30,\"ping\":[],\"tcp\":[]},\"revision\":5,\"update\":{\"id\":\"u-7f3a9c2e1b\",\"version\":\"v0.16.1\"}}"}
 ]
