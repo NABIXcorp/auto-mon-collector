@@ -31,7 +31,7 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > (pinned v0.14.6, sha256-checked, unit `monitoring-cloudprober`, only installed when there are probes; CAP_NET_RAW only for
 > ping), scraped by the local collector: `cloudprober_total` / `_success` / `_latency` (µs) / `_resp_code` /
 > `_ssl_earliest_cert_expiry_sec`, labels `probe`, `dst`, `target`. See [docs/design.md](docs/design.md#9-answers-file-no-secrets).
-> v0.16.0 (unreleased): remote amc update through the agent, OFF by default. The control plane may ask a host to update
+> v0.16.0: remote amc update through the agent, OFF by default. The control plane may ask a host to update
 > amc to a signed release (`update {version, id}` in the signed document); the agent only starts the root oneshot unit
 > `monitoring-update` (polkit: start that unit only), which runs `amc self-update`: it re-verifies the request as root
 > with the key pinned in `answers.yaml`, applies the host owner's policy (`agent.update: {allow, downgrade, window}`, read

@@ -626,7 +626,7 @@ The collector's scrape interval comes from the answers only (a list never change
 
 **Metrics**: as for `probes` (section 9); probe names chosen by the control plane are labels (`target`).
 
-### Remote amc update (v0.16.0, unreleased; off by default)
+### Remote amc update (v0.16.0; off by default)
 
 One action with one argument: "update amc to signed release X". The control plane adds
 `"update": {"version": "vX.Y.Z", "id": "<8-64 chars A-Za-z0-9_->"}` to a signed document (signed like the rest; an
