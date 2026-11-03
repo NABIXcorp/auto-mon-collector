@@ -82,7 +82,9 @@ overlay use `plan` / `apply --answers FILE [--site-dir DIR]` as before.
 ## Verify instead of trusting
 
 `get.sh` checks an ECDSA P-256 signature over `SHA256SUMS` (public key: [keys/amc-release.pub](keys/amc-release.pub),
-also embedded in `get.sh`) and the binary's sha256 before it runs anything; without `openssl` it stops. To read it first:
+also embedded in `get.sh`) and the binary's sha256 before it runs anything; without `openssl` it stops. The same
+signed `SHA256SUMS` also lists `monitoring-collector-linux-amd64` (our own collector build, `collector/`; not installed
+by amc yet). To read it first:
 
 ```bash
 curl -fsSLO https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh
