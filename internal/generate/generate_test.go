@@ -42,13 +42,16 @@ func TestOracleOnlyUsesDefaultsAndSaysSo(t *testing.T) {
 	}
 	env := string(out.HostEnv)
 	for _, want := range []string{"ORACLE_MON=on\n", "ORACLE_SERVICE=orcl\n", "ORACLE_MON_USER=otel_mon\n",
-		"ORACLE_ALERT_LOG=/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log\n", `NETCONN_PORTS="1521"`} {
+		"ORACLE_ALERT_LOG=/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log\n"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("host.env lacks %q:\n%s", want, env)
 		}
 	}
 	if d := strings.Join(out.Defaults, "\n"); !strings.Contains(d, `oracle service "orcl" (guessed`) || !strings.Contains(d, "otel_mon") {
 		t.Errorf("guesses must be reported: %v", out.Defaults)
+	}
+	if !strings.Contains(string(out.HostYAML), "  netconn:\n    ports: [1521]\n") {
+		t.Errorf("netconn ports:\n%s", out.HostYAML)
 	}
 	m := parse(t, out.HostYAML)
 	p := pipelines(m)
@@ -80,10 +83,14 @@ func TestApplicationHost(t *testing.T) {
 	}
 	env := string(out.HostEnv)
 	for _, want := range []string{"ORACLE_SERVICE=apppdb\n", "ORACLE_MON_USER=monitor\n", "TOMCAT_GROUP=tomcat\n",
-		"REDIS_PORT=6380\n", `NETCONN_PORTS="80 443 1521 6380 8080"`} {
+		"REDIS_PORT=6380\n"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("host.env lacks %q:\n%s", want, env)
 		}
+	}
+	// v0.19.0: the built-in netconn receiver gets the ports in host.yaml (no NETCONN_PORTS for a helper any more)
+	if !strings.Contains(string(out.HostYAML), "  netconn:\n    ports: [80, 443, 1521, 6380, 8080]\n") || strings.Contains(env, "NETCONN_PORTS") {
+		t.Errorf("netconn ports:\n%s\n%s", out.HostYAML, env)
 	}
 	if len(out.Defaults) != 0 {
 		t.Errorf("everything answered, no defaults expected: %v", out.Defaults)

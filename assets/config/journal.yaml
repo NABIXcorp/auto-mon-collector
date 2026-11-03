@@ -1,0 +1,99 @@
+# Kernel warnings + SSH logins from the journal (phase D2): replaces otel-kmsg.sh / otel-sshd.sh and their units.
+# The collector unit needs SupplementaryGroups=systemd-journal: the PROCESS can then read the whole journal, so what
+# leaves it is fixed HERE (not an answer / site / remote option):
+#   - fixed journalctl filters (kernel >= warning; sshd / sshd-session only);
+#   - only MESSAGE (+ PRIORITY for the kernel) survives the receiver: journald's other fields (_CMDLINE, _EXE, _UID ...)
+#     are dropped by moving MESSAGE over the whole body; an entry without a string MESSAGE is dropped;
+#   - transform/sshd masks the name of an UNKNOWN user (people type their password into the user field) and must be
+#     the FIRST processor of the sshd pipeline: receiver -> processors run in memory, only the exporter queue
+#     (file_storage) writes to disk, so an unmasked line never reaches disk or network.
+# Output = the old file_log/kmsg + file_log/sshd records (streams kernel / ssh unchanged).
+# Tested by collector/test/journal (golden files). A literal $ is written $$ (collector config escaping).
+receivers:
+  journald/kmsg:
+    dmesg: true                  # journalctl --dmesg: kernel messages of this boot only
+    priority: warning
+    start_at: end                # first start: from now on (the cursor is kept in file_storage afterwards)
+    storage: file_storage
+    convert_message_bytes: true
+    attributes:
+      log_type: kernel
+    operators:
+      - type: move
+        from: body.PRIORITY
+        to: attributes.PRIORITY
+        on_error: drop_quiet
+      - type: move               # body = MESSAGE only: every other journald field is gone
+        from: body.MESSAGE
+        to: body
+        on_error: drop_quiet
+      - type: filter             # drops when true: anything that is not a plain message
+        expr: 'type(body) != "string"'
+      - type: severity_parser
+        parse_from: attributes.PRIORITY
+        on_error: send_quiet
+        mapping:
+          fatal: ['0', '1', '2']
+          error: '3'
+          warn: '4'
+      - type: add
+        field: attributes.kind
+        value: other
+      - type: add
+        if: 'body matches "Out of memory|oom-kill|oom_reaper|Memory cgroup out of memory"'
+        field: attributes.kind
+        value: oom
+      - type: add
+        if: 'body matches "blocked for more than|hung_task"'
+        field: attributes.kind
+        value: hung_task
+      - type: add
+        if: 'body matches "I/O error|EXT4-fs error|XFS .*(error|corrupt)|Buffer I/O|blk_update_request|Remounting filesystem read-only"'
+        field: attributes.kind
+        value: disk_error
+      - type: retain
+        fields: [attributes.kind, attributes.log_type, attributes.PRIORITY]
+
+  journald/sshd:
+    identifiers: [sshd, sshd-session]
+    priority: info
+    start_at: end
+    storage: file_storage
+    convert_message_bytes: true
+    attributes:
+      log_type: ssh
+    operators:
+      - type: move
+        from: body.MESSAGE
+        to: body
+        on_error: drop_quiet
+      - type: filter             # keep only the login lines (and only plain messages)
+        expr: 'type(body) != "string" or not (body matches "^(Accepted |Failed |Invalid user |Connection closed by (authenticating|invalid) user |Disconnected from (authenticating |invalid )?user |pam_unix\\(sshd:session\\): session (opened|closed) for user )")'
+      - type: retain
+        fields: [attributes.log_type]
+
+processors:
+  # FIRST processor of the sshd pipeline. Masking (any text between "invalid user" and the address, spaces included),
+  # then the same attributes as the old file_log/sshd: event = accepted / failed / invalid_user / session_opened /
+  # session_closed / closed; user (existing accounts only), src_ip, method.
+  transform/sshd:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - 'replace_pattern(body, "([Ii]nvalid user) .*( from [0-9a-fA-F.:]+( port [0-9]+)?)", "$$1 ***$$2")'
+          - 'replace_pattern(body, "([Ii]nvalid user) .*( [0-9a-fA-F.:]+ port [0-9]+)", "$$1 ***$$2") where not IsMatch(body, "[Ii]nvalid user [*]{3} ")'
+          # last guard: an "invalid user" line in a form not seen before loses everything after the words
+          - 'replace_pattern(body, "([Ii]nvalid user) .*$$", "$$1 ***") where not IsMatch(body, "[Ii]nvalid user [*]{3}( |$$)")'
+          - 'set(attributes["event"], "closed")'
+          - 'merge_maps(attributes, ExtractPatterns(body, "^Accepted (?P<method>[^ ]+) for (?P<user>[^ ]+) from (?P<src_ip>[^ ]+) port"), "upsert") where IsMatch(body, "^Accepted ")'
+          - 'set(attributes["event"], "accepted") where IsMatch(body, "^Accepted ")'
+          - 'merge_maps(attributes, ExtractPatterns(body, "^Failed (?P<method>[^ ]+) for (?:invalid user [*]{3} |(?P<user>[^ ]+) )from (?P<src_ip>[^ ]+) port"), "upsert") where IsMatch(body, "^Failed ")'
+          - 'set(attributes["event"], "failed") where IsMatch(body, "^Failed ")'
+          - 'merge_maps(attributes, ExtractPatterns(body, "^Invalid user [*]{3} from (?P<src_ip>[^ ]+)"), "upsert") where IsMatch(body, "^Invalid user ")'
+          - 'set(attributes["event"], "invalid_user") where IsMatch(body, "^Invalid user ")'
+          - 'merge_maps(attributes, ExtractPatterns(body, "session (?P<session>opened|closed) for user (?P<user>[^ (]+)"), "upsert") where IsMatch(body, "session (opened|closed) for user")'
+          - 'set(attributes["event"], "session_opened") where attributes["session"] == "opened"'
+          - 'set(attributes["event"], "session_closed") where attributes["session"] == "closed"'
+          - 'delete_key(attributes, "session")'
+          - 'delete_key(attributes, "user") where attributes["user"] == ""'

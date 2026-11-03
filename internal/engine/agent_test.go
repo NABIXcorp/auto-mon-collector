@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/cloudprober"
-	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 )
 
 func withAgent(t *testing.T, h host, template bool) Desired {
@@ -32,7 +31,7 @@ func agentHost(t *testing.T) host {
 
 func TestAgentCheckMode(t *testing.T) {
 	h := smokeHost(t) // no amc-agent user yet
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	res, out := runWith(t, h, r, false, false, true, false, withAgent(t, h, true))
 	if res.Failures != 0 {
 		t.Fatalf("check failed:\n%s", out)
@@ -58,7 +57,7 @@ func TestAgentWithoutPolkitWarns(t *testing.T) {
 	h := agentHost(t)
 	d := withAgent(t, h, false)
 	os.RemoveAll(filepath.Join(h.root, "etc/polkit-1"))
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	res, out := runWith(t, h, r, false, false, true, false, d)
 	if res.Warnings == 0 || !strings.Contains(out, "polkit not installed") {
 		t.Errorf("missing polkit not reported:\n%s", out)
@@ -71,7 +70,7 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	// a v0.12.0 host: Cloudprober files directly in config/
 	h.write("/opt/monitoring/config/cloudprober.cfg", "old\n", 0o644)
 	h.write("/opt/monitoring/config/cloudprober-tcp.json", "{}\n", 0o644)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	res, out := runWith(t, h, r, true, true, true, false, withAgent(t, h, true))
 	if res.Failures != 0 {
 		t.Fatalf("apply failed:\n%s", out)
@@ -118,7 +117,7 @@ func TestAgentApplyThenRemove(t *testing.T) {
 		}
 	}
 	// a plan right after: nothing to do
-	r1 := &fakeRunner{version: collector.Version, readable: true, probeVersion: "v" + cloudprober.Version}
+	r1 := &fakeRunner{readable: true, probeVersion: "v" + cloudprober.Version}
 	_, out = runWith(t, h, r1, false, false, false, false, withAgent(t, h, true))
 	for _, bad := range []string{"CHANGE ", "NEW    ", "REMOVE ", "would: install /opt/monitoring/bin/amc", "would: write " + PolkitRule, "would: chmod"} {
 		if strings.Contains(out, bad) {
@@ -127,7 +126,7 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	}
 
 	// agent removed from the answers: unit stopped + unlinked, its files and the polkit rule gone
-	r2 := &fakeRunner{version: collector.Version, readable: true, probeVersion: "v" + cloudprober.Version}
+	r2 := &fakeRunner{readable: true, probeVersion: "v" + cloudprober.Version}
 	res, out = runWith(t, h, r2, true, true, false, false, withProbes(false))
 	if res.Failures != 0 {
 		t.Fatalf("second apply failed:\n%s", out)
@@ -158,7 +157,7 @@ func TestUninstallRemovesTheAgent(t *testing.T) {
 	needSymlinks(t)
 	h := agentHost(t)
 	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\notelcol-contrib:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	if res, out := runWith(t, h, r, true, false, true, false, withAgent(t, h, false)); res.Failures != 0 {
 		t.Fatalf("apply: %s", out)
 	}

@@ -4,12 +4,17 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 )
 
-// rollback runs when a unit is not active after apply --start. It only undoes what THIS apply changed:
+// rollback runs when a unit is not active after apply --start (or when an apply that already stopped the old units
+// fails). It only undoes what THIS apply changed:
 //
 //	first install            -> stop + disable the units (no restart loop); files stay for diagnosis
-//	files / binary replaced  -> restore them from the backup / bin/otelcol-contrib.previous, restart, check
+//	files / binary replaced  -> restore them from the backup / bin/monitoring-collector.previous, restart, check
+//	units switched (v0.19.0) -> unlink the new collector unit, link + enable the old collector + helper units again
 //	nothing changed          -> nothing to undo: the failure was there before this apply
 func (e *eng) rollback(ctx context.Context) {
 	e.r.step("10b. rollback (a unit is not active)")
@@ -26,7 +31,7 @@ func (e *eng) rollback(ctx context.Context) {
 		e.r.ok("first install: units stopped and disabled (no restart loop); files kept for diagnosis")
 		e.r.line("next: journalctl -u %s, fix, then amc apply --start again", names[0])
 		return
-	case e.backupDir == "" && !e.binReplaced && !e.probeBinReplaced:
+	case e.backupDir == "" && !e.binReplaced && !e.probeBinReplaced && len(e.droppedUnits) == 0:
 		e.r.line("nothing to undo: this apply changed no file and no binary (the problem existed before)")
 		return
 	}
@@ -53,7 +58,7 @@ func (e *eng) rollback(ctx context.Context) {
 		e.r.ok("files restored from %s", e.backupDir)
 	}
 	if e.binReplaced {
-		bin := e.fs(e.pre("bin/otelcol-contrib"))
+		bin := e.fs(e.pre("bin", collector.Name))
 		if err := os.Rename(bin+".previous", bin); err != nil {
 			e.r.fail("rollback collector binary: %v", err)
 			return
@@ -68,14 +73,51 @@ func (e *eng) rollback(ctx context.Context) {
 		}
 		e.r.ok("previous cloudprober binary restored")
 	}
+	names = e.restoreUnitSet()
 	if err := e.o.Runner.Run("systemctl", "daemon-reload"); err != nil {
 		e.r.fail("systemctl daemon-reload: %v", err)
 		return
 	}
+	if len(e.droppedUnits) > 0 {
+		if err := e.o.Runner.Run("systemctl", append([]string{"enable"}, e.droppedUnits...)...); err != nil {
+			e.r.fail("systemctl enable: %v", err)
+		}
+	}
 	e.rolledBack = true
-	if e.restartAndCheck(ctx, true) {
+	if e.restartAndCheckUnits(ctx, true, names) {
 		e.r.ok("rolled back: the previous state runs again")
 	} else {
 		e.r.fail("rolled back, but the previous state does not start either: journalctl -u %s", names[0])
 	}
+}
+
+// restoreUnitSet undoes a unit switch of this apply (v0.19.0: otelcol-contrib + helpers -> monitoring-collector):
+// units linked for the first time are stopped, disabled and unlinked; the dropped ones are linked again (their files
+// came back from the backup). It returns the units the previous state runs (the old collector first).
+func (e *eng) restoreUnitSet() []string {
+	if len(e.droppedUnits) == 0 {
+		return e.unitFiles()
+	}
+	added := map[string]bool{}
+	for _, name := range e.addedUnits {
+		added[name] = true
+		e.dropUnit(name, "rollback")
+	}
+	for _, name := range e.droppedUnits {
+		link := e.fs("/etc/systemd/system/" + name)
+		os.Remove(link)
+		if err := os.Symlink(e.pre("systemd", name), link); err != nil {
+			e.r.fail("link %s: %v", name, err)
+			continue
+		}
+		e.st.add(&e.st.Units, name)
+	}
+	names := append([]string{}, e.droppedUnits...)
+	for _, n := range e.unitFiles() {
+		if _, err := os.Lstat(e.fs("/etc/systemd/system/" + n)); err == nil && !added[n] {
+			names = append(names, n) // e.g. Cloudprober, the agent (an apply that failed early never linked the new unit)
+		}
+	}
+	e.r.ok("units of the previous state linked again: %s", strings.Join(e.droppedUnits, " "))
+	return names
 }

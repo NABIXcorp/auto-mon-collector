@@ -1,5 +1,5 @@
-// Package assets holds the files amc installs on every host: the base collector configuration, the systemd
-// unit templates and the TCP-connections helper. They are embedded in the binary, so a release is one file.
+// Package assets holds the files amc installs on every host: the base collector configuration, the journal fragment
+// and the systemd unit templates. They are embedded in the binary, so a release is one file.
 package assets
 
 import (
@@ -8,23 +8,15 @@ import (
 	"text/template"
 )
 
-//go:embed config/config.yaml netconn/otel-netconn.sh netconn/otel-kmsg.sh netconn/otel-procs.sh netconn/otel-sshd.sh systemd/*.tmpl polkit/50-amc-agent.rules
+//go:embed config/config.yaml config/journal.yaml systemd/*.tmpl polkit/50-amc-agent.rules
 var files embed.FS
 
 // BaseConfig is config/config.yaml (identical on every host).
 func BaseConfig() []byte { return mustRead("config/config.yaml") }
 
-// Netconn is the TCP-connections-per-port helper script.
-func Netconn() []byte { return mustRead("netconn/otel-netconn.sh") }
-
-// Kmsg is the kernel-messages helper script (v0.5.0): kernel warnings / errors from the journal.
-func Kmsg() []byte { return mustRead("netconn/otel-kmsg.sh") }
-
-// Procs is the top-processes helper script (v0.6.0): top CPU / RSS processes, command names only.
-func Procs() []byte { return mustRead("netconn/otel-procs.sh") }
-
-// Sshd is the SSH-logins helper script (v0.7.0): sshd login lines, unknown user names masked.
-func Sshd() []byte { return mustRead("netconn/otel-sshd.sh") }
+// JournalConfig is config/journal.yaml (v0.19.0): kernel warnings + sshd logins from the journal, a byte-for-byte
+// copy of collector/config/journal.yaml (tested there with golden files; TestJournalConfigIsTheTestedOne).
+func JournalConfig() []byte { return mustRead("config/journal.yaml") }
 
 // UnitData fills the systemd unit templates.
 type UnitData struct {
@@ -48,7 +40,14 @@ func Unit(name string, d UnitData) ([]byte, error) {
 }
 
 // UnitNames are the systemd units amc manages, in start order.
-var UnitNames = []string{"monitoring-otelcol", "monitoring-netconn", "monitoring-kmsg", "monitoring-procs", "monitoring-sshd"}
+var UnitNames = []string{"monitoring-collector"}
+
+// LegacyUnits (before v0.19.0): otelcol-contrib + the four helper units (bash scripts in <prefix>/netconn). An apply
+// stops, disables and unlinks them; a rollback brings them back.
+var LegacyUnits = []string{"monitoring-otelcol", "monitoring-netconn", "monitoring-kmsg", "monitoring-procs", "monitoring-sshd"}
+
+// LegacyScripts are the helper scripts of LegacyUnits (removed by an apply, restored by a rollback).
+var LegacyScripts = []string{"netconn/otel-netconn.sh", "netconn/otel-kmsg.sh", "netconn/otel-procs.sh", "netconn/otel-sshd.sh"}
 
 // ProbeUnit (v0.12.0) is the Cloudprober unit: managed only when the answers have probes (or an agent).
 const ProbeUnit = "monitoring-cloudprober"

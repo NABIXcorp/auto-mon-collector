@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,8 +11,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NABIXcorp/auto-mon-collector/assets"
 	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 )
+
+// fakeSource is the signed release in tests: the collector binary is "BIN".
+type fakeSource struct{}
+
+func (fakeSource) Sum(context.Context, string) ([32]byte, error) {
+	return sha256.Sum256([]byte("BIN")), nil
+}
+func (fakeSource) Fetch(_ context.Context, _ string, _ [32]byte, dir string) (string, error) {
+	p := filepath.Join(dir, collector.Name)
+	return p, os.WriteFile(p, []byte("BIN"), 0o755)
+}
 
 // fakeRunner records commands and answers like a host where everything works.
 type fakeRunner struct {
@@ -19,7 +32,6 @@ type fakeRunner struct {
 	selinux  bool
 	semanage bool
 	readable bool
-	version  string // output of otelcol-contrib --version
 	validate error
 	envSeen  []string
 	smokeOut string // collector output during the smoke run
@@ -73,8 +85,6 @@ func (f *fakeRunner) Output(env []string, name string, args ...string) ([]byte, 
 			return []byte("Config test failed. Err: unknown field: protocol\n"), f.configtest
 		}
 		return nil, nil
-	case len(args) == 1 && args[0] == "--version":
-		return []byte("otelcol-contrib version " + f.version + "\n"), nil
 	case name == "getfacl":
 		if f.acl {
 			return []byte("user::rw-\nuser:otelcol-contrib:r--\n"), nil
@@ -146,7 +156,7 @@ func desired() Desired {
 		SecretKeys: []string{"OO_ENDPOINT", "OO_AUTH", "ORACLE_MON_PASSWORD"},
 		ReadFiles:  []string{"/var/log/app/alert.log"},
 		Groups:     []string{"tomcat"},
-		Version:    []byte("installer=amc test\ncollector=" + collector.Version + "\n"),
+		Version:    []byte("installer=amc test\ncollector=" + collector.Name + "\n"),
 		Inventory:  []byte("{\"schema\": 1}\n"),
 	}
 }
@@ -166,12 +176,9 @@ func runWith(t *testing.T, h host, r *fakeRunner, apply, start, fetch, smoke boo
 	res, err := Run(context.Background(), Options{
 		Root: h.root, Apply: apply, Start: start, Fetch: fetch, Smoke: smoke, Rollback: true, Arch: "amd64",
 		SkipRootCheck: true, RootUID: os.Getuid(), StartWait: time.Millisecond, Out: &out, Runner: r,
-		Now:   func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) },
-		Chown: func(string, int, int) error { return nil },
-		Fetcher: func(_ context.Context, _ collector.Asset, dir string) (string, error) {
-			p := filepath.Join(dir, "otelcol-contrib")
-			return p, os.WriteFile(p, []byte("BIN"), 0o755)
-		},
+		Now:       func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) },
+		Chown:     func(string, int, int) error { return nil },
+		Collector: fakeSource{},
 		ProbeFetcher: func(_ context.Context, _, dir string) (string, error) {
 			p := filepath.Join(dir, "cloudprober")
 			return p, os.WriteFile(p, []byte("PROBER"), 0o755)
@@ -212,23 +219,23 @@ func TestApplyStartAndIdempotent(t *testing.T) {
 	h := newHost(t)
 	h.write("/opt/monitoring/secrets/collector.env",
 		"OO_ENDPOINT='https://backend.example.com'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n", 0o600)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	res, out := run(t, h, r, true, true, true)
 	if res.Failures != 0 || !res.Applied {
 		t.Fatalf("apply failed:\n%s", out)
 	}
-	if !strings.Contains(h.read("/opt/monitoring/systemd/monitoring-otelcol.service"),
+	if !strings.Contains(h.read("/opt/monitoring/systemd/monitoring-collector.service"),
 		"--config=/opt/monitoring/config/site.d/10-site.yaml") {
 		t.Error("site.d file not in ExecStart")
 	}
 	if got := h.read("/opt/monitoring/config/host.env"); got != "ORACLE_MON=on\n" {
 		t.Errorf("host.env = %q", got)
 	}
-	if link, err := os.Readlink(filepath.Join(h.root, "etc/systemd/system/monitoring-otelcol.service")); err != nil ||
-		link != "/opt/monitoring/systemd/monitoring-otelcol.service" {
+	if link, err := os.Readlink(filepath.Join(h.root, "etc/systemd/system/monitoring-collector.service")); err != nil ||
+		link != "/opt/monitoring/systemd/monitoring-collector.service" {
 		t.Errorf("unit link = %q, %v", link, err)
 	}
-	for _, c := range []string{"systemctl enable", "systemctl restart", "systemctl is-active -q monitoring-netconn.service"} {
+	for _, c := range []string{"systemctl enable", "systemctl restart", "systemctl is-active -q monitoring-collector.service"} {
 		if !r.has(c) {
 			t.Errorf("missing command %q in %v", c, r.cmds)
 		}
@@ -239,7 +246,7 @@ func TestApplyStartAndIdempotent(t *testing.T) {
 		t.Errorf("secrets must reach validate only via env; env=%v", r.envSeen)
 	}
 	// second run: no file changes (the fake runner does not edit /etc/group, so "would: usermod" may remain)
-	r2 := &fakeRunner{version: collector.Version, readable: true}
+	r2 := &fakeRunner{readable: true}
 	_, out2 := run(t, h, r2, false, false, true)
 	if strings.Contains(out2, "\n  CHANGE ") || strings.Contains(out2, "\n  NEW    ") ||
 		!strings.Contains(out2, "CHECK done: 0 failures") {
@@ -253,8 +260,8 @@ func TestBackupAndStaleSiteRemoved(t *testing.T) {
 	h.write("/opt/monitoring/secrets/collector.env", "OO_ENDPOINT=x\nOO_AUTH=y\nORACLE_MON_PASSWORD=z\n", 0o600)
 	h.write("/opt/monitoring/config/config.yaml", "old\n", 0o644)
 	h.write("/opt/monitoring/config/site.d/99-old.yaml", "old\n", 0o644)
-	h.write("/opt/monitoring/bin/otelcol-contrib", "BIN", 0o755) // fetch is off in this test
-	r := &fakeRunner{version: collector.Version, readable: true}
+	h.write("/opt/monitoring/bin/monitoring-collector", "BIN", 0o755) // fetch is off in this test
+	r := &fakeRunner{readable: true}
 	res, out := run(t, h, r, true, false, false)
 	if res.Failures != 0 {
 		t.Fatalf("%s", out)
@@ -273,7 +280,7 @@ func TestBackupAndStaleSiteRemoved(t *testing.T) {
 func TestValidateFailureStopsAndMasksSecrets(t *testing.T) {
 	h := newHost(t)
 	h.write("/opt/monitoring/secrets/collector.env", "OO_ENDPOINT=x\nOO_AUTH=y\nORACLE_MON_PASSWORD=s3cr3tvalue\n", 0o600)
-	r := &fakeRunner{version: collector.Version, readable: true, validate: os.ErrInvalid}
+	r := &fakeRunner{readable: true, validate: os.ErrInvalid}
 	res, out := run(t, h, r, true, true, true)
 	if res.Applied || res.Failures == 0 {
 		t.Errorf("validate failure must stop before units / start:\n%s", out)
@@ -311,12 +318,12 @@ func smokeHost(t *testing.T) host {
 	h := newHost(t)
 	h.write("/opt/monitoring/secrets/collector.env",
 		"OO_ENDPOINT='https://backend.example.com'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n", 0o600)
-	h.write("/opt/monitoring/bin/otelcol-contrib", "BIN", 0o755)
+	h.write("/opt/monitoring/bin/monitoring-collector", "BIN", 0o755)
 	return h
 }
 
 func TestSmokeRunClean(t *testing.T) {
-	r := &fakeRunner{version: collector.Version, readable: true,
+	r := &fakeRunner{readable: true,
 		smokeOut: "info starting receiver oracledb\ninfo starting receiver sql_query/oracle\n"}
 	res, out := runSmoke(t, smokeHost(t), r, false, false, false, true)
 	if res.Failures != 0 || !strings.Contains(out, "2 discovered receivers, no load / start errors") {
@@ -334,7 +341,7 @@ func TestSmokeRunClean(t *testing.T) {
 }
 
 func TestSmokeRunCatchesTemplateError(t *testing.T) {
-	r := &fakeRunner{version: collector.Version, readable: true, smokeOut: "info starting receiver\n" +
+	r := &fakeRunner{readable: true, smokeOut: "info starting receiver\n" +
 		`error failed to start receiver {"error": "failed to load \"oracledb\" template config: got unconvertible type 'int'"}` + "\n"}
 	res, out := runSmoke(t, smokeHost(t), r, false, false, false, true)
 	if res.Failures == 0 || !strings.Contains(out, "1 error line(s) in the smoke run") {
@@ -343,7 +350,7 @@ func TestSmokeRunCatchesTemplateError(t *testing.T) {
 }
 
 func TestSmokeRunStopsAtOracleLoginError(t *testing.T) {
-	r := &fakeRunner{version: collector.Version, readable: true,
+	r := &fakeRunner{readable: true,
 		smokeOut: "info starting receiver\nerror ORA-01017: invalid username/password; logon denied\nerror retry again\n"}
 	res, out := runSmoke(t, smokeHost(t), r, false, false, false, true)
 	if !r.stopped || res.Failures == 0 || !strings.Contains(out, "Oracle rejected the monitoring login") {
@@ -355,7 +362,7 @@ func TestSmokeRunStopsAtOracleLoginError(t *testing.T) {
 }
 
 func TestSmokeRunCollectorExits(t *testing.T) {
-	r := &fakeRunner{version: collector.Version, readable: true, smokeOut: "Error: cannot start pipelines\n",
+	r := &fakeRunner{readable: true, smokeOut: "Error: cannot start pipelines\n",
 		smokeErr: os.ErrClosed}
 	res, out := runSmoke(t, smokeHost(t), r, false, false, false, true)
 	if res.Failures == 0 || !strings.Contains(out, "the collector stopped during the smoke run") {
@@ -394,17 +401,17 @@ func TestLineDiff(t *testing.T) {
 // installed writes a previous, working installation.
 func installed(t *testing.T) host {
 	h := smokeHost(t)
-	for _, f := range []string{"config/config.yaml", "config/host.yaml", "systemd/monitoring-otelcol.service", "VERSION"} {
+	for _, f := range []string{"config/config.yaml", "config/host.yaml", "systemd/monitoring-collector.service", "VERSION"} {
 		h.write("/opt/monitoring/"+f, "old "+f+"\n", 0o644)
 	}
-	h.write("/opt/monitoring/bin/otelcol-contrib", "OLD-BIN", 0o755)
+	h.write("/opt/monitoring/bin/monitoring-collector", "BIN", 0o755) // = the release's (fakeSource)
 	return h
 }
 
 func TestRollbackRestoresFilesWhenAUnitDoesNotStart(t *testing.T) {
 	needSymlinks(t)
 	h := installed(t)
-	r := &fakeRunner{version: collector.Version, readable: true, inactive: 1}
+	r := &fakeRunner{readable: true, inactive: 1}
 	res, out := run(t, h, r, true, true, false)
 	if !res.RolledBack || res.Failures == 0 {
 		t.Fatalf("want a rollback with a failure:\n%s", out)
@@ -433,12 +440,13 @@ func TestRollbackRestoresFilesWhenAUnitDoesNotStart(t *testing.T) {
 func TestRollbackRestoresThePreviousBinary(t *testing.T) {
 	needSymlinks(t)
 	h := installed(t)
-	r := &fakeRunner{version: "0.159.0", readable: true, inactive: 1} // installed binary is older -> replaced
+	h.write("/opt/monitoring/bin/monitoring-collector", "OLD-BIN", 0o755) // not the release's -> replaced
+	r := &fakeRunner{readable: true, inactive: 1}
 	res, out := run(t, h, r, true, true, true)
 	if !res.RolledBack {
 		t.Fatalf("%s", out)
 	}
-	if got := h.read("/opt/monitoring/bin/otelcol-contrib"); got != "OLD-BIN" {
+	if got := h.read("/opt/monitoring/bin/monitoring-collector"); got != "OLD-BIN" {
 		t.Errorf("binary not restored: %q", got)
 	}
 }
@@ -446,7 +454,7 @@ func TestRollbackRestoresThePreviousBinary(t *testing.T) {
 func TestRollbackFirstInstallStopsAndDisables(t *testing.T) {
 	needSymlinks(t)
 	h := smokeHost(t)
-	r := &fakeRunner{version: collector.Version, readable: true, inactive: 99}
+	r := &fakeRunner{readable: true, inactive: 99}
 	res, out := run(t, h, r, true, true, false)
 	if !res.RolledBack || !r.has("systemctl stop") || !r.has("systemctl disable") {
 		t.Fatalf("first install must be stopped + disabled:\n%s", out)
@@ -459,10 +467,10 @@ func TestRollbackFirstInstallStopsAndDisables(t *testing.T) {
 func TestNoRollbackWhenNothingChanged(t *testing.T) {
 	needSymlinks(t)
 	h := smokeHost(t)
-	if res, out := run(t, h, &fakeRunner{version: collector.Version, readable: true}, true, true, false); res.Failures != 0 {
+	if res, out := run(t, h, &fakeRunner{readable: true}, true, true, false); res.Failures != 0 {
 		t.Fatalf("first apply: %s", out)
 	}
-	r := &fakeRunner{version: collector.Version, readable: true, inactive: 99}
+	r := &fakeRunner{readable: true, inactive: 99}
 	res, out := run(t, h, r, true, true, false)
 	if res.RolledBack || !strings.Contains(out, "nothing to undo") {
 		t.Errorf("unchanged apply must not roll back:\n%s", out)
@@ -487,7 +495,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 	h := smokeHost(t)
 	// a fresh user: drop it from passwd so apply creates it (and records user_created)
 	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\n", 0o644)
-	r := &fakeRunner{version: collector.Version}
+	r := &fakeRunner{}
 	if res, out := run(t, h, r, true, false, false); res.Failures != 0 {
 		// useradd is faked, so the user does not appear: data dirs fail. Re-add the user and apply again.
 		h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\notelcol-contrib:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
@@ -497,7 +505,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 	}
 	st := h.read("/opt/monitoring/amc-state.json")
 	for _, want := range []string{`"user_created": true`, `"/var/log/app/alert.log"`, `"/var/log/app"`, `"tomcat"`,
-		`"monitoring-otelcol.service"`} {
+		`"monitoring-collector.service"`} {
 		if !strings.Contains(st, want) {
 			t.Errorf("state lacks %s:\n%s", want, st)
 		}
@@ -527,7 +535,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 	}
 	for _, gone := range []string{"opt/monitoring/bin", "opt/monitoring/config", "opt/monitoring/amc-state.json",
 		"opt/monitoring/inventory.json", // v0.15.0: CI e2e found it left behind (prefix not empty)
-		"etc/systemd/system/monitoring-otelcol.service"} {
+		"etc/systemd/system/monitoring-collector.service"} {
 		if _, err := os.Lstat(filepath.Join(h.root, gone)); err == nil {
 			t.Errorf("%s still there", gone)
 		}
@@ -540,7 +548,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 func TestApplyAdoptsACLsFromAnOlderInstaller(t *testing.T) {
 	needSymlinks(t)
 	h := smokeHost(t)
-	r := &fakeRunner{version: collector.Version, readable: true, acl: true} // readable via an existing ACL
+	r := &fakeRunner{readable: true, acl: true} // readable via an existing ACL
 	if res, out := run(t, h, r, true, false, false); res.Failures != 0 {
 		t.Fatalf("%s", out)
 	}
@@ -578,8 +586,8 @@ var typed = map[string]string{"OO_ENDPOINT": "https://backend.example.com", "OO_
 
 func TestTypedSecretsStayInMemoryInCheckMode(t *testing.T) {
 	h := newHost(t)
-	h.write("/opt/monitoring/bin/otelcol-contrib", "BIN", 0o755)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	h.write("/opt/monitoring/bin/monitoring-collector", "BIN", 0o755)
+	r := &fakeRunner{readable: true}
 	res, out := runWithSecretsInput(t, h, r, false, typed, []byte("services: {}\n"))
 	if res.Failures != 0 || !strings.Contains(out, "would: write /opt/monitoring/secrets/collector.env (3 keys, root 600)") {
 		t.Fatalf("%s", out)
@@ -601,8 +609,8 @@ func TestTypedSecretsStayInMemoryInCheckMode(t *testing.T) {
 func TestTypedSecretsWrittenRoot600OnApply(t *testing.T) {
 	needSymlinks(t)
 	h := newHost(t)
-	h.write("/opt/monitoring/bin/otelcol-contrib", "BIN", 0o755)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	h.write("/opt/monitoring/bin/monitoring-collector", "BIN", 0o755)
+	r := &fakeRunner{readable: true}
 	if res, out := runWithSecretsInput(t, h, r, true, typed, []byte("services: {}\n")); res.Failures != 0 {
 		t.Fatalf("%s", out)
 	}
@@ -623,7 +631,7 @@ func TestTypedSecretsWrittenRoot600OnApply(t *testing.T) {
 
 func TestTypedSecretsMissingKeyFails(t *testing.T) {
 	h := newHost(t)
-	r := &fakeRunner{version: collector.Version}
+	r := &fakeRunner{}
 	res, out := runWithSecretsInput(t, h, r, false, map[string]string{"OO_ENDPOINT": "x"}, nil)
 	if res.Failures == 0 || !strings.Contains(out, "key OO_AUTH missing") {
 		t.Errorf("%s", out)
@@ -633,7 +641,7 @@ func TestTypedSecretsMissingKeyFails(t *testing.T) {
 func TestCheckCountsChanges(t *testing.T) {
 	needSymlinks(t)
 	h := smokeHost(t)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	if res, out := run(t, h, r, false, false, false); res.Changes == 0 {
 		t.Fatalf("a first check must report changes:\n%s", out)
 	}
@@ -665,10 +673,144 @@ func TestCheckHint(t *testing.T) {
 	for hint, want := range map[string]string{"": "Run `amc apply` to change things.", "-": "warning(s).\n", "Run x.": "warning(s). Run x.\n"} {
 		var out bytes.Buffer
 		_, err := Run(context.Background(), Options{Root: smokeHost(t).root, SkipRootCheck: true, RootUID: os.Getuid(),
-			Arch: "amd64", Out: &out, Runner: &fakeRunner{version: collector.Version, readable: true}, CheckHint: hint,
+			Arch: "amd64", Out: &out, Runner: &fakeRunner{readable: true}, CheckHint: hint, Collector: fakeSource{},
 			Chown: func(string, int, int) error { return nil }}, desired())
 		if err != nil || !strings.Contains(out.String(), "CHECK done: 0 failures, 0 warning(s)") || !strings.Contains(out.String(), want) {
 			t.Errorf("hint %q: want %q in the output (err %v):\n%s", hint, want, err, out.String())
 		}
+	}
+}
+
+// legacyHost is a host on the layout before v0.19.0: otelcol-contrib + four helper units, all linked.
+func legacyHost(t *testing.T) host {
+	h := smokeHost(t)
+	os.Remove(filepath.Join(h.root, "opt/monitoring/bin/monitoring-collector"))
+	h.write("/opt/monitoring/bin/otelcol-contrib", "OTELCOL", 0o755)
+	h.write("/opt/monitoring/config/config.yaml", "old config\n", 0o644)
+	for _, u := range assets.LegacyUnits {
+		h.write("/opt/monitoring/systemd/"+u+".service", "old unit "+u+"\n", 0o644)
+		link := filepath.Join(h.root, "etc/systemd/system", u+".service")
+		os.MkdirAll(filepath.Dir(link), 0o755)
+		if err := os.Symlink("/opt/monitoring/systemd/"+u+".service", link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, s := range assets.LegacyScripts {
+		h.write("/opt/monitoring/"+s, "#!/bin/bash\n", 0o755)
+	}
+	return h
+}
+
+func linked(h host, unit string) bool {
+	_, err := os.Lstat(filepath.Join(h.root, "etc/systemd/system", unit))
+	return err == nil
+}
+
+func TestSwitchFromOtelcolContrib(t *testing.T) {
+	needSymlinks(t)
+	h := legacyHost(t)
+	r := &fakeRunner{readable: true}
+	res, out := run(t, h, r, true, true, true)
+	if res.Failures != 0 || res.RolledBack {
+		t.Fatalf("switch failed:\n%s", out)
+	}
+	for _, u := range assets.LegacyUnits {
+		if !r.has("systemctl disable --now "+u+".service") || linked(h, u+".service") {
+			t.Errorf("%s not stopped / disabled / unlinked", u)
+		}
+		if h.read("/opt/monitoring/backup/20261005-120000/systemd/"+u+".service") == "" {
+			t.Errorf("%s not in the backup", u)
+		}
+		if _, err := os.Stat(filepath.Join(h.root, "opt/monitoring/systemd", u+".service")); err == nil {
+			t.Errorf("unit file %s not removed", u)
+		}
+	}
+	for _, s := range assets.LegacyScripts {
+		if _, err := os.Stat(filepath.Join(h.root, "opt/monitoring", s)); err == nil {
+			t.Errorf("%s not removed", s)
+		}
+	}
+	if !linked(h, "monitoring-collector.service") || h.read("/opt/monitoring/bin/monitoring-collector") != "BIN" {
+		t.Errorf("new collector not installed / linked:\n%s", out)
+	}
+	if h.read("/opt/monitoring/bin/otelcol-contrib") != "OTELCOL" {
+		t.Error("the old binary must stay until the next release (a manual downgrade needs it)")
+	}
+	for _, want := range []string{"STOP   monitoring-otelcol.service (replaced by monitoring-collector",
+		"REMOVE netconn/otel-sshd.sh (replaced by monitoring-collector"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	st := h.read("/opt/monitoring/" + StateFile)
+	if strings.Contains(st, "monitoring-otelcol") || !strings.Contains(st, "monitoring-collector.service") {
+		t.Errorf("state units: %s", st)
+	}
+}
+
+func TestSwitchRollbackBringsTheOldUnitsBack(t *testing.T) {
+	needSymlinks(t)
+	h := legacyHost(t)
+	r := &fakeRunner{readable: true, inactive: 1} // monitoring-collector does not start
+	res, out := run(t, h, r, true, true, true)
+	if !res.RolledBack {
+		t.Fatalf("want a rollback:\n%s", out)
+	}
+	for _, u := range assets.LegacyUnits {
+		link, err := os.Readlink(filepath.Join(h.root, "etc/systemd/system", u+".service"))
+		if err != nil || link != "/opt/monitoring/systemd/"+u+".service" {
+			t.Errorf("%s not linked again: %q %v", u, link, err)
+		}
+		if h.read("/opt/monitoring/systemd/"+u+".service") != "old unit "+u+"\n" {
+			t.Errorf("%s unit file not restored", u)
+		}
+	}
+	if h.read("/opt/monitoring/netconn/otel-sshd.sh") != "#!/bin/bash\n" || h.read("/opt/monitoring/config/config.yaml") != "old config\n" {
+		t.Error("helper scripts / config not restored")
+	}
+	if linked(h, "monitoring-collector.service") || !r.has("systemctl disable --now monitoring-collector.service") {
+		t.Error("the new collector unit must be stopped, disabled and unlinked")
+	}
+	if !r.has("systemctl enable monitoring-otelcol.service monitoring-netconn.service") ||
+		!r.has("systemctl restart monitoring-otelcol.service monitoring-netconn.service monitoring-kmsg.service monitoring-procs.service monitoring-sshd.service") {
+		t.Errorf("old units not enabled + restarted: %v", r.cmds)
+	}
+	if !strings.Contains(out, "rolled back: the previous state runs again") {
+		t.Errorf("%s", out)
+	}
+	st := h.read("/opt/monitoring/" + StateFile)
+	if !strings.Contains(st, "monitoring-otelcol.service") || strings.Contains(st, "monitoring-collector.service") {
+		t.Errorf("state units after the rollback: %s", st)
+	}
+}
+
+func TestSwitchNeedsStart(t *testing.T) {
+	needSymlinks(t)
+	h := legacyHost(t)
+	r := &fakeRunner{readable: true}
+	res, out := run(t, h, r, true, false, true)
+	if res.Failures == 0 || !strings.Contains(out, "run with --start") || r.has("systemctl disable") {
+		t.Fatalf("apply without --start must refuse the switch:\n%s", out)
+	}
+	if !linked(h, "monitoring-otelcol.service") {
+		t.Error("old units must stay")
+	}
+}
+
+// validate fails after the old units were already stopped: never leave the host without monitoring
+func TestSwitchValidateFailureRollsBack(t *testing.T) {
+	needSymlinks(t)
+	h := legacyHost(t)
+	r := &fakeRunner{readable: true, validate: os.ErrInvalid}
+	res, out := run(t, h, r, true, true, true)
+	if !res.RolledBack || res.Failures == 0 || !strings.Contains(out, "The old collector runs again") {
+		t.Fatalf("want a rollback:\n%s", out)
+	}
+	if !linked(h, "monitoring-otelcol.service") || h.read("/opt/monitoring/config/config.yaml") != "old config\n" ||
+		!r.has("systemctl restart monitoring-otelcol.service") {
+		t.Errorf("old state not back:\n%s", out)
+	}
+	if r.has("systemctl restart monitoring-collector.service") {
+		t.Error("the new unit was never linked: it must not be restarted")
 	}
 }

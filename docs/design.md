@@ -45,7 +45,7 @@ installs it only when asked to (`--apply`). Data goes over OTLP to any backend (
 | OS | RHEL / Rocky / Alma / Oracle Linux 8-9, CentOS 7 (best effort, EOL), Ubuntu 22.04 / 24.04, Debian 12 |
 | CPU | amd64, arm64 |
 | Init | systemd |
-| Collector | `otelcol-contrib`, version + SHA-256 pinned per release |
+| Collector | `monitoring-collector` (OCB build in `collector/`, since v0.19.0) from the same signed release as amc; before: `otelcol-contrib`, version + SHA-256 pinned |
 | Profiles | host (always), Oracle, Tomcat (+ JMX exporter), Redis, Caddy; then PostgreSQL, MySQL/MariaDB, nginx, Docker |
 | Backend | any OTLP/HTTP endpoint with a header-based auth; OpenObserve stream layout as the first preset |
 | Extras (later) | dashboard and alert generators per backend (OpenObserve first), Telegram as an alert channel |
@@ -124,7 +124,7 @@ Writes to a staging directory: `host.yaml`, `host.env`, `collector.env` (0600), 
 (`config.yaml`, all profiles inside, switched by `host.env`). Output is sorted and stable.
 
 ### 4.6 Validate
-1. `otelcol-contrib validate` with the staged files and the real binary (downloaded to the staging dir if the
+1. `monitoring-collector validate` (before v0.19.0: `otelcol-contrib validate`) with the staged files and the real binary (downloaded to the staging dir if the
    host has none yet).
 2. **Smoke run** (20-25 s, collector in the foreground, exporters pointed at a local sink): every discovered
    receiver must start; any `failed to load` / `failed to start receiver` fails the plan. Reason: `validate`
@@ -181,7 +181,7 @@ changes it). File and unit names stay the same, so existing installations need n
 
 ```
 /opt/monitoring/
-  bin/otelcol-contrib            pinned collector
+  bin/monitoring-collector       the collector of this amc release (v0.19.0+; before: bin/otelcol-contrib)
   bin/amc                        installer (auto-mon-collector) (for updates / plan / uninstall)
   config/
     config.yaml                  layer 1: shipped base, same everywhere: runtime discovery + all service
@@ -191,8 +191,8 @@ changes it). File and unit names stay the same, so existing installations need n
     host.env                     switches, no secrets
   secrets/collector.env          0600 root, never printed, never in a bundle or repo
   data/                          the only writable dir (queue, log bookmarks)
-  systemd/monitoring-otelcol.service, monitoring-netconn.service   (linked into /etc/systemd/system)
-  netconn/                       optional TCP-connections-per-port helper
+  systemd/monitoring-collector.service   (linked into /etc/systemd/system; before v0.19.0: monitoring-otelcol +
+                                 the helper units netconn / kmsg / procs / sshd with scripts in netconn/)
   backup/<timestamp>/            before every apply
   VERSION, answers.yaml          what produced this install (answers without secrets)
 ```
@@ -212,7 +212,7 @@ Every prompt has a default; a default is used **silently** when it can only be o
 |---|---|---|
 | Install path | `/opt/monitoring` | `--prefix` |
 | Collector user | `otelcol-contrib` (system user, no shell, no admin groups) | `--user` |
-| systemd units | `monitoring-otelcol`, `monitoring-netconn` | not configurable (one name everywhere) |
+| systemd units | `monitoring-collector` (v0.19.0+; before `monitoring-otelcol` + 4 helpers) | not configurable (one name everywhere) |
 | Collector version | the one pinned in the release (sha256) | `--collector-version` (must be in the release's list) |
 | Services to enable | every finding with confidence `high` or `medium` | prompt "Enable […]?" Enter = yes, or `--only` / `--skip` |
 | Backend preset | `openobserve` | answers / prompt |
@@ -223,7 +223,7 @@ Every prompt has a default; a default is used **silently** when it can only be o
 | Log files | detected paths (alert log, Tomcat `logs/`), `start_at: end` | prompt only if not found |
 | HTTP checks | none, except Tomcat: `http://127.0.0.1:<port>/` | answers / prompt (optional) |
 | Collection interval | 60 s metrics, 30 s session snapshots, 300 s heavy queries | site overlay |
-| TCP connections helper | on, ports = the enabled services' ports | host.env `NETCONN_PORTS` |
+| TCP connections (`netconn` receiver) | on, ports = the enabled services' ports | host.yaml `receivers.netconn.ports` (v0.19.0; before host.env `NETCONN_PORTS`) |
 | Batching, queue, memory limit | `file_storage` queue, `memory_limiter` 600/150 MiB | site overlay |
 
 **Finishing in one run:** after a clean plan (validate VALID, smoke run 0 errors) the interactive installer
@@ -387,6 +387,18 @@ in a non-CDB), without `oracle.pdb.open`. Grants: `V_$DATABASE`, `V_$RESOURCE_LI
 Excludes `cdb_service` and a common user. Asked interactively for a local user (`Non-CDB database?`, default = the
 saved answer, else no).
 
+**v0.19.0: one collector, no helpers.** Everything in the next three paragraphs (and the netconn helper) now runs inside
+`monitoring-collector`: receivers `netconn` (reads `/proc/net/tcp{,6}`) and `procs` (two `/proc` snapshots 15 s apart,
+command names only, `/proc/<pid>/cmdline` is never read), and the stock `journald` receiver twice in
+`config/journal.yaml` (kernel `--dmesg` priority warning+, sshd `--identifier sshd --identifier sshd-session`). Same
+streams and attributes. **Privilege change (accepted):** the collector unit gets the group `systemd-journal`, so the
+process can read the whole journal; what leaves it is fixed in the shipped file (not in answers / site / remote
+config): only MESSAGE (+ PRIORITY) survives the receiver, `transform/sshd` is the FIRST processor of the ssh pipeline
+and masks everything between "invalid user" and the address (the old sed rule let names with spaces through), before
+the disk queue. `collector/test/journal` runs the real receiver + processor against golden files in CI. The journald
+receiver follows the journal (`journalctl --follow`, cursor in `file_storage`); CI rotates the journal and checks
+that new lines still arrive. History of the helpers below.
+
 **Kernel messages (v0.5.0, every host):** unit `monitoring-kmsg` runs `netconn/otel-kmsg.sh`: `journalctl -k -p warning
 -o json`, polled every 10 s with a cursor (kernel only, warning or worse, no history) -> `data/kmsg/kmsg-<day>.jsonl` (2 days) -> `file_log/kmsg`
 -> stream `kernel`, attribute `kind` = oom / hung_task / disk_error / other. Least privilege: only this unit has the
@@ -524,7 +536,7 @@ Existing installations keep running unchanged until phase 5.
 | 5 | Go version | latest stable, `CGO_ENABLED=0`; check the minimum kernel for CentOS 7 (3.10) before release (unverified) |
 | 6 | Docker containers | after v1 (`docker_observer`) |
 | 7 | Backend presets | OpenObserve first; generic OTLP; others by contribution |
-| 8 | Install path and names | **decided**: `/opt/monitoring`, units `monitoring-otelcol` / `monitoring-netconn`, user `otelcol-contrib`, `secrets/collector.env` (same as the existing installations) |
+| 8 | Install path and names | **decided**: `/opt/monitoring`, unit `monitoring-collector` (v0.19.0; before `monitoring-otelcol` + helpers), user `otelcol-contrib`, `secrets/collector.env` (same as the existing installations) |
 | 9 | Finish in one run | **decided**: defaults for everything (6a) + `Apply now? [Y/n]` after a clean interactive plan |
 
 ---

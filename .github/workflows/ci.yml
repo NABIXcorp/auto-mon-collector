@@ -12,7 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25   # e2e alone ~12 min (runs only for releases / by hand), rest ~10 s
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -72,17 +72,89 @@ jobs:
             [ "$rc" -eq 3 ] && grep -q "${case#*:}" <<< "$out" || die "${case%%:*}: tampered release not refused"
             ! grep -q '^auto-mon-collector ' <<< "$out" || die "${case%%:*}: amc ran although the check failed"
           done
-      - name: End to end on this runner (real collector, systemd, ACLs; fake backend and secrets)
-        # ~12 min. Only before a release (release.yml calls this file on a tag push) or by hand (Run workflow):
-        # amc gets no new features while the new agent design is built, so branch pushes skip it.
+      - name: No secrets (gitleaks, full history)
+        run: |
+          v=8.18.4; b=https://github.com/gitleaks/gitleaks/releases/download/v$v
+          curl -fsSLO "$b/gitleaks_${v}_linux_x64.tar.gz" -fsSLO "$b/gitleaks_${v}_checksums.txt"
+          grep " gitleaks_${v}_linux_x64.tar.gz$" "gitleaks_${v}_checksums.txt" | sha256sum -c -
+          tar -xzf "gitleaks_${v}_linux_x64.tar.gz" gitleaks
+          ./gitleaks detect --source . --no-banner --redact -v
+
+  # Phase D1: our own collector build (collector/, OCB) with the netconn + procs receivers. Separate Go modules,
+  # so the root `go test ./...` does not see them.
+  collector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # cold OCB build ~11 min (module download), warm ~1 min
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: collector/receiver/netconnreceiver/go.mod
+          cache-dependency-path: |
+            collector/receiver/*/go.sum
+            collector/test/*/go.sum
+      - name: vet + test our receivers and the journal config (golden files, masking)
+        run: |
+          set -e
+          for m in collector/receiver/*/ collector/test/*/; do (cd "$m" && go vet ./... && go test -race ./...); done
+      - name: OCB build (linux amd64, static)
+        run: |
+          v=$(awk '/^  version:/ {print $2}' collector/builder-config.yaml)
+          go install "go.opentelemetry.io/collector/cmd/builder@v$v"
+          cd collector && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 builder --config builder-config.yaml
+          ls -l _build/monitoring-collector
+          ./_build/monitoring-collector --version
+      - name: Keep the binary for the e2e job (releases / manual runs only)
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        run: cp collector/_build/monitoring-collector monitoring-collector-linux-amd64
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          name: monitoring-collector
+          path: monitoring-collector-linux-amd64
+          retention-days: 1
+      - name: validate + smoke run (debug exporter, nothing is sent)
+        run: |
+          set -euo pipefail
+          b=collector/_build/monitoring-collector
+          $b validate --config collector/testdata/smoke.yaml
+          JOURNAL_STORAGE_DIR=$(mktemp -d) $b validate --config collector/testdata/smoke.yaml --config collector/config/journal.yaml --config collector/testdata/journal-pipelines.yaml
+          python3 -m http.server 8080 --bind 127.0.0.1 >/dev/null 2>&1 & s=$!
+          sleep 1; exec 3<>/dev/tcp/127.0.0.1/8080
+          timeout 10 $b --config collector/testdata/smoke.yaml > smoke.log 2>&1 || true
+          kill $s
+          grep -q 'log_type: Str(netconn)' smoke.log || { tail -n 40 smoke.log; echo "::error::no netconn records"; exit 1; }
+          grep -q 'log_type: Str(processes)' smoke.log || { tail -n 40 smoke.log; echo "::error::no procs records"; exit 1; }
+          grep -E -m1 -A3 'port: Str\(8080\)' smoke.log
+          if grep -qiE '"level":"error"|\terror\t' smoke.log; then grep -iE 'error' smoke.log | head; exit 1; fi
+
+  # End to end on a real runner (~13 min): v0.18.0 installed, failed switch (rollback), the switch to this commit's
+  # monitoring-collector (artifact of the collector job), data at a fake backend, update, probes, agent, uninstall.
+  # Only before a release (release.yml calls this file on a tag push) or by hand (Run workflow).
+  e2e:
+    needs: [test, collector]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build amc (linux amd64, static)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/amc-linux-amd64 ./cmd/amc
+      - uses: actions/download-artifact@v4
+        with:
+          name: monitoring-collector
+          path: mc
+      - name: End to end on this runner (real collector, systemd, ACLs; fake backend and secrets)
         run: |
           sudo apt-get install -y -qq acl > /dev/null
           alert=/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log
           sudo install -d -m 750 "$(dirname "$alert")" && echo "2026-10-05T10:00:00.000000+00:00" | sudo tee "$alert" > /dev/null
           sudo chmod 640 "$alert"                         # root only: amc must grant the collector an ACL
           sudo install -d -m 700 /opt/monitoring/secrets
-          printf "OO_ENDPOINT='http://127.0.0.1:9'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n" \
+          printf "OO_ENDPOINT='http://127.0.0.1:4320'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n" \
             | sudo tee /opt/monitoring/secrets/collector.env > /dev/null
           sudo chmod 600 /opt/monitoring/secrets/collector.env
           # Every check stops the job on its own line: in `bash -e` a failure inside `a && b` does NOT stop the
@@ -90,7 +162,28 @@ jobs:
           set -euo pipefail
           die()  { echo "::error::$*"; exit 1; }
           must() { grep -q -- "$1" "$2" || die "missing '$1' in $2"; }
-          amc=./dist/amc-linux-amd64
+          # v0.19.0: the collector of THIS commit (artifact of the collector job) instead of a release download
+          mc=$PWD/mc/monitoring-collector-linux-amd64; chmod 755 "$mc"; "$mc" --version
+          printf '#!/bin/sh\ncase "$1" in plan|apply|update) s=$1; shift; exec %s "$s" --collector-file %s "$@";; esac\nexec %s "$@"\n' \
+            "$PWD/dist/amc-linux-amd64" "$mc" "$PWD/dist/amc-linux-amd64" > amcw
+          chmod 755 amcw; amc=$PWD/amcw
+          # Fake backend: every OTLP/HTTP export is kept per stream (header stream-name) in /tmp/oo/<stream>.bin,
+          # gunzipped: protobuf keeps strings as plain bytes, so grep finds (or must not find) a log line.
+          mkdir -p /tmp/oo
+          python3 - <<'PY' &
+          import gzip, http.server
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  b = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                  if self.headers.get("Content-Encoding") == "gzip":
+                      b = gzip.decompress(b)
+                  with open("/tmp/oo/%s.bin" % (self.headers.get("stream-name") or "default"), "ab") as f:
+                      f.write(b + b"\n")   # one export per line (JSON exports: one JSON document per line)
+                  self.send_response(200); self.send_header("Content-Length", "0"); self.end_headers()
+              def log_message(self, *a):
+                  pass
+          http.server.ThreadingHTTPServer(("127.0.0.1", 4320), H).serve_forever()
+          PY
           # Fake services on the discovery ports, so receiver_creator really builds its templates in the smoke
           # run (with the digits-only test password: the int bug that validate cannot see). Accept + close at
           # once: a listener that never answers can hang a collector's shutdown.
@@ -112,7 +205,7 @@ jobs:
           must 'no load / start errors' plan1.txt
           must '[1-9][0-9]* discovered receivers' plan1.txt    # the templates were really built
           must 'CHECK done: 0 failures' plan1.txt
-          if [ -e /etc/systemd/system/monitoring-otelcol.service ] || [ -e /opt/monitoring/config ]; then die "plan changed the system"; fi
+          if [ -e /etc/systemd/system/monitoring-collector.service ] || [ -e /opt/monitoring/config ]; then die "plan changed the system"; fi
           # A GENERATED host part (detect.json + answers: Oracle + Tomcat + HTTP checks) must pass the real
           # collector too: validate + smoke run with every receiver block the generator writes.
           echo "::group::plan with a generated host part"
@@ -161,81 +254,77 @@ jobs:
           must 'Apply now?' interactive.txt
           if grep -q '^DONE:' interactive.txt; then die "answered n to Apply now, but it applied"; fi
           [ ! -e /opt/monitoring/answers.yaml ] || die "plan wrote answers.yaml"
-          echo "::group::apply --start"
+          # v0.19.0: a host on the OLD layout first (the released v0.18.0: otelcol-contrib + 4 helper units), then the
+          # switch. The signed v0.18.0 amc is checked like get.sh does (signature + sha256) before it runs.
+          echo "::group::install v0.18.0 (old layout)"
+          r18=https://github.com/NABIXcorp/auto-mon-collector/releases/download/v0.18.0
+          mkdir -p v18 && (cd v18 && curl -fsSLO "$r18/SHA256SUMS" -fsSLO "$r18/SHA256SUMS.sig" -fsSLO "$r18/amc-linux-amd64")
+          openssl dgst -sha256 -verify keys/amc-release.pub -signature v18/SHA256SUMS.sig v18/SHA256SUMS
+          (cd v18 && grep ' amc-linux-amd64$' SHA256SUMS | sha256sum -c -) && chmod 755 v18/amc-linux-amd64
+          sudo v18/amc-linux-amd64 apply --host-dir examples/oracle-db --start | tee apply18.txt
+          echo "::endgroup::"
+          systemctl is-active monitoring-otelcol monitoring-netconn monitoring-kmsg monitoring-procs monitoring-sshd \
+            || die "v0.18.0 units not active"
+          # a switch that cannot start (OTLP port 1521 is held by the fake listener; validate binds nothing, no smoke
+          # run) must bring the OLD units back, never leave the host without monitoring
+          echo "::group::switch that fails (must roll back to v0.18.0)"
+          cp -r examples/oracle-db broken-sw && mkdir -p broken-sw/site.d
+          printf 'receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 127.0.0.1:1521\n' > broken-sw/site.d/99-broken.yaml
+          set +e; sudo $amc apply --host-dir broken-sw --start --no-smoke | tee sw0.txt; rc=${PIPESTATUS[0]}; set -e
+          echo "::endgroup::"
+          [ "$rc" -eq 1 ] || die "a rolled-back switch must exit 1 (got $rc)"
+          must 'units of the previous state linked again' sw0.txt
+          must 'rolled back: the previous state runs again' sw0.txt
+          systemctl is-active monitoring-otelcol monitoring-netconn monitoring-kmsg monitoring-procs monitoring-sshd \
+            || die "old units not running after the failed switch"
+          [ ! -e /etc/systemd/system/monitoring-collector.service ] || die "new unit left linked after the rollback"
+          sudo test -x /opt/monitoring/netconn/otel-sshd.sh || die "helper scripts not restored"
+          echo "::group::apply --start (the switch)"
           sudo $amc apply --host-dir examples/oracle-db --start | tee apply.txt
           echo "::endgroup::"
-          must 'monitoring-otelcol.service active' apply.txt
-          must 'monitoring-netconn.service active' apply.txt
-          must 'monitoring-kmsg.service active' apply.txt
-          systemctl is-active monitoring-otelcol monitoring-netconn monitoring-kmsg || die "units not active"
-          # v0.5.0 end to end: a kernel message (priority 3) must reach the helper's file within seconds
+          must 'STOP   monitoring-otelcol.service (replaced by monitoring-collector' apply.txt
+          must 'monitoring-collector.service active' apply.txt
+          systemctl is-active monitoring-collector || die "monitoring-collector not active"
+          for u in monitoring-otelcol monitoring-netconn monitoring-kmsg monitoring-procs monitoring-sshd; do
+            if systemctl is-active -q $u; then die "$u still running"; fi
+            [ ! -e /etc/systemd/system/$u.service ] || die "$u still linked"
+          done
+          [ ! -e /opt/monitoring/netconn/otel-sshd.sh ] || die "helper scripts left"
+          # least privilege (accepted 2026-11-03): ONLY the collector process has the journal group
+          jg=$(getent group systemd-journal | cut -d: -f3)
+          pid=$(systemctl show -p MainPID --value monitoring-collector)
+          grep -q "^Groups:.*\b$jg\b" /proc/$pid/status || die "collector lacks the journal group"
+          # v0.19.0 end to end, records at the fake backend: kernel line, CPU burner, connection counts, sshd lines
           sleep 3
           # (journald takes "amc-ci:" as the program name and strips it from MESSAGE)
           echo "<3>amc-ci: Out of memory: Killed process 4242 (ci-test)" | sudo tee /dev/kmsg > /dev/null
-          for i in $(seq 1 20); do sudo grep -qs 'Killed process 4242 (ci-test)' /opt/monitoring/data/kmsg/kmsg-*.jsonl && break; sleep 1; done
-          f=$(sudo sh -c 'ls /opt/monitoring/data/kmsg/kmsg-*.jsonl | head -1')
-          echo "kmsg file: $(sudo stat -c '%A %U:%G' "$f")"; sudo getfacl -p "$f" /opt/monitoring/data/kmsg /opt/monitoring/data /opt 2>/dev/null | grep -vE '^$'
-          case "$(sudo stat -c %A "$f")" in ????????w?) die "kmsg file is world-writable";; esac
-          # v0.10.1: the netconn helper sets its file mode itself too (the runner's default ACL on /opt gives other::rwx)
-          for i in $(seq 1 40); do sudo sh -c 'ls /opt/monitoring/data/netconn/netconn-*.jsonl' > /dev/null 2>&1 && break; sleep 1; done
-          m=$(sudo sh -c 'stat -c %A /opt/monitoring/data/netconn/netconn-*.jsonl' | head -1); echo "netconn file: $m"
-          case "$m" in '') die "no netconn file";; ????????w?) die "netconn file is world-writable";; esac
-          if ! sudo grep -qs 'Killed process 4242 (ci-test)' /opt/monitoring/data/kmsg/kmsg-*.jsonl; then
-            echo "--- unit"; systemctl status monitoring-kmsg --no-pager | tail -15
-            echo "--- data dir"; sudo ls -la /opt/monitoring/data/kmsg
-            echo "--- root: last kernel messages"; sudo journalctl -k -n 3 --no-pager -o json --output-fields=MESSAGE,PRIORITY
-            echo "--- helper processes"; ps -eo pid,user,args | grep -E '[j]ournalctl|[o]tel-kmsg'
-            for p in $(pgrep -f 'journalctl -k'); do echo "pid $p"; grep -E '^(Uid|Gid|Groups)' /proc/$p/status; done
-            die "kernel message not captured by monitoring-kmsg"
-          fi
-          # v0.6.0 end to end: a CPU burner must show up in the top-processes file with cpu_pct > 50 (15 s window)
-          must 'monitoring-procs.service active' apply.txt
-          # (the helper samples every 60 s: burn longer than one interval + window)
-          timeout 100 bash -c 'exec -a amcburn bash -c "while :; do :; done"' &
-          ok=""
-          for i in $(seq 1 100); do
-            if sudo sh -c 'cat /opt/monitoring/data/procs/procs-*.jsonl 2>/dev/null' | python3 -c '
-          import json, sys
-          rows = [json.loads(l) for l in sys.stdin if l.strip()]
-          sys.exit(0 if any(r["cpu_pct"] > 50 and "cpu" in r["top"] for r in rows) else 1)'; then ok=1; break; fi
-            sleep 1
-          done
-          [ -n "$ok" ] || { sudo sh -c 'tail -5 /opt/monitoring/data/procs/procs-*.jsonl'; die "CPU burner not in the top-processes file"; }
-          sudo sh -c 'cat /opt/monitoring/data/procs/procs-*.jsonl' | grep -q '"args"' && die "process arguments written"
-          case "$(sudo sh -c 'stat -c %A /opt/monitoring/data/procs/procs-*.jsonl' | head -1)" in ????????w?) die "procs file is world-writable";; esac
-          # v0.7.0 end to end: sshd login lines (via logger -t sshd) arrive; an unknown user name (here a "password")
-          # is masked before it is written; other services' lines are not read. As root (like the real sshd): a normal
-          # user's logger lines go to that user's own journal file
-          must 'monitoring-sshd.service active' apply.txt
-          sleep 3
           sudo logger -t sshd "Accepted publickey for ciuser from 192.0.2.10 port 4242 ssh2"
           sudo logger -t sshd "Invalid user Sup3rS3cretPw from 192.0.2.11 port 4243"
           sudo logger -t sshd "Failed password for invalid user Sup3rS3cretPw from 192.0.2.11 port 4243 ssh2"
           sudo logger -t sshd "Connection closed by invalid user Sup3rS3cretPw 192.0.2.11 port 4243 [preauth]"
+          sudo logger -t sshd "Invalid user my pass Word9 from 192.0.2.12 port 4244"
           sudo logger -t sshd "Server listening on 0.0.0.0 port 22."
           sudo logger -t sudo "ciuser : COMMAND=/usr/bin/echo SudoSecret123"
-          for i in $(seq 1 20); do sudo sh -c 'grep -qs "Connection closed by invalid user" /opt/monitoring/data/sshd/sshd-*.jsonl' && break; sleep 1; done
-          # robustness: after a journal rotation both journal helpers still capture new lines (cursor polling; a
-          # long-running journalctl -f missed lines after the journal changed, seen 2026-10-08)
+          # the procs receiver samples every 60 s over 15 s: burn longer than one interval + window. A copy of bash
+          # named amcburn: the receiver reports the command name (comm), never arguments
+          cp /bin/bash /tmp/amcburn && timeout 100 /tmp/amcburn -c 'while :; do :; done' &
+          for i in $(seq 1 30); do grep -qs 'Killed process 4242 (ci-test)' /tmp/oo/kernel.bin && grep -qs 'invalid user \*\*\* 192.0.2.11' /tmp/oo/ssh.bin && break; sleep 1; done
+          grep -qs 'Killed process 4242 (ci-test)' /tmp/oo/kernel.bin || { sudo journalctl -u monitoring-collector -n 30 --no-pager; die "kernel line not exported"; }
+          grep -qs 'Accepted publickey for ciuser from 192.0.2.10' /tmp/oo/ssh.bin || { sudo journalctl -u monitoring-collector -n 30 --no-pager; die "accepted login not exported"; }
+          [ "$(grep -ac 'nvalid user \*\*\*' /tmp/oo/ssh.bin || true)" -ge 1 ] || die "unknown user not masked"
+          if grep -aqs 'Sup3rS3cretPw\|my pass Word9\|SudoSecret123\|Server listening' /tmp/oo/*.bin; then die "secret / non-login line exported"; fi
+          # robustness: the journald receiver follows (journalctl --follow): after a journal rotation new lines must
+          # still arrive (a long-running follower missed lines in CI on 2026-10-08 with the old helpers)
           sudo journalctl --rotate; sleep 2
           sudo logger -t sshd "Accepted publickey for rotprobe from 192.0.2.98 port 1 ssh2"
           echo "<3>amcrot: kernel line after rotation" | sudo tee /dev/kmsg > /dev/null
-          for i in $(seq 1 25); do sudo sh -c 'grep -qs rotprobe /opt/monitoring/data/sshd/sshd-*.jsonl && grep -qs "kernel line after rotation" /opt/monitoring/data/kmsg/kmsg-*.jsonl' && break; sleep 1; done
-          sudo sh -c 'grep -qs rotprobe /opt/monitoring/data/sshd/sshd-*.jsonl' || die "sshd line after a journal rotation not captured"
-          sudo sh -c 'grep -qs "kernel line after rotation" /opt/monitoring/data/kmsg/kmsg-*.jsonl' || die "kernel line after a journal rotation not captured"
-          if ! sudo sh -c 'grep -qs "Accepted publickey for ciuser from 192.0.2.10" /opt/monitoring/data/sshd/sshd-*.jsonl'; then
-            echo "--- unit"; systemctl status monitoring-sshd --no-pager | tail -12; sudo journalctl -u monitoring-sshd --no-pager | tail -10
-            echo "--- journal -t sshd (root)"; sudo journalctl -t sshd -t sshd-session -n 8 -o cat --no-pager
-            echo "--- helper --stdout as the collector user"; sudo runuser -u otelcol-contrib -g otelcol-contrib -G systemd-journal -- /opt/monitoring/netconn/otel-sshd.sh --stdout
-            echo "--- data dir"; sudo ls -la /opt/monitoring/data/sshd
-            die "accepted login not captured"
-          fi
-          sudo sh -c 'cat /opt/monitoring/data/sshd/sshd-*.jsonl'
-          [ "$(sudo sh -c 'grep -c "invalid user \*\*\*" /opt/monitoring/data/sshd/sshd-*.jsonl' || true)" -ge 2 ] || die "unknown user not masked"
-          if sudo sh -c 'grep -qs "Sup3rS3cretPw\|SudoSecret123\|Server listening" /opt/monitoring/data/sshd/sshd-*.jsonl'; then die "secret / non-login line written"; fi
-          # the collector process itself must NOT be in the journal group (only the helper unit is)
-          pid=$(systemctl show -p MainPID --value monitoring-otelcol)
-          ! grep -q "^Groups:.*\b$(getent group systemd-journal | cut -d: -f3)\b" /proc/$pid/status || die "collector has journal access"
+          for i in $(seq 1 25); do grep -qs rotprobe /tmp/oo/ssh.bin && grep -qs "kernel line after rotation" /tmp/oo/kernel.bin && break; sleep 1; done
+          grep -qs rotprobe /tmp/oo/ssh.bin || die "sshd line after a journal rotation not exported"
+          grep -qs "kernel line after rotation" /tmp/oo/kernel.bin || die "kernel line after a journal rotation not exported"
+          for i in $(seq 1 100); do grep -qs amcburn /tmp/oo/processes.bin && break; sleep 1; done
+          grep -qs amcburn /tmp/oo/processes.bin || die "CPU burner not in the exported top processes"
+          [ -s /tmp/oo/netconn.bin ] || die "no connection counts exported"
+          ls -l /tmp/oo
           # detect on the real /proc: the live collector's OTLP port must be seen, the JSON must parse
           sudo $amc detect
           sudo $amc detect --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert 4317 in d["listening_ports"], d' \
@@ -253,7 +342,7 @@ jobs:
           must 'CHECK done: 0 failures' plan2.txt
           # plan2 ran its smoke collector NEXT TO the live one: no port conflict, live collector untouched
           must 'no load / start errors' plan2.txt
-          systemctl is-active monitoring-otelcol || die "the smoke run disturbed the live collector"
+          systemctl is-active monitoring-collector || die "the smoke run disturbed the live collector"
           # Broken update: OTLP on 1521 (held by the fake listener). validate passes (it binds nothing), the
           # smoke run is skipped -> the collector really fails to start -> amc must roll back.
           echo "::group::broken update (must roll back)"
@@ -264,12 +353,12 @@ jobs:
           [ "$rc" -eq 1 ] || die "a rolled-back apply must exit 1 (got $rc)"
           must 'ROLLED BACK' broken.txt
           must 'rolled back: the previous state runs again' broken.txt
-          systemctl is-active monitoring-otelcol || die "previous state not running after the rollback"
+          systemctl is-active monitoring-collector || die "previous state not running after the rollback"
           [ ! -e /opt/monitoring/config/site.d/99-broken.yaml ] || die "the broken file survived the rollback"
           sudo $amc plan --host-dir examples/oracle-db --no-smoke | tee plan3.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' plan3.txt; then die "after the rollback the host is not back to the good state"; fi
           # v0.9.0 end to end: access log lines -> signal_to_metrics -> delta_to_cumulative -> metrics OUT of the real
-          # collector (file exporter instead of the backend). The live collector is stopped meanwhile (same ports);
+          # collector (OTLP JSON to the fake backend, stream http_e2e). The live collector is stopped meanwhile (same ports);
           # the test collector keeps its queue in /tmp (no root-owned files in the live data dir).
           echo "::group::HTTP metrics from the access log"
           $amc generate --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json --out gen-http > /dev/null
@@ -277,22 +366,22 @@ jobs:
           sudo install -d /opt/tomcat10/logs /tmp/http-e2e/fs
           acc=/opt/tomcat10/logs/access_log.$(date +%F).log
           sudo touch "$acc"
-          printf 'extensions:\n  file_storage:\n    directory: /tmp/http-e2e/fs\nexporters:\n  file/http:\n    path: /tmp/http-e2e/metrics.json\nservice:\n  pipelines:\n    metrics/http:\n      receivers: [signal_to_metrics/http]\n      processors: [delta_to_cumulative, batch]\n      exporters: [file/http]\n' > http-overlay.yaml
-          sudo systemctl stop monitoring-otelcol
+          printf 'extensions:\n  file_storage:\n    directory: /tmp/http-e2e/fs\nexporters:\n  otlp_http/http_e2e:\n    endpoint: http://127.0.0.1:4320\n    encoding: json\n    compression: none\n    headers:\n      stream-name: http_e2e\nservice:\n  pipelines:\n    metrics/http:\n      receivers: [signal_to_metrics/http]\n      processors: [delta_to_cumulative, batch]\n      exporters: [otlp_http/http_e2e]\n' > http-overlay.yaml
+          sudo systemctl stop monitoring-collector
           sudo bash -c "set -a; . gen-http/host.env; OO_ENDPOINT=http://127.0.0.1:9; OO_AUTH=x; ORACLE_MON_PASSWORD=x; set +a; \
-            exec /opt/monitoring/bin/otelcol-contrib --config assets/config/config.yaml --config gen-http/host.yaml --config http-overlay.yaml" > http-col.log 2>&1 &
+            exec /opt/monitoring/bin/monitoring-collector --config assets/config/config.yaml --config assets/config/journal.yaml --config gen-http/host.yaml --config http-overlay.yaml" > http-col.log 2>&1 &
           sleep 6   # start_at: end -> write the lines after the collector is up
           for i in 1 2 3; do
             printf '10.0.0.%s - - [%s] "GET /app/a HTTP/1.1" 200 512 40\n10.0.0.%s - - [%s] "POST /app/b HTTP/1.1" 500 99 1200\n' \
               "$i" "$(date '+%d/%b/%Y:%H:%M:%S %z')" "$i" "$(date '+%d/%b/%Y:%H:%M:%S %z')" | sudo tee -a "$acc" > /dev/null
             sleep 2
           done
-          for i in $(seq 1 30); do sudo grep -qs 'tomcat.access.duration' /tmp/http-e2e/metrics.json && break; sleep 1; done
+          for i in $(seq 1 30); do grep -qs "tomcat.access.duration" /tmp/oo/http_e2e.bin && break; sleep 1; done
           sudo pkill -f 'http-overlay.yaml' || true
           sleep 2
           echo "::endgroup::"
-          sudo test -s /tmp/http-e2e/metrics.json || { tail -40 http-col.log; die "no metrics written by the connector"; }
-          sudo cat /tmp/http-e2e/metrics.json | python3 -c '
+          test -s /tmp/oo/http_e2e.bin || { tail -40 http-col.log; die "no metrics exported by the connector"; }
+          cat /tmp/oo/http_e2e.bin | python3 -c '
           import json, sys
           seen = {}
           for line in sys.stdin:
@@ -313,9 +402,9 @@ jobs:
           print("HTTP metrics OK:", sorted(seen), "points", len(req), len(dur))
           ' || { tail -40 http-col.log; die "HTTP metrics from the access log are wrong"; }
           if grep -q 'is deprecated' http-col.log; then grep 'is deprecated' http-col.log; die "deprecated component name in the generated config"; fi
-          sudo systemctl start monitoring-otelcol
-          for i in $(seq 1 20); do systemctl is-active -q monitoring-otelcol && break; sleep 1; done
-          systemctl is-active monitoring-otelcol || die "live collector did not come back after the HTTP metrics test"
+          sudo systemctl start monitoring-collector
+          for i in $(seq 1 20); do systemctl is-active -q monitoring-collector && break; sleep 1; done
+          systemctl is-active monitoring-collector || die "live collector did not come back after the HTTP metrics test"
           # v0.10.0 end to end: amc update = a new release on an installed host without copying files (saved
           # answers.yaml + the installed site.d). An up-to-date host must NOT be restarted (same MainPID).
           echo "::group::amc update"
@@ -324,29 +413,29 @@ jobs:
           td=examples/tomcat-systemd
           mkdir -p site-upd && printf 'processors:\n  batch/ci_update: {}\n' > site-upd/10-ci.yaml
           sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start | tee upd1.txt
-          must 'monitoring-otelcol.service active' upd1.txt
+          must 'monitoring-collector.service active' upd1.txt
           { sudo test -s /opt/monitoring/answers.yaml && sudo test -s /opt/monitoring/config/site.d/10-ci.yaml; } || die "answers / site.d not installed"
-          pid=$(systemctl show -p MainPID --value monitoring-otelcol)
+          pid=$(systemctl show -p MainPID --value monitoring-collector)
           sudo $amc update --detect-json $td/detect.json | tee upd2.txt
           must 'up to date: nothing to change, nothing restarted' upd2.txt
-          [ "$(systemctl show -p MainPID --value monitoring-otelcol)" = "$pid" ] || die "an up-to-date update restarted the collector"
+          [ "$(systemctl show -p MainPID --value monitoring-collector)" = "$pid" ] || die "an up-to-date update restarted the collector"
           sudo test -s /opt/monitoring/config/site.d/10-ci.yaml || die "update removed the installed site.d"
           # a changed saved answer (stands for a release with a changed template): --plan changes nothing, then apply
           sudo sed -i 's/^project: Shop online$/project: Shop update/' /opt/monitoring/answers.yaml
           sudo $amc update --plan --detect-json $td/detect.json | tee upd3.txt
           must 'change(s) planned' upd3.txt
-          [ "$(systemctl show -p MainPID --value monitoring-otelcol)" = "$pid" ] || die "update --plan restarted the collector"
+          [ "$(systemctl show -p MainPID --value monitoring-collector)" = "$pid" ] || die "update --plan restarted the collector"
           sudo $amc update --detect-json $td/detect.json | tee upd4.txt
           must 'DONE: 0 failure' upd4.txt
           sudo grep -q 'project=Shop+update' /opt/monitoring/config/host.env || die "update did not apply the saved answers"
           sudo test -s /opt/monitoring/config/site.d/10-ci.yaml || die "update removed the installed site.d"
-          systemctl is-active monitoring-otelcol || die "collector not active after the update"
+          systemctl is-active monitoring-collector || die "collector not active after the update"
           # v0.10.1: a new installer with an identical configuration (only VERSION differs): written, NOT restarted
           sudo sed -i 's/^installer=.*/installer=amc older/' /opt/monitoring/VERSION
-          pid=$(systemctl show -p MainPID --value monitoring-otelcol)
+          pid=$(systemctl show -p MainPID --value monitoring-collector)
           sudo $amc update --detect-json $td/detect.json | tee upd5.txt
           must 'collector NOT restarted' upd5.txt
-          [ "$(systemctl show -p MainPID --value monitoring-otelcol)" = "$pid" ] || die "a VERSION-only update restarted the collector"
+          [ "$(systemctl show -p MainPID --value monitoring-collector)" = "$pid" ] || die "a VERSION-only update restarted the collector"
           if sudo grep -q 'installer=amc older' /opt/monitoring/VERSION; then die "VERSION not written"; fi
           if grep -q 'Run `amc apply`' upd2.txt upd3.txt upd5.txt; then die "update printed the engine's amc apply hint"; fi
           echo "::endgroup::"
@@ -460,12 +549,12 @@ jobs:
           grep -q '"/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log"' /opt/monitoring/amc-state.json || die "ACL not recorded"
           sudo $amc uninstall | tee un1.txt
           must 'CHECK done' un1.txt
-          systemctl is-active monitoring-otelcol || die "uninstall check mode stopped the collector"
+          systemctl is-active monitoring-collector || die "uninstall check mode stopped the collector"
           sudo $amc uninstall --yes --purge-data --purge-secrets --purge < /dev/null | tee un2.txt  # no tty: flags confirm
           echo "::endgroup::"
           must 'UNINSTALLED: 0 failure' un2.txt
-          if systemctl is-active -q monitoring-otelcol; then die "collector still running"; fi
-          [ ! -e /etc/systemd/system/monitoring-otelcol.service ] || die "unit link left"
+          if systemctl is-active -q monitoring-collector; then die "collector still running"; fi
+          [ ! -e /etc/systemd/system/monitoring-collector.service ] || die "unit link left"
           [ ! -e /etc/systemd/system/monitoring-cloudprober.service ] || die "cloudprober unit link left"
           if systemctl is-active -q monitoring-cloudprober; then die "cloudprober still running"; fi
           [ ! -e /opt/monitoring ] || die "/opt/monitoring left"
@@ -477,49 +566,3 @@ jobs:
             if sudo getfacl -p --omit-header "$p" | grep -E '^user:[^:]+:'; then die "ACL entry left on $p"; fi
           done
           [ "$(sudo stat -c %a "$alert")" = 640 ] || die "file mode of the alert log changed"
-      - name: No secrets (gitleaks, full history)
-        run: |
-          v=8.18.4; b=https://github.com/gitleaks/gitleaks/releases/download/v$v
-          curl -fsSLO "$b/gitleaks_${v}_linux_x64.tar.gz" -fsSLO "$b/gitleaks_${v}_checksums.txt"
-          grep " gitleaks_${v}_linux_x64.tar.gz$" "gitleaks_${v}_checksums.txt" | sha256sum -c -
-          tar -xzf "gitleaks_${v}_linux_x64.tar.gz" gitleaks
-          ./gitleaks detect --source . --no-banner --redact -v
-
-  # Phase D1: our own collector build (collector/, OCB) with the netconn + procs receivers. Separate Go modules,
-  # so the root `go test ./...` does not see them.
-  collector:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30   # cold OCB build ~11 min (module download), warm ~1 min
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: collector/receiver/netconnreceiver/go.mod
-          cache-dependency-path: |
-            collector/receiver/*/go.sum
-            collector/test/*/go.sum
-      - name: vet + test our receivers and the journal config (golden files, masking)
-        run: |
-          set -e
-          for m in collector/receiver/*/ collector/test/*/; do (cd "$m" && go vet ./... && go test -race ./...); done
-      - name: OCB build (linux amd64, static)
-        run: |
-          v=$(awk '/^  version:/ {print $2}' collector/builder-config.yaml)
-          go install "go.opentelemetry.io/collector/cmd/builder@v$v"
-          cd collector && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 builder --config builder-config.yaml
-          ls -l _build/monitoring-collector
-          ./_build/monitoring-collector --version
-      - name: validate + smoke run (debug exporter, nothing is sent)
-        run: |
-          set -euo pipefail
-          b=collector/_build/monitoring-collector
-          $b validate --config collector/testdata/smoke.yaml
-          JOURNAL_STORAGE_DIR=$(mktemp -d) $b validate --config collector/testdata/smoke.yaml             --config collector/config/journal.yaml --config collector/testdata/journal-pipelines.yaml
-          python3 -m http.server 8080 --bind 127.0.0.1 >/dev/null 2>&1 & s=$!
-          sleep 1; exec 3<>/dev/tcp/127.0.0.1/8080
-          timeout 10 $b --config collector/testdata/smoke.yaml > smoke.log 2>&1 || true
-          kill $s
-          grep -q 'log_type: Str(netconn)' smoke.log || { tail -n 40 smoke.log; echo "::error::no netconn records"; exit 1; }
-          grep -q 'log_type: Str(processes)' smoke.log || { tail -n 40 smoke.log; echo "::error::no procs records"; exit 1; }
-          grep -E -m1 -A3 'port: Str\(8080\)' smoke.log
-          if grep -qiE '"level":"error"|\terror\t' smoke.log; then grep -iE 'error' smoke.log | head; exit 1; fi

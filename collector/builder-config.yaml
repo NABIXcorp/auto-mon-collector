@@ -1,7 +1,8 @@
 # monitoring-collector: our own OpenTelemetry Collector build (OCB), phases D1 (netconn, procs) + D2 (journald).
 # Build: go install go.opentelemetry.io/collector/cmd/builder@v0.160.0 (builder version = dist version), then
 #   cd collector && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 builder --config builder-config.yaml
-# Component list = what the generated host config uses today (otelcol-contrib 0.160.0) + our receivers below.
+# Component list = what amc's base config, generator and the known site overlays use (checked 2026-11-03 against
+# every example + host part: CI validates them all with this binary) + our receivers below.
 # Bump: change every v0.160.0 / v1.66.0 together, rebuild, run the CI smoke test.
 dist:
   name: monitoring-collector
@@ -31,6 +32,10 @@ processors:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.160.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.160.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.160.0           # site overlays (filter/traces_noise)
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.160.0 # access-log HTTP metrics (v0.9.0)
+connectors:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/connector/signaltometricsconnector v0.160.0   # access-log HTTP metrics (v0.9.0)
 exporters:
   - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.160.0
   - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.160.0

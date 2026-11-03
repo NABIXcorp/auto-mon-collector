@@ -59,7 +59,7 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	units := st.Units
 	if len(units) == 0 {
 		units = e.unitFiles()
-		for _, u := range []string{assets.ProbeUnit, assets.AgentUnit, assets.UpdateUnit} {
+		for _, u := range append([]string{assets.ProbeUnit, assets.AgentUnit, assets.UpdateUnit}, assets.LegacyUnits...) {
 			if _, err := os.Lstat(e.fs("/etc/systemd/system/" + u + ".service")); err == nil {
 				units = append(units, u+".service")
 			}

@@ -1,5 +1,6 @@
 // Command amc (auto-mon-collector) scans a Linux host, proposes what to monitor, generates the configuration
-// for the official OpenTelemetry Collector (otelcol-contrib) and installs it on request. See docs/design.md.
+// for monitoring-collector (our OpenTelemetry Collector build, same signed release) and installs it on request.
+// See docs/design.md.
 package main
 
 import (
@@ -17,6 +18,7 @@ import (
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/agent"
 	"github.com/NABIXcorp/auto-mon-collector/internal/ask"
+	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 	"github.com/NABIXcorp/auto-mon-collector/internal/detect"
 	"github.com/NABIXcorp/auto-mon-collector/internal/engine"
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
@@ -25,7 +27,7 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/version"
 )
 
-const usage = `auto-mon-collector (amc): host discovery installer for otelcol-contrib
+const usage = `auto-mon-collector (amc): host discovery installer for monitoring-collector (OpenTelemetry)
 
 Usage:
   amc plan  --answers FILE [flags]           detect + generate + diff + validate + smoke run; changes nothing
@@ -52,7 +54,9 @@ Flags (plan / apply / generate):
   --host-dir DIR      instead of --answers: a prepared host part (host.yaml, host.env, site.d/)
   --prefix DIR        install root (default /opt/monitoring)
   --user NAME         collector user (default otelcol-contrib)
-  --no-fetch          do not download the pinned collector when it is missing or another version
+  --no-fetch          do not download the collector of this release when it is missing or different
+  --collector-file F  install F as bin/monitoring-collector instead of downloading (CI, no internet);
+                      NOT checked against the release: its sha256 is printed (plan / apply / update)
   --no-smoke          skip the 25 s test run of the new config (local sink, nothing sent to the backend)
   --no-rollback       (apply --start) keep the new state even when a unit does not start
   --start             (apply) restart the units and check them
@@ -63,6 +67,18 @@ SELinux rules). Kept unless asked: data/ + backup/ (--purge-data), secrets/ (--p
 
 Not yet available: sql, interactive questions (see docs/design.md, section 14).
 `
+
+// collectorSource: the collector of this amc release, downloaded once per command (plan + apply reuse it); the
+// download directory is removed at the end.
+func collectorSource() (*collector.Release, func()) {
+	r := &collector.Release{Version: version.Version}
+	dir, err := os.MkdirTemp("", "amc-collector-")
+	if err != nil {
+		return r, func() {}
+	}
+	r.Dir = dir
+	return r, func() { os.RemoveAll(dir) }
+}
 
 // Exit codes (docs/design.md, section 8).
 const (
@@ -137,6 +153,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	prefix := fs.String("prefix", "/opt/monitoring", "")
 	user := fs.String("user", "otelcol-contrib", "")
 	noFetch := fs.Bool("no-fetch", false, "")
+	collectorFile := fs.String("collector-file", "", "")
 	noSmoke := fs.Bool("no-smoke", false, "")
 	noRollback := fs.Bool("no-rollback", false, "")
 	start := fs.Bool("start", false, "")
@@ -190,9 +207,11 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	src, cleanup := collectorSource()
+	defer cleanup()
 	opts := engine.Options{
 		Prefix: *prefix, User: *user, Apply: apply, Start: *start, Fetch: !*noFetch, Smoke: !*noSmoke,
-		Rollback: !*noRollback, SecretsInput: secrets,
+		Rollback: !*noRollback, SecretsInput: secrets, Collector: src, CollectorFile: *collectorFile,
 		Out: stdout, Runner: sysexec.Runner{},
 	}
 	res, err := runEngine(ctx, opts, d)
@@ -236,6 +255,7 @@ func update(args []string, stdout, stderr io.Writer) int {
 	prefix := fs.String("prefix", "/opt/monitoring", "")
 	user := fs.String("user", "otelcol-contrib", "")
 	noFetch := fs.Bool("no-fetch", false, "")
+	collectorFile := fs.String("collector-file", "", "")
 	noSmoke := fs.Bool("no-smoke", false, "")
 	noRollback := fs.Bool("no-rollback", false, "")
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
@@ -275,8 +295,11 @@ func update(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	src, cleanup := collectorSource()
+	defer cleanup()
 	opts := engine.Options{
 		Prefix: *prefix, User: *user, Fetch: !*noFetch, Smoke: !*noSmoke, Rollback: !*noRollback,
+		Collector: src, CollectorFile: *collectorFile,
 		Out: stdout, Runner: sysexec.Runner{}, CheckHint: "-",
 	}
 	res, err := runEngine(ctx, opts, d)

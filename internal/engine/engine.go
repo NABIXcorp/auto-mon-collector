@@ -29,6 +29,7 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/cloudprober"
 	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 	"github.com/NABIXcorp/auto-mon-collector/internal/envfile"
+	"github.com/NABIXcorp/auto-mon-collector/internal/version"
 )
 
 // Runner runs system tools. Run = exit status only; Output = combined output (read-only tools, validate);
@@ -49,7 +50,7 @@ type Options struct {
 
 	Apply bool // change the system (otherwise check mode)
 	Start bool // with Apply: (re)start the units and check them
-	Fetch bool // download the pinned collector if missing / other version
+	Fetch bool // download the collector of this amc release if missing / different (sha256)
 	Smoke bool // after validate: run the new config for SmokeTime against a local sink
 	// Rollback: with Start, if a unit is not active afterwards, go back to the state before this apply
 	// (backup + previous collector binary); a first install is stopped + disabled instead.
@@ -66,7 +67,12 @@ type Options struct {
 	Runner        Runner
 	Now           func() time.Time
 	Chown         func(path string, uid, gid int) error
-	Fetcher       func(context.Context, collector.Asset, string) (string, error)
+	// Collector: where the collector's sha256 and binary come from (default: the signed release of this amc,
+	// collector.Release{Version: version.Version}; tests fake it)
+	Collector collector.Source
+	// CollectorFile: install this local file as the collector instead of downloading (CI, hosts without internet).
+	// Its sha256 is printed, it is NOT checked against a release: the operator vouches for it.
+	CollectorFile string
 	// ProbeFetcher downloads the pinned Cloudprober for an architecture into a directory (default cloudprober.Fetch)
 	ProbeFetcher func(ctx context.Context, arch, dir string) (string, error)
 
@@ -128,11 +134,13 @@ type eng struct {
 	bin     string            // collector binary usable for validate ("" = none)
 
 	// what this apply changed, for the rollback
-	firstInstall     bool   // there was no config.yaml before
-	backupDir        string // backup of the files before this apply ("" = files unchanged)
-	binReplaced      bool   // the previous binary is in bin/otelcol-contrib.previous
-	probeBin         string // Cloudprober binary usable for --configtest ("" = none)
-	probeBinReplaced bool   // the previous Cloudprober is in bin/cloudprober.previous
+	firstInstall     bool     // there was no config.yaml before
+	backupDir        string   // backup of the files before this apply ("" = files unchanged)
+	binReplaced      bool     // the previous binary is in bin/monitoring-collector.previous
+	droppedUnits     []string // legacy units (before v0.19.0) this apply stopped, disabled and unlinked
+	addedUnits       []string // units this apply linked for the first time (a rollback unlinks them again)
+	probeBin         string   // Cloudprober binary usable for --configtest ("" = none)
+	probeBinReplaced bool     // the previous Cloudprober is in bin/cloudprober.previous
 	rolledBack       bool
 
 	st    *state // what amc changed outside <prefix> (amc-state.json), for uninstall
@@ -169,8 +177,8 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	if o.Chown == nil {
 		o.Chown = os.Lchown
 	}
-	if o.Fetcher == nil {
-		o.Fetcher = collector.Fetch
+	if o.Collector == nil {
+		o.Collector = &collector.Release{Version: version.Version}
 	}
 	if o.ProbeFetcher == nil {
 		o.ProbeFetcher = cloudprober.Fetch
@@ -214,6 +222,13 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	e.persistState()
 	res := Result{Failures: e.r.failures, Warnings: e.r.warnings, Changes: e.r.changes,
 		NoRestart: e.r.changes == 1 && e.onlyNoRestartFiles()}
+	if e.r.failures > 0 && len(e.droppedUnits) > 0 {
+		// the old collector + helpers are already stopped: never leave the host without monitoring
+		e.rollback(ctx)
+		e.persistState()
+		fmt.Fprintf(o.Out, "\nROLLED BACK: %d failure(s), %d warning(s). The old collector runs again.\n", e.r.failures, e.r.warnings)
+		return Result{Failures: e.r.failures, Warnings: e.r.warnings, Applied: true, RolledBack: e.rolledBack}, nil
+	}
 	if e.r.failures > 0 {
 		fmt.Fprintf(o.Out, "\nSTOP: %d failure(s), %d warning(s). Nothing restarted.\n", e.r.failures, e.r.warnings)
 		return res, nil
@@ -234,6 +249,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	e.persistState()
 	if o.Start && e.r.failures == 0 {
 		e.start(ctx)
+		e.persistState() // a rollback may have switched the units back
 	}
 	res = Result{Failures: e.r.failures, Warnings: e.r.warnings, Applied: true, RolledBack: e.rolledBack}
 	if e.rolledBack {
@@ -388,7 +404,7 @@ func (e *eng) mask(s string) string {
 
 func (e *eng) preflight(context.Context, string) bool {
 	e.r.step("1. preflight")
-	if _, err := collector.For(e.o.Arch); err != nil {
+	if _, err := collector.AssetName(e.o.Arch); err != nil {
 		e.r.fail("%v", err)
 	} else {
 		e.r.ok("CPU %s, OS %s", e.o.Arch, e.osName())
@@ -410,6 +426,11 @@ func (e *eng) preflight(context.Context, string) bool {
 	}
 	if _, err := envfile.Parse(e.d.HostEnv); err != nil {
 		e.r.fail("host.env: %v", err)
+	}
+	// the switch from otelcol-contrib + helper units stops the old units: without --start the host would be left
+	// without monitoring (or, after a reboot, with both collectors)
+	if e.o.Apply && !e.o.Start && len(e.legacyLinked()) > 0 {
+		e.r.fail("switching to %s stops the old collector: run with --start (automatic rollback on failure)", collector.Name)
 	}
 	return e.r.failures == 0
 }
@@ -442,6 +463,7 @@ func (e *eng) desiredFiles() ([]file, error) {
 	ud := assets.UnitData{Prefix: e.o.Prefix, User: e.o.User, SiteConfigs: siteAbs}
 	files := []file{
 		{"config/config.yaml", assets.BaseConfig(), 0o644},
+		{"config/journal.yaml", assets.JournalConfig(), 0o644},
 		{"config/host.yaml", e.d.HostYAML, 0o644},
 		{"config/host.env", e.d.HostEnv, 0o644},
 	}
@@ -480,12 +502,7 @@ func (e *eng) desiredFiles() ([]file, error) {
 		return nil, err
 	}
 	files = append(files, af...)
-	files = append(files,
-		file{"netconn/otel-netconn.sh", assets.Netconn(), 0o755},
-		file{"netconn/otel-kmsg.sh", assets.Kmsg(), 0o755},
-		file{"netconn/otel-procs.sh", assets.Procs(), 0o755},
-		file{"netconn/otel-sshd.sh", assets.Sshd(), 0o755},
-		file{"VERSION", e.d.Version, 0o644})
+	files = append(files, file{"VERSION", e.d.Version, 0o644})
 	if e.d.Answers != nil {
 		files = append(files, file{"answers.yaml", e.d.Answers, 0o644})
 	}
@@ -539,10 +556,10 @@ func (e *eng) userAndDirs(context.Context, string) bool {
 		e.st.UserCreated, e.st.Changed = true, true
 	}
 	uid, gid, haveUser := e.lookupUser(e.o.User)
-	for _, d := range []string{"", "bin", "config", "config/site.d", "systemd", "netconn", "backup"} {
+	for _, d := range []string{"", "bin", "config", "config/site.d", "systemd", "backup"} {
 		e.dir(e.pre(d), 0o755, 0, 0)
 	}
-	for _, d := range []string{"data", "data/file_storage", "data/netconn", "data/kmsg", "data/procs", "data/sshd"} {
+	for _, d := range []string{"data", "data/file_storage"} {
 		if !haveUser && e.o.Apply {
 			e.r.fail("%s: user %s missing", e.pre(d), e.o.User)
 			continue
@@ -643,56 +660,102 @@ func (e *eng) checkSecrets(context.Context, string) bool {
 
 // ---- 4. collector binary --------------------------------------------------------------------------------
 
+// collectorBinary: bin/monitoring-collector must be the one the signed release of this amc lists (sha256; the
+// version it prints is the OpenTelemetry core and stays the same when only our receivers change).
 func (e *eng) collectorBinary(ctx context.Context, tmp string) bool {
-	e.r.step("4. collector binary %s (%s)", collector.Version, e.o.Arch)
-	bin := e.pre("bin/otelcol-contrib")
-	have := ""
-	if _, err := os.Stat(e.fs(bin)); err == nil {
-		out, _ := e.o.Runner.Output(nil, e.fs(bin), "--version")
-		have = collector.ParseVersion(out)
-	}
-	if have == collector.Version {
-		e.r.ok("%s is %s", bin, have)
-		e.bin = e.fs(bin)
-		return true
-	}
-	if !e.o.Fetch {
-		e.r.fail("%s is %q, not %s (fetch is off)", bin, have, collector.Version)
-		return true
-	}
-	asset, err := collector.For(e.o.Arch)
-	if err != nil {
-		e.r.fail("%v", err)
-		return true
-	}
-	// Check mode downloads too (into a temp dir, nothing installed) so the NEW config can be validated
-	// with the real binary on a host that has none yet.
-	got, err := e.o.Fetcher(ctx, asset, tmp)
-	if err != nil {
-		e.r.fail("download %s: %v", asset.URL, err)
-		return true
-	}
-	e.r.ok("downloaded %s, sha256 verified", path.Base(asset.URL))
-	e.bin = got
-	e.do("install "+bin+" (mode 755, root)", func() error {
-		data, err := os.ReadFile(got)
+	e.r.step("4. collector binary %s (core %s, %s)", collector.Name, collector.CoreVersion, e.o.Arch)
+	bin := e.pre("bin", collector.Name)
+	have, haveErr := collector.FileSum(e.fs(bin))
+	var src string // the new binary to install
+	if f := e.o.CollectorFile; f != "" {
+		want, err := collector.FileSum(f)
 		if err != nil {
-			return err
+			e.r.fail("--collector-file: %v", err)
+			return true
 		}
-		// keep the binary that worked until now, once (a backup per apply would cost ~300 MB each)
-		if _, err := os.Stat(e.fs(bin)); err == nil {
+		e.r.warn("collector from %s (sha256 %x): NOT checked against a release (--collector-file)", f, want)
+		if haveErr == nil && have == want {
+			e.r.ok("%s is that file already", bin)
+			e.bin = e.fs(bin)
+			return true
+		}
+		src = f
+	} else {
+		want, err := e.o.Collector.Sum(ctx, e.o.Arch)
+		switch {
+		case err != nil && !e.o.Fetch && haveErr == nil:
+			e.r.warn("%s kept, NOT checked against the release (fetch is off: %v)", bin, err)
+			e.bin = e.fs(bin)
+			return true
+		case err != nil:
+			e.r.fail("collector of this release: %v", err)
+			return true
+		case haveErr == nil && have == want:
+			e.r.ok("%s = the signed release's (sha256 %x...)", bin, want[:6])
+			e.bin = e.fs(bin)
+			return true
+		case !e.o.Fetch:
+			e.r.fail("%s missing or not the release's (fetch is off)", bin)
+			return true
+		}
+		// Check mode downloads too (into a temp dir, nothing installed) so the NEW config can be validated
+		// with the real binary on a host that has none yet.
+		if src, err = e.o.Collector.Fetch(ctx, e.o.Arch, want, tmp); err != nil {
+			e.r.fail("download %s: %v", collector.Name, err)
+			return true
+		}
+		e.r.ok("downloaded %s, signature + sha256 verified", collector.Name)
+	}
+	e.bin = src
+	e.do("install "+bin+" (mode 755, root)", func() error {
+		// keep the binary that worked until now, once (a backup per apply would cost ~220 MB each)
+		if haveErr == nil {
 			if err := os.Rename(e.fs(bin), e.fs(bin+".previous")); err != nil {
 				return err
 			}
 			e.binReplaced = true
 		}
-		if err := e.writeFile(bin, data, 0o755); err != nil {
+		if err := e.copyBinary(src, bin); err != nil {
 			return err
 		}
 		e.bin = e.fs(bin)
 		return nil
 	})
 	return true
+}
+
+// copyBinary streams src to the system path p (temp file + rename, mode 755, owner root): no 220 MB in memory.
+func (e *eng) copyBinary(src, p string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	dst := e.fs(p)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".amc-*")
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(tmp, in)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp.Name(), 0o755)
+	}
+	if err == nil {
+		err = e.o.Chown(tmp.Name(), 0, 0)
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), dst)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+	}
+	return err
 }
 
 // ---- 5. files -------------------------------------------------------------------------------------------
@@ -730,6 +793,15 @@ func (e *eng) installFiles(context.Context, string) bool {
 		e.changedFiles = append(e.changedFiles, rel)
 		e.r.line("REMOVE %s (no longer wanted: probes / agent)", rel)
 	}
+	staleLegacy := e.staleLegacyFiles()
+	for _, rel := range staleLegacy {
+		changed = true
+		e.changedFiles = append(e.changedFiles, rel)
+		e.r.line("REMOVE %s (replaced by %s, v0.19.0)", rel, collector.Name)
+	}
+	for _, u := range e.legacyLinked() {
+		e.r.line("STOP   %s (replaced by %s; a rollback starts it again)", u, collector.Name)
+	}
 	if changed {
 		e.r.changes++
 	}
@@ -750,6 +822,12 @@ func (e *eng) installFiles(context.Context, string) bool {
 	// probes removed: stop + disable the Cloudprober unit while its unit file still exists (disable needs it)
 	e.dropProbeUnit()
 	e.dropAgent()
+	e.dropLegacyUnits()
+	for _, rel := range staleLegacy { // after the units are disabled (disable needs the unit file)
+		if err := os.Remove(e.fs(e.pre(rel))); err != nil {
+			e.r.fail("remove %s: %v", rel, err)
+		}
+	}
 	for _, f := range e.files {
 		if err := e.writeFile(e.pre(f.rel), f.data, f.mode); err != nil {
 			e.r.fail("write %s: %v", f.rel, err)
@@ -768,6 +846,41 @@ func (e *eng) installFiles(context.Context, string) bool {
 	}
 	e.r.ok("files installed")
 	return true
+}
+
+// staleLegacyFiles: unit files and helper scripts of the layout before v0.19.0 (backed up, restored by a rollback).
+func (e *eng) staleLegacyFiles() []string {
+	var out []string
+	for _, u := range assets.LegacyUnits {
+		out = append(out, "systemd/"+u+".service")
+	}
+	out = append(out, assets.LegacyScripts...)
+	var have []string
+	for _, rel := range out {
+		if _, err := os.Lstat(e.fs(e.pre(rel))); err == nil {
+			have = append(have, rel)
+		}
+	}
+	return have
+}
+
+// legacyLinked: the units of the layout before v0.19.0 that are still linked into /etc/systemd/system.
+func (e *eng) legacyLinked() []string {
+	var out []string
+	for _, u := range assets.LegacyUnits {
+		if _, err := os.Lstat(e.fs("/etc/systemd/system/" + u + ".service")); err == nil {
+			out = append(out, u+".service")
+		}
+	}
+	return out
+}
+
+// dropLegacyUnits stops, disables and unlinks the old collector + helper units (the switch to monitoring-collector).
+func (e *eng) dropLegacyUnits() {
+	for _, name := range e.legacyLinked() {
+		e.dropUnit(name, "replaced by "+collector.Name)
+		e.droppedUnits = append(e.droppedUnits, name)
+	}
 }
 
 func (e *eng) staleSite() []string {
@@ -859,7 +972,7 @@ func (e *eng) selinux(context.Context, string) bool {
 		e.r.ok("SELinux not enabled / not present")
 		return true
 	}
-	dirs := []string{e.pre("bin"), e.pre("netconn")}
+	dirs := []string{e.pre("bin")}
 	// Only act when something is wrong, so a repeated plan shows nothing to do (seen on a real host: a
 	// "would: chcon" on every run).
 	if e.o.Runner.LookPath("semanage") {
@@ -887,9 +1000,7 @@ func (e *eng) selinux(context.Context, string) bool {
 		return true
 	}
 	e.r.warn("semanage not installed -> chcon (lost on a full relabel; install policycoreutils-python-utils)")
-	paths := append(append([]string{}, dirs...), e.pre("bin/otelcol-contrib"), e.pre("netconn/otel-netconn.sh"),
-		e.pre("netconn/otel-kmsg.sh"), e.pre("netconn/otel-procs.sh"),
-		e.pre("netconn/otel-sshd.sh"))
+	paths := append(append([]string{}, dirs...), e.pre("bin", collector.Name))
 	if e.d.Probes != nil {
 		paths = append(paths, e.pre("bin/cloudprober"))
 	}
@@ -971,7 +1082,7 @@ func (e *eng) readAccess(context.Context, string) bool {
 // ---- 8. validate ----------------------------------------------------------------------------------------
 
 func (e *eng) validate(ctx context.Context, tmp string) bool {
-	e.r.step("8. validate the NEW config (collector binary %s)", collector.Version)
+	e.r.step("8. validate the NEW config (%s)", collector.Name)
 	if e.bin == "" || e.secrets == nil {
 		e.r.warn("validate skipped (collector binary or secrets missing)")
 		return true
@@ -998,11 +1109,9 @@ func (e *eng) validate(ctx context.Context, tmp string) bool {
 	data := e.fs(e.pre("data"))
 	if _, err := os.Stat(filepath.Join(data, "file_storage")); err != nil {
 		data = filepath.Join(tmp, "data")
-		for _, sub := range []string{"file_storage", "netconn", "kmsg", "procs", "sshd"} {
-			if err := os.MkdirAll(filepath.Join(data, sub), 0o700); err != nil {
-				e.r.fail("stage: %v", err)
-				return false
-			}
+		if err := os.MkdirAll(filepath.Join(data, "file_storage"), 0o700); err != nil {
+			e.r.fail("stage: %v", err)
+			return false
 		}
 	}
 	hostEnv, _ := envfile.Parse(e.d.HostEnv)
@@ -1019,7 +1128,7 @@ func (e *eng) validate(ctx context.Context, tmp string) bool {
 		e.r.indent(strings.Join(lines[max(0, len(lines)-20):], "\n"), 20)
 		return false
 	}
-	e.r.ok("otelcol-contrib validate: VALID")
+	e.r.ok("%s validate: VALID", collector.Name)
 	if !e.probeConfigTest(stage) {
 		return false
 	}
@@ -1043,6 +1152,9 @@ func (e *eng) units() {
 		target := e.pre("systemd", name)
 		if cur, err := os.Readlink(link); err == nil && cur == target {
 			continue
+		}
+		if _, err := os.Lstat(link); err != nil {
+			e.addedUnits = append(e.addedUnits, name)
 		}
 		os.Remove(link)
 		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
@@ -1096,9 +1208,12 @@ func (e *eng) start(ctx context.Context) {
 	e.rollback(ctx)
 }
 
-// restartAndCheck restarts the units, waits, and reports. quiet = rollback check (no failure counted again).
+// restartAndCheck restarts this run's units, waits, and reports. quiet = rollback check (no failure counted again).
 func (e *eng) restartAndCheck(ctx context.Context, quiet bool) bool {
-	names := e.unitFiles()
+	return e.restartAndCheckUnits(ctx, quiet, e.unitFiles())
+}
+
+func (e *eng) restartAndCheckUnits(ctx context.Context, quiet bool, names []string) bool {
 	if err := e.o.Runner.Run("systemctl", append([]string{"restart"}, names...)...); err != nil && !quiet {
 		e.r.fail("systemctl restart: %v", err)
 	}

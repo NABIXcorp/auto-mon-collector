@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/cloudprober"
-	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 )
 
 func withProbes(ping bool) Desired {
@@ -23,7 +22,7 @@ func withProbes(ping bool) Desired {
 
 func TestProbesCheckModeDownloadsAndTestsConfig(t *testing.T) {
 	h := smokeHost(t)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	res, out := runWith(t, h, r, false, false, true, false, withProbes(false))
 	if res.Failures != 0 || res.Applied {
 		t.Fatalf("check failed:\n%s", out)
@@ -46,7 +45,7 @@ func TestProbesCheckModeDownloadsAndTestsConfig(t *testing.T) {
 
 func TestProbesConfigTestFailureStops(t *testing.T) {
 	h := smokeHost(t)
-	r := &fakeRunner{version: collector.Version, readable: true, configtest: errors.New("exit 1")}
+	r := &fakeRunner{readable: true, configtest: errors.New("exit 1")}
 	res, out := runWith(t, h, r, false, false, true, false, withProbes(false))
 	if res.Failures == 0 || !strings.Contains(out, "cloudprober --configtest failed") || !strings.Contains(out, "unknown field") {
 		t.Errorf("configtest failure not reported:\n%s", out)
@@ -55,7 +54,7 @@ func TestProbesConfigTestFailureStops(t *testing.T) {
 
 func TestNoProbesNoCloudprober(t *testing.T) {
 	h := smokeHost(t)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	_, out := runWith(t, h, r, false, false, true, false, desired())
 	if strings.Contains(out, "loudprober") {
 		t.Errorf("no probes, but Cloudprober shows up:\n%s", out)
@@ -65,7 +64,7 @@ func TestNoProbesNoCloudprober(t *testing.T) {
 func TestProbesApplyThenRemove(t *testing.T) {
 	needSymlinks(t)
 	h := smokeHost(t)
-	r := &fakeRunner{version: collector.Version, readable: true}
+	r := &fakeRunner{readable: true}
 	res, out := runWith(t, h, r, true, true, true, false, withProbes(true))
 	if res.Failures != 0 {
 		t.Fatalf("apply failed:\n%s", out)
@@ -82,7 +81,7 @@ func TestProbesApplyThenRemove(t *testing.T) {
 	if u := h.read("/opt/monitoring/systemd/monitoring-cloudprober.service"); !strings.Contains(u, "AmbientCapabilities=CAP_NET_RAW") {
 		t.Errorf("ping unit without CAP_NET_RAW:\n%s", u)
 	}
-	if !r.has("systemctl restart monitoring-otelcol.service") || !r.has("monitoring-cloudprober.service") {
+	if !r.has("systemctl restart monitoring-collector.service") || !r.has("monitoring-cloudprober.service") {
 		t.Errorf("cloudprober unit not managed: %v", r.cmds)
 	}
 	if !strings.Contains(h.read("/opt/monitoring/"+StateFile), "monitoring-cloudprober.service") {
@@ -90,7 +89,7 @@ func TestProbesApplyThenRemove(t *testing.T) {
 	}
 
 	// probes removed from the answers: unit stopped + unlinked, files removed, nothing else touched
-	r2 := &fakeRunner{version: collector.Version, readable: true, probeVersion: "v" + cloudprober.Version}
+	r2 := &fakeRunner{readable: true, probeVersion: "v" + cloudprober.Version}
 	res, out = runWith(t, h, r2, true, true, false, false, desired())
 	if res.Failures != 0 {
 		t.Fatalf("second apply failed:\n%s", out)
@@ -120,7 +119,7 @@ func TestProbesApplyThenRemove(t *testing.T) {
 func TestProbesInstalledVersionIsKept(t *testing.T) {
 	h := smokeHost(t)
 	h.write("/opt/monitoring/bin/cloudprober", "INSTALLED", 0o755)
-	r := &fakeRunner{version: collector.Version, readable: true, probeVersion: "v" + cloudprober.Version}
+	r := &fakeRunner{readable: true, probeVersion: "v" + cloudprober.Version}
 	_, out := runWith(t, h, r, false, false, false, false, withProbes(false))
 	if !strings.Contains(out, "/opt/monitoring/bin/cloudprober is "+cloudprober.Version) || strings.Contains(out, "downloaded cloudprober") {
 		t.Errorf("installed pinned version not recognised:\n%s", out)

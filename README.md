@@ -1,9 +1,11 @@
 # auto-mon-collector
 
-**An installer for the official OpenTelemetry Collector (`otelcol-contrib`) that looks at a Linux host and sets
-up monitoring for what it finds.** It is not a collector distribution of its own.
+**An installer that looks at a Linux host and sets up an OpenTelemetry Collector for what it finds.** Since v0.19.0
+the collector is `monitoring-collector`: an OpenTelemetry Collector build (OCB, `collector/`) with the stock
+components amc uses plus small receivers of its own (TCP connections per port, top processes), published in the same
+signed release as amc. Before v0.19.0: the official `otelcol-contrib` plus four helper scripts.
 
-> **Status: v0.12.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.19.0, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
@@ -39,6 +41,13 @@ up monitoring for what it finds.** It is not a collector distribution of its own
 > key embedded in amc (the same check as `get.sh`), keeps `bin/amc.before-<version>`, then runs the new `amc update`;
 > the old binary goes back when the new one fails. `apply` / `update` / `self-update` never run at the same time
 > (`<prefix>/.amc.lock`). See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
+> v0.19.0: amc installs `monitoring-collector` (same signed release, checked with the release key in amc; "up to date" =
+> sha256, not the version) instead of `otelcol-contrib` + the helper units netconn / procs / kmsg / sshd: built-in
+> receivers `netconn` and `procs`, kernel warnings + SSH logins from the journal (`config/journal.yaml`: fixed filters,
+> only the message leaves the receiver, unknown SSH user names masked before the disk queue, also names with spaces
+> that the old helper let through). The collector unit is `monitoring-collector` and the ONLY unit with the group
+> `systemd-journal`. `apply --start` / `update` switch an existing host (old units stopped, disabled, unlinked; a failed
+> start links and starts them again). `--collector-file FILE` installs a local build (CI, hosts without internet).
 > v0.15.0: `<prefix>/inventory.json` = the services the scan found (ids, ports, Oracle SIDs, Tomcat context paths, bind
 > addresses; no paths, no environment), written by plan / apply / update; the agent sends it with its versions at start and
 > when it changes (`POST v1/inventory`). An update that only changes VERSION / inventory.json does not restart anything.
@@ -83,8 +92,8 @@ overlay use `plan` / `apply --answers FILE [--site-dir DIR]` as before.
 
 `get.sh` checks an ECDSA P-256 signature over `SHA256SUMS` (public key: [keys/amc-release.pub](keys/amc-release.pub),
 also embedded in `get.sh`) and the binary's sha256 before it runs anything; without `openssl` it stops. The same
-signed `SHA256SUMS` also lists `monitoring-collector-linux-amd64` (our own collector build, `collector/`; not installed
-by amc yet). To read it first:
+signed `SHA256SUMS` also lists `monitoring-collector-linux-amd64` / `-arm64` (the collector amc installs since v0.19.0;
+amc checks the signature and the sha256 itself before it installs it). To read it first:
 
 ```bash
 curl -fsSLO https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh

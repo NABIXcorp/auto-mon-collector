@@ -241,8 +241,8 @@ func Generate(h Host, a Answers) (Output, error) {
 		metrics = append(metrics, "prometheus/cloudprober")
 	}
 
-	if len(netconn) > 0 {
-		env = append(env, `NETCONN_PORTS="`+joinInts(uniqSorted(netconn))+`"`)
+	if len(netconn) > 0 { // the built-in netconn receiver (v0.19.0; before: NETCONN_PORTS for the helper unit)
+		recv["netconn"] = "  netconn:\n    ports: [" + strings.ReplaceAll(joinInts(uniqSorted(netconn)), " ", ", ") + "]\n"
 	}
 	// ---- project: read by the resource_detection "env" detector (values are URL-decoded there: "+" = space)
 	if a.Project != "" {
@@ -258,7 +258,7 @@ func Generate(h Host, a Answers) (Output, error) {
 	}
 	if len(recv) > 0 {
 		y.WriteString("receivers:\n")
-		for _, name := range []string{"http_check", "tcp_check", "prometheus/cloudprober", "file_log/tomcat_access", "file_log/catalina", "file_log/oracle_alert"} {
+		for _, name := range []string{"netconn", "http_check", "tcp_check", "prometheus/cloudprober", "file_log/tomcat_access", "file_log/catalina", "file_log/oracle_alert"} {
 			if r, ok := recv[name]; ok {
 				y.WriteString(r)
 				y.WriteString("\n")
