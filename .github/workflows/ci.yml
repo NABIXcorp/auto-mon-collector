@@ -495,10 +495,13 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: collector/receiver/netconnreceiver/go.mod
-          cache-dependency-path: collector/receiver/*/go.sum
-      - name: vet + test our receivers
+          cache-dependency-path: |
+            collector/receiver/*/go.sum
+            collector/test/*/go.sum
+      - name: vet + test our receivers and the journal config (golden files, masking)
         run: |
-          for m in collector/receiver/*/; do (cd "$m" && go vet ./... && go test -race ./...); done
+          set -e
+          for m in collector/receiver/*/ collector/test/*/; do (cd "$m" && go vet ./... && go test -race ./...); done
       - name: OCB build (linux amd64, static)
         run: |
           v=$(awk '/^  version:/ {print $2}' collector/builder-config.yaml)
@@ -511,6 +514,7 @@ jobs:
           set -euo pipefail
           b=collector/_build/monitoring-collector
           $b validate --config collector/testdata/smoke.yaml
+          JOURNAL_STORAGE_DIR=$(mktemp -d) $b validate --config collector/testdata/smoke.yaml             --config collector/config/journal.yaml --config collector/testdata/journal-pipelines.yaml
           python3 -m http.server 8080 --bind 127.0.0.1 >/dev/null 2>&1 & s=$!
           sleep 1; exec 3<>/dev/tcp/127.0.0.1/8080
           timeout 10 $b --config collector/testdata/smoke.yaml > smoke.log 2>&1 || true

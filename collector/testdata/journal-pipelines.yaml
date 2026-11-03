@@ -1,0 +1,16 @@
+# CI: validate collector/config/journal.yaml in the real binary (with testdata/smoke.yaml):
+#   monitoring-collector validate --config testdata/smoke.yaml --config config/journal.yaml --config testdata/journal-pipelines.yaml
+# transform/sshd must stay the FIRST processor of the sshd pipeline (masking before any queue).
+extensions:
+  file_storage:
+    directory: ${env:JOURNAL_STORAGE_DIR:-/tmp}
+service:
+  extensions: [file_storage]
+  pipelines:
+    logs/kmsg:
+      receivers: [journald/kmsg]
+      exporters: [debug]
+    logs/sshd:
+      receivers: [journald/sshd]
+      processors: [transform/sshd]
+      exporters: [debug]

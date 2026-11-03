@@ -1,0 +1,15 @@
+# journalctl --utc --output=json --follow --lines=0 --identifier sshd --identifier sshd-session --priority info
+{"time":"2026-11-01T02:26:41Z","body":"Accepted publickey for root from 10.0.0.5 port 50000 ssh2: RSA SHA256:abc","attributes":{"event":"accepted","log_type":"ssh","method":"publickey","src_ip":"10.0.0.5","user":"root"}}
+{"time":"2026-11-01T02:26:42Z","body":"Failed password for root from 203.0.113.7 port 41000 ssh2","attributes":{"event":"failed","log_type":"ssh","method":"password","src_ip":"203.0.113.7","user":"root"}}
+{"time":"2026-11-01T02:26:43Z","body":"Invalid user *** from 203.0.113.7 port 41001","attributes":{"event":"invalid_user","log_type":"ssh","src_ip":"203.0.113.7"}}
+{"time":"2026-11-01T02:26:44Z","body":"Failed password for invalid user *** from 203.0.113.7 port 41001 ssh2","attributes":{"event":"failed","log_type":"ssh","method":"password","src_ip":"203.0.113.7"}}
+{"time":"2026-11-01T02:26:45Z","body":"Connection closed by invalid user *** 203.0.113.7 port 41001 [preauth]","attributes":{"event":"closed","log_type":"ssh"}}
+{"time":"2026-11-01T02:26:46Z","body":"Disconnected from invalid user *** 203.0.113.7 port 41001 [preauth]","attributes":{"event":"closed","log_type":"ssh"}}
+{"time":"2026-11-01T02:26:47Z","body":"Invalid user *** from 2001:db8::1 port 41002","attributes":{"event":"invalid_user","log_type":"ssh","src_ip":"2001:db8::1"}}
+{"time":"2026-11-01T02:26:48Z","body":"Invalid user *** from 203.0.113.8 port 41003","attributes":{"event":"invalid_user","log_type":"ssh","src_ip":"203.0.113.8"}}
+{"time":"2026-11-01T02:26:49Z","body":"Invalid user *** from 203.0.113.9 port 41004","attributes":{"event":"invalid_user","log_type":"ssh","src_ip":"203.0.113.9"}}
+{"time":"2026-11-01T02:26:50Z","body":"pam_unix(sshd:session): session opened for user root(uid=0) by root(uid=0)","attributes":{"event":"session_opened","log_type":"ssh","user":"root"}}
+{"time":"2026-11-01T02:26:51Z","body":"pam_unix(sshd:session): session closed for user root","attributes":{"event":"session_closed","log_type":"ssh","user":"root"}}
+{"time":"2026-11-01T02:26:55Z","body":"Invalid user *** from 203.0.113.10 port 41005","attributes":{"event":"invalid_user","log_type":"ssh","src_ip":"203.0.113.10"}}
+{"time":"2026-11-01T02:26:56Z","body":"Connection closed by authenticating user root 203.0.113.7 port 41006 [preauth]","attributes":{"event":"closed","log_type":"ssh"}}
+{"time":"2026-11-01T02:26:57Z","body":"Invalid user ***","attributes":{"event":"invalid_user","log_type":"ssh"}}

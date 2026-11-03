@@ -1,4 +1,4 @@
-# monitoring-collector: our own OpenTelemetry Collector build (OCB), phase D1.
+# monitoring-collector: our own OpenTelemetry Collector build (OCB), phases D1 (netconn, procs) + D2 (journald).
 # Build: go install go.opentelemetry.io/collector/cmd/builder@v0.160.0 (builder version = dist version), then
 #   cd collector && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 builder --config builder-config.yaml
 # Component list = what the generated host config uses today (otelcol-contrib 0.160.0) + our receivers below.
@@ -20,6 +20,7 @@ receivers:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/redisreceiver v0.160.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/httpcheckreceiver v0.160.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/tcpcheckreceiver v0.160.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/journaldreceiver v0.160.0   # kernel + sshd (collector/config/journal.yaml)
   - gomod: github.com/NABIXcorp/auto-mon-collector/collector/receiver/netconnreceiver v0.0.0
     path: ./receiver/netconnreceiver
   - gomod: github.com/NABIXcorp/auto-mon-collector/collector/receiver/procsreceiver v0.0.0

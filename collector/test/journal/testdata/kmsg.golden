@@ -1,0 +1,5 @@
+# journalctl --utc --output=json --follow --lines=0 --priority warning --dmesg
+{"time":"2026-11-01T02:28:21Z","severity":"3","body":"Out of memory: Killed process 1234 (java) total-vm:8000000kB, anon-rss:4000000kB","attributes":{"PRIORITY":"3","kind":"oom","log_type":"kernel"}}
+{"time":"2026-11-01T02:28:22Z","severity":"4","body":"INFO: task kworker/0:1:123 blocked for more than 120 seconds.","attributes":{"PRIORITY":"4","kind":"hung_task","log_type":"kernel"}}
+{"time":"2026-11-01T02:28:23Z","severity":"2","body":"EXT4-fs error (device sda1): ext4_find_entry:1455: inode #2: comm ls: reading directory lblock 0","attributes":{"PRIORITY":"2","kind":"disk_error","log_type":"kernel"}}
+{"time":"2026-11-01T02:28:24Z","severity":"4","body":"some other warning","attributes":{"PRIORITY":"4","kind":"other","log_type":"kernel"}}
