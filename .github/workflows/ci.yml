@@ -12,7 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25   # e2e alone ~10 min since v0.12.0 (probes), + agent (v0.13.0)
+    timeout-minutes: 25   # e2e alone ~12 min (runs only for releases / by hand), rest ~10 s
     steps:
       - uses: actions/checkout@v7
         with:
@@ -73,6 +73,9 @@ jobs:
             ! grep -q '^auto-mon-collector ' <<< "$out" || die "${case%%:*}: amc ran although the check failed"
           done
       - name: End to end on this runner (real collector, systemd, ACLs; fake backend and secrets)
+        # ~12 min. Only before a release (release.yml calls this file on a tag push) or by hand (Run workflow):
+        # amc gets no new features while the new agent design is built, so branch pushes skip it.
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         run: |
           sudo apt-get install -y -qq acl > /dev/null
           alert=/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log
