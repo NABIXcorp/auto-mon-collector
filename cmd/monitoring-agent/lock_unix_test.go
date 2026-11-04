@@ -36,7 +36,7 @@ func TestApplyAndUpdateWaitForTheLock(t *testing.T) {
 	for _, args := range [][]string{{"update", "--prefix", pre, "--detect-json", "testdata/none.json"},
 		{"apply", "--host-dir", host, "--prefix", pre}} {
 		var out, errb bytes.Buffer
-		if code := run(args, &out, &errb); code != exitUsage || !strings.Contains(errb.String(), "another amc") {
+		if code := run(args, &out, &errb); code != exitUsage || !strings.Contains(errb.String(), "another monitoring-agent") {
 			t.Errorf("%v: exit %d, stderr %q", args[0], code, errb.String())
 		}
 	}

@@ -60,7 +60,7 @@ func TestSelfUpdateWaitsForNoOtherAmc(t *testing.T) {
 	}
 	res := e.run()
 	l.Release()
-	if res.Result != "refused" || !strings.Contains(res.Detail, "another amc") {
+	if res.Result != "refused" || !strings.Contains(res.Detail, "another monitoring-agent") {
 		t.Fatalf("%+v", res)
 	}
 	if e.read("bin/amc") != oldBin || e.requests.Load() != 0 {
