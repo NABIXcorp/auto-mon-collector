@@ -52,7 +52,7 @@ func TestPlanApplyPassesOptions(t *testing.T) {
 	if code != exitPlan {
 		t.Errorf("failures must give exit %d, got %d", exitPlan, code)
 	}
-	if !got.Apply || !got.Start || got.Fetch || got.Prefix != "/srv/mon" || got.User != "otelcol-contrib" {
+	if !got.Apply || !got.Start || got.Fetch || got.Prefix != "/srv/mon" || got.User != "monitoring" {
 		t.Errorf("options = %+v", got)
 	}
 }

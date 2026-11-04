@@ -91,7 +91,7 @@ func Build(hostYAML, hostEnv []byte, site map[string][]byte, source string) (eng
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	d.Version = []byte(fmt.Sprintf("installer=amc %s\ncommit=%s\ncollector=%s\nsource=%s\nsite.d=%s\n",
+	d.Version = []byte(fmt.Sprintf("installer=monitoring-agent %s\ncommit=%s\ncollector=%s\nsource=%s\nsite.d=%s\n",
 		version.Version, version.Commit, collector.Name+" (core "+collector.CoreVersion+", release "+version.Version+")", source, strings.Join(names, ",")))
 	return d, nil
 }

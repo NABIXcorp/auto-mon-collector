@@ -9,8 +9,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=amc-agent
-Group=amc-agent
+User={{.AgentUser}}
+Group={{.AgentUser}}
 ExecStart={{.Prefix}}/bin/monitoring-agent agent run --prefix {{.Prefix}}
 Restart=always
 RestartSec=30

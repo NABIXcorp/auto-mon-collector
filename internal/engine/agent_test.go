@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/cloudprober"
 )
@@ -25,12 +28,12 @@ func withAgent(t *testing.T, h host, template bool) Desired {
 
 func agentHost(t *testing.T) host {
 	h := smokeHost(t)
-	h.write("/etc/passwd", h.read("/etc/passwd")+"amc-agent:x:989:989::/opt/monitoring/agent:/sbin/nologin\n", 0o644)
+	h.write("/etc/passwd", h.read("/etc/passwd")+"monitoring-agent:x:989:989::/opt/monitoring/agent:/sbin/nologin\n", 0o644)
 	return h
 }
 
 func TestAgentCheckMode(t *testing.T) {
-	h := smokeHost(t) // no amc-agent user yet
+	h := smokeHost(t) // no monitoring-agent user yet
 	r := &fakeRunner{readable: true}
 	res, out := runWith(t, h, r, false, false, true, false, withAgent(t, h, true))
 	if res.Failures != 0 {
@@ -83,7 +86,7 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	if h.read("/opt/monitoring/bin/amc") != "AMC-BINARY" {
 		t.Error("bin/amc not installed")
 	}
-	if u := h.read("/opt/monitoring/systemd/monitoring-agent.service"); !strings.Contains(u, "User=amc-agent") ||
+	if u := h.read("/opt/monitoring/systemd/monitoring-agent.service"); !strings.Contains(u, "User=monitoring-agent") ||
 		!strings.Contains(u, "ReadWritePaths=/opt/monitoring/agent /opt/monitoring/config/prober") {
 		t.Errorf("agent unit:\n%s", u)
 	}
@@ -156,7 +159,7 @@ func TestAgentApplyThenRemove(t *testing.T) {
 func TestUninstallRemovesTheAgent(t *testing.T) {
 	needSymlinks(t)
 	h := agentHost(t)
-	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\notelcol-contrib:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
+	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\nmonitoring:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
 	r := &fakeRunner{readable: true}
 	if res, out := runWith(t, h, r, true, false, true, false, withAgent(t, h, false)); res.Failures != 0 {
 		t.Fatalf("apply: %s", out)
@@ -170,7 +173,7 @@ func TestUninstallRemovesTheAgent(t *testing.T) {
 	if res.Failures != 0 {
 		t.Fatalf("%s", out)
 	}
-	if !ru.has("userdel amc-agent") {
+	if !ru.has("userdel monitoring-agent") {
 		t.Errorf("agent user not removed: %v", ru.cmds)
 	}
 	for _, c := range ru.cmds {
@@ -197,7 +200,7 @@ func v019Host(t *testing.T) host {
 	h.write("/opt/monitoring/config/cloudprober/cloudprober-tcp.json", "{}\n", 0o644)
 	h.write("/opt/monitoring/systemd/monitoring-cloudprober.service", "old prober unit\n", 0o644)
 	h.write("/etc/polkit-1/rules.d/50-amc-agent.rules", "old rule\n", 0o644)
-	h.write("/opt/monitoring/amc-state.json", `{"version":1,"prefix":"/opt/monitoring","user":"otelcol-contrib","units":["monitoring-cloudprober.service"],"polkit_rules":["/etc/polkit-1/rules.d/50-amc-agent.rules"]}`+"\n", 0o644)
+	h.write("/opt/monitoring/amc-state.json", `{"version":1,"prefix":"/opt/monitoring","user":"monitoring","units":["monitoring-cloudprober.service"],"polkit_rules":["/etc/polkit-1/rules.d/50-amc-agent.rules"]}`+"\n", 0o644)
 	link := filepath.Join(h.root, "etc/systemd/system/monitoring-cloudprober.service")
 	os.MkdirAll(filepath.Dir(link), 0o755)
 	if err := os.Symlink("/opt/monitoring/systemd/monitoring-cloudprober.service", link); err != nil {
@@ -214,8 +217,14 @@ func TestRenameToMonitoringNames(t *testing.T) {
 	if res.Failures != 0 || res.RolledBack {
 		t.Fatalf("apply failed:\n%s", out)
 	}
-	if h.read("/opt/monitoring/bin/monitoring-agent") != "AMC-BINARY" || h.read("/opt/monitoring/bin/amc.previous") != "OLD-AMC" {
-		t.Errorf("agent binary not installed / old one not kept:\n%s", out)
+	if h.read("/opt/monitoring/bin/monitoring-agent") != "AMC-BINARY" {
+		t.Errorf("agent binary not installed:\n%s", out)
+	}
+	// v0.21.0: after a successful start the leftovers kept for a rollback are removed
+	for _, gone := range []string{"opt/monitoring/bin/amc.previous", "opt/monitoring/bin/cloudprober", "etc/polkit-1/rules.d/50-amc-agent.rules.previous"} {
+		if _, err := os.Lstat(filepath.Join(h.root, gone)); err == nil {
+			t.Errorf("leftover %s not removed after the successful start", gone)
+		}
 	}
 	if l, err := os.Readlink(filepath.Join(h.root, "opt/monitoring/bin/amc")); err != nil || l != "monitoring-agent" {
 		t.Errorf("bin/amc = %q %v, want a symlink to monitoring-agent", l, err)
@@ -229,8 +238,8 @@ func TestRenameToMonitoringNames(t *testing.T) {
 	if linked(h, "monitoring-cloudprober.service") || !linked(h, "monitoring-prober.service") || !r.has("systemctl disable --now monitoring-cloudprober.service") {
 		t.Errorf("prober unit not switched: %v", r.cmds)
 	}
-	if h.read("/etc/polkit-1/rules.d/50-monitoring-agent.rules") == "" || h.read("/etc/polkit-1/rules.d/50-amc-agent.rules.previous") != "old rule\n" {
-		t.Error("polkit rule not renamed (old one kept as .previous)")
+	if h.read("/etc/polkit-1/rules.d/50-monitoring-agent.rules") == "" {
+		t.Error("polkit rule not renamed")
 	}
 	if _, err := os.Stat(filepath.Join(h.root, "etc/polkit-1/rules.d/50-amc-agent.rules")); err == nil {
 		t.Error("old polkit rule still active")
@@ -256,5 +265,122 @@ func TestRenameRollbackBringsTheOldNamesBack(t *testing.T) {
 	}
 	if !linked(h, "monitoring-cloudprober.service") || linked(h, "monitoring-prober.service") {
 		t.Errorf("old prober unit not linked again:\n%s", out)
+	}
+}
+
+// v020Host: a v0.20.0 host with agent + probes on the OLD users otelcol-contrib / amc-agent (renamed in v0.21.0).
+func v020Host(t *testing.T) host {
+	h := smokeHost(t)
+	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\notelcol-contrib:x:990:990::/opt/monitoring/data:/sbin/nologin\n"+
+		"amc-agent:x:989:989::/opt/monitoring/agent:/sbin/nologin\n", 0o644)
+	h.write("/etc/group", "root:x:0:\ntomcat:x:992:otelcol-contrib\notelcol-contrib:x:990:\namc-agent:x:989:\n", 0o644)
+	h.write("/opt/monitoring/config/config.yaml", "old config\n", 0o644)
+	h.write("/opt/monitoring/data/file_storage/queue", "q", 0o640)
+	h.write("/opt/monitoring/agent/key", "k", 0o600)
+	h.write("/etc/polkit-1/rules.d/50-monitoring-agent.rules", "rule for amc-agent\n", 0o644)
+	h.write("/opt/monitoring/state.json", `{"version":1,"prefix":"/opt/monitoring","user":"otelcol-contrib","user_created":true,"acl_files":["/var/log/app/alert.log"],"acl_dirs":["/var/log/app"],"groups_added":["tomcat"],"agent_user_created":true,"polkit_rules":["/etc/polkit-1/rules.d/50-monitoring-agent.rules"]}`+"\n", 0o644)
+	return h
+}
+
+// chownLog records every chown of the run: path (below the host root) -> uid.
+func chownLog(h host) (map[string]int, func(string, int, int) error) {
+	m := map[string]int{}
+	return m, func(p string, uid, _ int) error {
+		if uid >= 0 {
+			m[strings.TrimPrefix(filepath.ToSlash(p), filepath.ToSlash(h.root))] = uid
+		}
+		return nil
+	}
+}
+
+func runUsers(t *testing.T, h host, r *fakeRunner) (Result, string, map[string]int) {
+	t.Helper()
+	r.root = h.root
+	log, chown := chownLog(h)
+	var out bytes.Buffer
+	res, err := Run(context.Background(), Options{Root: h.root, Apply: true, Start: true, Fetch: true, Rollback: true, Arch: "amd64",
+		SkipRootCheck: true, RootUID: os.Getuid(), StartWait: time.Millisecond, Out: &out, Runner: r, Collector: fakeSource{},
+		Now:   func() time.Time { return time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC) },
+		Chown: chown,
+		ProbeFetcher: func(_ context.Context, _, dir string) (string, error) {
+			p := filepath.Join(dir, "cloudprober")
+			return p, os.WriteFile(p, []byte("PROBER"), 0o755)
+		},
+	}, withAgent(t, h, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res, out.String(), log
+}
+
+func TestMoveToTheNewUsers(t *testing.T) {
+	needSymlinks(t)
+	h := v020Host(t)
+	r := &fakeRunner{readable: true}
+	res, out, chowns := runUsers(t, h, r)
+	if res.Failures != 0 || res.RolledBack {
+		t.Fatalf("move failed:\n%s", out)
+	}
+	for _, c := range []string{"useradd --system --user-group --no-create-home --home-dir /opt/monitoring/data --shell",
+		"useradd --system --user-group --no-create-home --home-dir /opt/monitoring/agent --shell",
+		"usermod -aG tomcat monitoring", // (the fake runner says "readable" to test -r, so no setfacl here)
+		"runuser -u monitoring -- head -c 1 /var/log/app/alert.log",
+		"setfacl -x u:otelcol-contrib /var/log/app/alert.log", "gpasswd -d otelcol-contrib tomcat",
+		"userdel otelcol-contrib", "userdel amc-agent"} {
+		if !r.has(c) {
+			t.Errorf("missing %q in %v", c, r.cmds)
+		}
+	}
+	if !strings.Contains(out, "MOVE   user otelcol-contrib -> monitoring") || !strings.Contains(out, "old user amc-agent removed") {
+		t.Errorf("report:\n%s", out)
+	}
+	newUID, _, _ := (&eng{o: Options{Root: h.root}}).lookupUser("monitoring")
+	agentUID, _, _ := (&eng{o: Options{Root: h.root}}).lookupUser(AgentUser)
+	if chowns["/opt/monitoring/data/file_storage/queue"] != newUID || chowns["/opt/monitoring/agent/key"] != agentUID {
+		t.Errorf("owners not moved (want %d / %d): %v", newUID, agentUID, chowns)
+	}
+	if u := h.read("/opt/monitoring/systemd/monitoring-collector.service"); !strings.Contains(u, "User=monitoring\n") {
+		t.Errorf("collector unit user:\n%s", u)
+	}
+	if u := h.read("/opt/monitoring/systemd/monitoring-agent.service"); !strings.Contains(u, "User=monitoring-agent\n") {
+		t.Errorf("agent unit user:\n%s", u)
+	}
+	if !strings.Contains(h.read("/etc/polkit-1/rules.d/50-monitoring-agent.rules"), `subject.user == "monitoring-agent"`) {
+		t.Error("polkit rule not for monitoring-agent")
+	}
+	if st := h.read("/opt/monitoring/state.json"); !strings.Contains(st, `"user": "monitoring"`) {
+		t.Errorf("state user: %s", st)
+	}
+}
+
+func TestMoveUsersRollback(t *testing.T) {
+	needSymlinks(t)
+	h := v020Host(t)
+	r := &fakeRunner{readable: true, inactive: 1}
+	res, out, chowns := runUsers(t, h, r)
+	if !res.RolledBack {
+		t.Fatalf("want a rollback:\n%s", out)
+	}
+	if chowns["/opt/monitoring/data/file_storage/queue"] != 990 || chowns["/opt/monitoring/agent/key"] != 989 {
+		t.Errorf("old owners not back: %v", chowns)
+	}
+	if h.read("/etc/polkit-1/rules.d/50-monitoring-agent.rules") != "rule for amc-agent\n" {
+		t.Error("previous polkit rule not restored")
+	}
+	if r.has("userdel otelcol-contrib") || r.has("userdel amc-agent") || !r.has("userdel monitoring") {
+		t.Errorf("rollback must keep the old users and remove the new ones: %v", r.cmds)
+	}
+	if st := h.read("/opt/monitoring/state.json"); !strings.Contains(st, `"user": "otelcol-contrib"`) {
+		t.Errorf("state user after the rollback: %s", st)
+	}
+}
+
+func TestMoveUsersStopsWhenALogIsNotReadable(t *testing.T) {
+	needSymlinks(t)
+	h := v020Host(t)
+	r := &fakeRunner{readable: false} // runuser (test -r and the real read) fails
+	res, out, _ := runUsers(t, h, r)
+	if res.Failures == 0 || !strings.Contains(out, "cannot read /var/log/app/alert.log after the move") || r.has("userdel otelcol-contrib") {
+		t.Fatalf("an unreadable log must stop the move and keep the old user:\n%s", out)
 	}
 }

@@ -21,13 +21,17 @@ func JournalConfig() []byte { return mustRead("config/journal.yaml") }
 // UnitData fills the systemd unit templates.
 type UnitData struct {
 	Prefix      string   // install root, e.g. /opt/monitoring
-	User        string   // collector user, e.g. otelcol-contrib
+	User        string   // collector + prober user (v0.21.0: monitoring; before otelcol-contrib)
+	AgentUser   string   // agent user (v0.21.0: monitoring-agent; before amc-agent)
 	SiteConfigs []string // extra --config files (site.d overlay), absolute paths
 	Ping        bool     // monitoring-prober: ping probes need CAP_NET_RAW
 }
 
 // Unit renders systemd/<name>.service.tmpl.
 func Unit(name string, d UnitData) ([]byte, error) {
+	if d.AgentUser == "" {
+		d.AgentUser = "monitoring-agent"
+	}
 	t, err := template.New(name).Option("missingkey=error").Parse(string(mustRead("systemd/" + name + ".service.tmpl")))
 	if err != nil {
 		return nil, err

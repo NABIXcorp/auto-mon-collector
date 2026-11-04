@@ -5,7 +5,7 @@ the collector is `monitoring-collector`: an OpenTelemetry Collector build (OCB, 
 components monitoring-agent uses plus small receivers of its own (TCP connections per port, top processes), published in the same
 signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus four helper scripts.
 
-> **Status: v0.20.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.21.0, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
@@ -41,13 +41,19 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > key embedded in amc (the same check as `get.sh`), keeps `bin/amc.before-<version>`, then runs the new `amc update`;
 > the old binary goes back when the new one fails. `apply` / `update` / `self-update` never run at the same time
 > (`<prefix>/.amc.lock`). See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
+> v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and
+> `monitoring-agent` (was `amc-agent`). `apply --start` / `update` create them, give them the same groups and log ACLs
+> (checked with a real read), move the owners of `data/` and `agent/`, then, only after the units run, remove the old
+> users (their ACL entries and group memberships first). A failed start puts the old users and owners back. The
+> leftovers of older layouts (bin/otelcol-contrib, bin/cloudprober, bin/amc.previous, the old helper data) are removed
+> after a successful start.
 > v0.20.0: one naming standard, everything that runs is `monitoring-*`: the installer / agent binary is
 > `monitoring-agent` (was `amc`; `bin/amc` stays as a symlink, the command still works under the old name),
 > the prober `monitoring-prober` (Cloudprober: unit, `bin/monitoring-prober`, `config/prober/prober.cfg` +
 > `targets-*.json`), `state.json` (was `amc-state.json`), `.monitoring.lock`, polkit `50-monitoring-agent.rules`,
 > release assets `monitoring-agent-linux-*` (also still as `amc-linux-*` for older hosts), `keys/release.pub`,
 > `MONITORING_VERSION` for get.sh (`AMC_VERSION` still works). An update switches a host and keeps the old
-> names for a rollback. Metric and stream names do not change. The Unix users are renamed in a later release.
+> names for a rollback. Metric and stream names do not change. The Unix users followed in v0.21.0.
 > v0.19.0: amc installs `monitoring-collector` (same signed release, checked with the release key in amc; "up to date" =
 > sha256, not the version) instead of `otelcol-contrib` + the helper units netconn / procs / kmsg / sshd: built-in
 > receivers `netconn` and `procs`, kernel warnings + SSH logins from the journal (`config/journal.yaml`: fixed filters,

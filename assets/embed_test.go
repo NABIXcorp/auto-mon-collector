@@ -20,7 +20,7 @@ func TestAssetsPresentAndLF(t *testing.T) {
 
 func TestUnitRender(t *testing.T) {
 	for _, u := range UnitNames {
-		b, err := Unit(u, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib",
+		b, err := Unit(u, UnitData{Prefix: "/opt/monitoring", User: "monitoring",
 			SiteConfigs: []string{"/opt/monitoring/config/site.d/10-site.yaml"}})
 		if err != nil {
 			t.Fatalf("%s: %v", u, err)
@@ -29,7 +29,7 @@ func TestUnitRender(t *testing.T) {
 		if strings.Contains(s, "{{") {
 			t.Errorf("%s: unrendered template: %s", u, s)
 		}
-		if !strings.Contains(s, "User=otelcol-contrib") || !strings.Contains(s, "/opt/monitoring/") {
+		if !strings.Contains(s, "User=monitoring") || !strings.Contains(s, "/opt/monitoring/") {
 			t.Errorf("%s: prefix / user not applied", u)
 		}
 	}
@@ -58,7 +58,7 @@ func TestJournalConfigIsTheTestedOne(t *testing.T) {
 // ssh pipeline masks before anything else touches a record.
 func TestJournalAccessOnlyForTheCollector(t *testing.T) {
 	for _, u := range append(append([]string{}, UnitNames...), ProbeUnit, AgentUnit, UpdateUnit) {
-		b, err := Unit(u, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
+		b, err := Unit(u, UnitData{Prefix: "/opt/monitoring", User: "monitoring"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -80,7 +80,7 @@ func TestJournalAccessOnlyForTheCollector(t *testing.T) {
 // Cloudprober (v0.12.0): CAP_NET_RAW only with ping probes, metrics on 127.0.0.1 only (in its config).
 func TestProbeUnitCapabilityOnlyForPing(t *testing.T) {
 	for _, ping := range []bool{false, true} {
-		b, err := Unit(ProbeUnit, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib", Ping: ping})
+		b, err := Unit(ProbeUnit, UnitData{Prefix: "/opt/monitoring", User: "monitoring", Ping: ping})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +92,7 @@ func TestProbeUnitCapabilityOnlyForPing(t *testing.T) {
 			t.Errorf("no ping: capabilities must be empty\n%s", s)
 		}
 		if !strings.Contains(s, "--config_file=/opt/monitoring/config/prober/prober.cfg") || !strings.Contains(s, "NoNewPrivileges=yes") ||
-			!strings.Contains(s, "User=otelcol-contrib") {
+			!strings.Contains(s, "User=monitoring") {
 			t.Errorf("unit:\n%s", s)
 		}
 	}
@@ -101,19 +101,19 @@ func TestProbeUnitCapabilityOnlyForPing(t *testing.T) {
 // Agent (v0.13.0): not root, no capabilities, writes only its dir and the Cloudprober files; the polkit rule allows
 // only restarting the Cloudprober unit.
 func TestAgentUnitAndPolkitRule(t *testing.T) {
-	b, err := Unit(AgentUnit, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
+	b, err := Unit(AgentUnit, UnitData{Prefix: "/opt/monitoring", User: "monitoring"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
-	for _, want := range []string{"User=amc-agent", "NoNewPrivileges=yes", "ProtectSystem=strict", "CapabilityBoundingSet=\n",
+	for _, want := range []string{"User=monitoring-agent", "NoNewPrivileges=yes", "ProtectSystem=strict", "CapabilityBoundingSet=\n",
 		"ReadWritePaths=/opt/monitoring/agent /opt/monitoring/config/prober\n", "ExecStart=/opt/monitoring/bin/monitoring-agent agent run --prefix /opt/monitoring"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("agent unit lacks %q:\n%s", want, s)
 		}
 	}
 	r := string(AgentPolkit())
-	for _, want := range []string{`subject.user == "amc-agent"`, `action.lookup("unit") == "monitoring-prober.service"`,
+	for _, want := range []string{`subject.user == "monitoring-agent"`, `action.lookup("unit") == "monitoring-prober.service"`,
 		`action.lookup("verb") == "restart"`, `"org.freedesktop.systemd1.manage-units"`,
 		// v0.16.0: start (only) of the self-update unit
 		"action.lookup(\"unit\") == \"monitoring-update.service\" &&\n        action.lookup(\"verb\") == \"start\")"} {
@@ -121,14 +121,14 @@ func TestAgentUnitAndPolkitRule(t *testing.T) {
 			t.Errorf("polkit rule lacks %q:\n%s", want, r)
 		}
 	}
-	if strings.Count(r, "polkit.Result.YES") != 2 || strings.Count(r, `subject.user == "amc-agent"`) != 2 {
-		t.Errorf("polkit rule: every YES must be bound to amc-agent, one unit and one verb:\n%s", r)
+	if strings.Count(r, "polkit.Result.YES") != 2 || strings.Count(r, `subject.user == "monitoring-agent"`) != 2 {
+		t.Errorf("polkit rule: every YES must be bound to monitoring-agent, one unit and one verb:\n%s", r)
 	}
 }
 
 // Self-update unit (v0.16.0): root oneshot, started on demand only (no [Install]: never enabled), fixed arguments.
 func TestUpdateUnit(t *testing.T) {
-	b, err := Unit(UpdateUnit, UnitData{Prefix: "/opt/monitoring", User: "otelcol-contrib"})
+	b, err := Unit(UpdateUnit, UnitData{Prefix: "/opt/monitoring", User: "monitoring"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -56,7 +56,7 @@ func (c *Client) do(ctx context.Context, method, rel string, body []byte, sign b
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "amc-agent")
+	req.Header.Set("User-Agent", "monitoring-agent")
 	if sign {
 		ts := strconv.FormatInt(c.now().Unix(), 10)
 		nonce := Nonce()

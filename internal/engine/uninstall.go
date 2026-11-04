@@ -23,7 +23,7 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 		o.Prefix = "/opt/monitoring"
 	}
 	if o.User == "" {
-		o.User = "otelcol-contrib"
+		o.User = DefaultUser
 	}
 	if o.Out == nil {
 		o.Out = os.Stdout
@@ -146,7 +146,14 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	}
 
 	if st.AgentUserCreated {
-		e.doCmd("userdel", AgentUser) // the agent's own user: always removed with the agent
+		// the agent's own user: always removed with the agent (amc-agent on a host not yet moved, v0.21.0)
+		agentUser := AgentUser
+		if _, _, ok := e.lookupUser(AgentUser); !ok {
+			if _, _, ok := e.lookupUser(LegacyAgentUser); ok {
+				agentUser = LegacyAgentUser
+			}
+		}
+		e.doCmd("userdel", agentUser)
 	}
 
 	e.r.step("5. collector user")

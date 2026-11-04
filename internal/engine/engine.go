@@ -134,15 +134,17 @@ type eng struct {
 	bin     string            // collector binary usable for validate ("" = none)
 
 	// what this apply changed, for the rollback
-	firstInstall     bool     // there was no config.yaml before
-	backupDir        string   // backup of the files before this apply ("" = files unchanged)
-	binReplaced      bool     // the previous binary is in bin/monitoring-collector.previous
-	agentBinMoved    bool     // the old regular bin/amc is in bin/amc.previous (bin/amc is now a symlink)
-	polkitMoved      bool     // the old polkit rule 50-amc-agent.rules is in 50-amc-agent.rules.previous
-	droppedUnits     []string // legacy units (before v0.19.0) this apply stopped, disabled and unlinked
-	addedUnits       []string // units this apply linked for the first time (a rollback unlinks them again)
-	probeBin         string   // Cloudprober binary usable for --configtest ("" = none)
-	probeBinReplaced bool     // the previous prober is in bin/monitoring-prober.previous
+	firstInstall     bool        // there was no config.yaml before
+	backupDir        string      // backup of the files before this apply ("" = files unchanged)
+	binReplaced      bool        // the previous binary is in bin/monitoring-collector.previous
+	agentBinMoved    bool        // the old regular bin/amc is in bin/amc.previous (bin/amc is now a symlink)
+	moves            []*userMove // v0.21.0: old users this run replaces (otelcol-contrib -> monitoring, amc-agent -> monitoring-agent)
+	prevPolkit       []byte      // the polkit rule before this run rewrote it (rollback)
+	polkitMoved      bool        // the old polkit rule 50-amc-agent.rules is in 50-amc-agent.rules.previous
+	droppedUnits     []string    // legacy units (before v0.19.0) this apply stopped, disabled and unlinked
+	addedUnits       []string    // units this apply linked for the first time (a rollback unlinks them again)
+	probeBin         string      // Cloudprober binary usable for --configtest ("" = none)
+	probeBinReplaced bool        // the previous prober is in bin/monitoring-prober.previous
 	rolledBack       bool
 
 	st    *state // what amc changed outside <prefix> (amc-state.json), for uninstall
@@ -159,7 +161,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 		o.Prefix = "/opt/monitoring"
 	}
 	if o.User == "" {
-		o.User = "otelcol-contrib"
+		o.User = DefaultUser
 	}
 	if o.Arch == "" {
 		o.Arch = runtime.GOARCH
@@ -224,7 +226,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	e.persistState()
 	res := Result{Failures: e.r.failures, Warnings: e.r.warnings, Changes: e.r.changes,
 		NoRestart: e.r.changes == 1 && e.onlyNoRestartFiles()}
-	if e.r.failures > 0 && len(e.droppedUnits) > 0 {
+	if e.r.failures > 0 && o.Apply && (len(e.droppedUnits) > 0 || len(e.moves) > 0) {
 		// the old collector + helpers are already stopped: never leave the host without monitoring
 		e.rollback(ctx)
 		e.persistState()
@@ -251,6 +253,10 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	e.persistState()
 	if o.Start && e.r.failures == 0 {
 		e.start(ctx)
+		if !e.rolledBack && e.r.failures == 0 {
+			e.finishUserMoves()
+			e.cleanupLegacy()
+		}
 		e.persistState() // a rollback may have switched the units back
 	}
 	res = Result{Failures: e.r.failures, Warnings: e.r.warnings, Applied: true, RolledBack: e.rolledBack}
@@ -434,6 +440,11 @@ func (e *eng) preflight(context.Context, string) bool {
 	if e.o.Apply && !e.o.Start && len(e.legacyLinked()) > 0 {
 		e.r.fail("switching to %s stops the old collector: run with --start (automatic rollback on failure)", collector.Name)
 	}
+	e.planUserMoves()
+	if e.o.Apply && !e.o.Start && len(e.moves) > 0 {
+		e.r.fail("moving to the users %s / %s changes owners the running units need: run with --start (automatic rollback on failure)",
+			DefaultUser, AgentUser)
+	}
 	return e.r.failures == 0
 }
 
@@ -462,7 +473,7 @@ func (e *eng) desiredFiles() ([]file, error) {
 	for _, n := range site {
 		siteAbs = append(siteAbs, e.pre("config/site.d", n))
 	}
-	ud := assets.UnitData{Prefix: e.o.Prefix, User: e.o.User, SiteConfigs: siteAbs}
+	ud := assets.UnitData{Prefix: e.o.Prefix, User: e.o.User, AgentUser: AgentUser, SiteConfigs: siteAbs}
 	files := []file{
 		{"config/config.yaml", assets.BaseConfig(), 0o644},
 		{"config/journal.yaml", assets.JournalConfig(), 0o644},
@@ -557,6 +568,10 @@ func (e *eng) userAndDirs(context.Context, string) bool {
 	} else if e.doCmd("useradd", "--system", "--user-group", "--no-create-home", "--home-dir", e.pre("data"),
 		"--shell", e.nologin(), e.o.User) && e.o.Apply {
 		e.st.UserCreated, e.st.Changed = true, true
+		e.markNewCreated(e.o.User)
+	}
+	if e.movedOld(e.o.User) != "" && e.o.Apply {
+		e.st.User, e.st.UserCreated, e.st.Changed = e.o.User, true, true
 	}
 	uid, gid, haveUser := e.lookupUser(e.o.User)
 	for _, d := range []string{"", "bin", "config", "config/site.d", "systemd", "backup"} {
@@ -571,6 +586,7 @@ func (e *eng) userAndDirs(context.Context, string) bool {
 	}
 	e.dir(e.pre("secrets"), 0o700, 0, 0)
 	e.agentUserAndDirs()
+	e.moveOwners()
 	return true
 }
 
@@ -579,7 +595,7 @@ func (e *eng) dir(p string, mode os.FileMode, uid, gid int) {
 		e.r.ok("%s", p)
 		return
 	}
-	e.do(fmt.Sprintf("mkdir -m %o %s (owner %d:%d)", mode, p, uid, gid), func() error { return e.mkdir(p, mode, uid, gid) })
+	e.do(fmt.Sprintf("mkdir -m %o %s (owner %d:%d)", modeBits(mode), p, uid, gid), func() error { return e.mkdir(p, mode, uid, gid) })
 }
 
 func (e *eng) nologin() string {
@@ -800,10 +816,10 @@ func (e *eng) installFiles(context.Context, string) bool {
 	for _, rel := range staleLegacy {
 		changed = true
 		e.changedFiles = append(e.changedFiles, rel)
-		e.r.line("REMOVE %s (replaced by %s, v0.19.0)", rel, collector.Name)
+		e.r.line("REMOVE %s (replaced by %s)", rel, legacyReplacement(rel))
 	}
 	for _, u := range e.legacyLinked() {
-		e.r.line("STOP   %s (replaced by %s; a rollback starts it again)", u, collector.Name)
+		e.r.line("STOP   %s (replaced by %s; a rollback starts it again)", u, legacyReplacement(u))
 	}
 	if changed {
 		e.r.changes++
@@ -882,7 +898,7 @@ func (e *eng) legacyLinked() []string {
 // dropLegacyUnits stops, disables and unlinks the old collector + helper units (the switch to monitoring-collector).
 func (e *eng) dropLegacyUnits() {
 	for _, name := range e.legacyLinked() {
-		e.dropUnit(name, "replaced by "+collector.Name)
+		e.dropUnit(name, "replaced by "+legacyReplacement(name))
 		e.droppedUnits = append(e.droppedUnits, name)
 	}
 }
@@ -1078,6 +1094,15 @@ func (e *eng) readAccess(context.Context, string) bool {
 			e.st.add(&e.st.Groups, g) // a monitoring-only group membership: ours to remove
 		} else if e.doCmd("usermod", "-aG", g, e.o.User) && e.o.Apply {
 			e.st.add(&e.st.Groups, g)
+		}
+	}
+	// v0.21.0: a user move must not lose a log: the new user really reads every file (a real read, not `test -r`,
+	// which said no on a CI runner although the ACL granted r)
+	if len(e.moves) > 0 && e.o.Apply {
+		for _, f := range e.d.ReadFiles {
+			if err := e.o.Runner.Run("runuser", "-u", e.o.User, "--", "head", "-c", "1", f); err != nil {
+				e.r.fail("%s cannot read %s after the move (an ACL or group not recorded?): nothing restarted", e.o.User, f)
+			}
 		}
 	}
 	return true

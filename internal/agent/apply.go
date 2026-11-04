@@ -95,7 +95,7 @@ func lastLine(b []byte) string {
 }
 
 func writeAtomic(p string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(p), ".amc-agent-*")
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".monitoring-agent-*")
 	if err != nil {
 		return err
 	}

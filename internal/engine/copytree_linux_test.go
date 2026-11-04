@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// A backup / rollback copy keeps the setgid bit of config/prober (root:amc-agent 2775 for the agent): before
+// A backup / rollback copy keeps the setgid bit of config/prober (root:monitoring-agent 2775 for the agent): before
 // v0.14.0 a rollback restored it as a plain 0775 directory and the agent could no longer replace its files.
 func TestCopyTreeKeepsSetgid(t *testing.T) {
 	src, dst := t.TempDir(), filepath.Join(t.TempDir(), "out")

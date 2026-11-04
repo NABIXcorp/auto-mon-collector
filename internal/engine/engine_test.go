@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -43,6 +44,41 @@ type fakeRunner struct {
 
 	probeVersion string // output of cloudprober --version ("" = not installed)
 	configtest   error  // cloudprober --configtest result
+
+	root string // the test host: useradd / userdel edit its /etc/passwd + /etc/group (set by runWith)
+}
+
+// accounts: useradd / userdel on the test host's /etc/passwd and /etc/group (lookupUser reads them).
+func (f *fakeRunner) accounts(name string, args []string) {
+	if f.root == "" || len(args) == 0 {
+		return
+	}
+	user := args[len(args)-1]
+	for _, file := range []string{"etc/passwd", "etc/group"} {
+		p := filepath.Join(f.root, file)
+		b, _ := os.ReadFile(p)
+		var keep []string
+		for _, l := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+			if l != "" && !strings.HasPrefix(l, user+":") {
+				keep = append(keep, l)
+			}
+		}
+		if name == "useradd" {
+			uid := 800 + len(keep)
+			home := ""
+			for i, a := range args {
+				if a == "--home-dir" && i+1 < len(args) {
+					home = args[i+1]
+				}
+			}
+			if file == "etc/passwd" {
+				keep = append(keep, fmt.Sprintf("%s:x:%d:%d::%s:/sbin/nologin", user, uid, uid, home))
+			} else {
+				keep = append(keep, fmt.Sprintf("%s:x:%d:", user, uid))
+			}
+		}
+		os.WriteFile(p, []byte(strings.Join(keep, "\n")+"\n"), 0o644)
+	}
 }
 
 func (f *fakeRunner) Timed(_ context.Context, env []string, _ time.Duration, stop func(string) bool,
@@ -63,6 +99,9 @@ func (f *fakeRunner) Timed(_ context.Context, env []string, _ time.Duration, sto
 func (f *fakeRunner) Run(name string, args ...string) error {
 	c := name + " " + strings.Join(args, " ")
 	f.cmds = append(f.cmds, c)
+	if name == "useradd" || name == "userdel" {
+		f.accounts(name, args)
+	}
 	switch {
 	case name == "selinuxenabled" && !f.selinux:
 		return os.ErrNotExist
@@ -87,7 +126,7 @@ func (f *fakeRunner) Output(env []string, name string, args ...string) ([]byte, 
 		return nil, nil
 	case name == "getfacl":
 		if f.acl {
-			return []byte("user::rw-\nuser:otelcol-contrib:r--\n"), nil
+			return []byte("user::rw-\nuser:monitoring:r--\n"), nil
 		}
 		return []byte("user::rw-\n"), nil
 	case len(args) > 0 && args[0] == "validate":
@@ -126,8 +165,8 @@ type host struct {
 func newHost(t *testing.T) host {
 	h := host{t, t.TempDir()}
 	h.write("/etc/os-release", "PRETTY_NAME=\"Test Linux 9\"\n", 0o644)
-	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\notelcol-contrib:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
-	h.write("/etc/group", "root:x:0:\ntomcat:x:992:\notelcol-contrib:x:990:\n", 0o644)
+	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\nmonitoring:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
+	h.write("/etc/group", "root:x:0:\ntomcat:x:992:\nmonitoring:x:990:\n", 0o644)
 	h.write("/var/log/app/alert.log", "x\n", 0o640)
 	return h
 }
@@ -172,6 +211,9 @@ func runSmoke(t *testing.T, h host, r *fakeRunner, apply, start, fetch, smoke bo
 
 func runWith(t *testing.T, h host, r *fakeRunner, apply, start, fetch, smoke bool, d Desired) (Result, string) {
 	t.Helper()
+	if r.root == "" {
+		r.root = h.root
+	}
 	var out bytes.Buffer
 	res, err := Run(context.Background(), Options{
 		Root: h.root, Apply: apply, Start: start, Fetch: fetch, Smoke: smoke, Rollback: true, Arch: "amd64",
@@ -205,8 +247,8 @@ func TestCheckModeChangesNothing(t *testing.T) {
 			t.Errorf("check mode ran a changing command: %s", c)
 		}
 	}
-	for _, want := range []string{"would: mkdir", "would: setfacl -m u:otelcol-contrib:r /var/log/app/alert.log",
-		"would: usermod -aG tomcat otelcol-contrib", "FAIL  /opt/monitoring/secrets/collector.env missing",
+	for _, want := range []string{"would: mkdir", "would: setfacl -m u:monitoring:r /var/log/app/alert.log",
+		"would: usermod -aG tomcat monitoring", "FAIL  /opt/monitoring/secrets/collector.env missing",
 		"NEW    config/host.yaml", "STOP: 1 failure(s)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
@@ -498,7 +540,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 	r := &fakeRunner{}
 	if res, out := run(t, h, r, true, false, false); res.Failures != 0 {
 		// useradd is faked, so the user does not appear: data dirs fail. Re-add the user and apply again.
-		h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\notelcol-contrib:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
+		h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\nmonitoring:x:990:990::/opt/monitoring/data:/sbin/nologin\n", 0o644)
 		if res, out = run(t, h, r, true, false, false); res.Failures != 0 {
 			t.Fatalf("apply: %s", out)
 		}
@@ -512,7 +554,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 	}
 	// check mode changes nothing
 	rc := &fakeRunner{}
-	if _, out := uninstallRun(t, h, rc, false, UninstallOptions{}); !strings.Contains(out, "would: setfacl -x u:otelcol-contrib /var/log/app/alert.log") {
+	if _, out := uninstallRun(t, h, rc, false, UninstallOptions{}); !strings.Contains(out, "would: setfacl -x u:monitoring /var/log/app/alert.log") {
 		t.Errorf("check mode output:\n%s", out)
 	}
 	if rc.has("systemctl stop") || h.read("/opt/monitoring/VERSION") == "" {
@@ -524,8 +566,8 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 	if res.Failures != 0 {
 		t.Fatalf("%s", out)
 	}
-	for _, c := range []string{"systemctl stop", "systemctl disable", "setfacl -x u:otelcol-contrib /var/log/app/alert.log",
-		"setfacl -x u:otelcol-contrib /var/log/app", "gpasswd -d otelcol-contrib tomcat"} {
+	for _, c := range []string{"systemctl stop", "systemctl disable", "setfacl -x u:monitoring /var/log/app/alert.log",
+		"setfacl -x u:monitoring /var/log/app", "gpasswd -d monitoring tomcat"} {
 		if !ru.has(c) {
 			t.Errorf("missing %q in %v", c, ru.cmds)
 		}
@@ -649,7 +691,7 @@ func TestCheckCountsChanges(t *testing.T) {
 		t.Fatalf("apply: %s", out)
 	}
 	// the fake runner does not edit /etc/group: do what the real usermod -aG did
-	h.write("/etc/group", "root:x:0:\ntomcat:x:992:otelcol-contrib\notelcol-contrib:x:990:\n", 0o644)
+	h.write("/etc/group", "root:x:0:\ntomcat:x:992:monitoring\nmonitoring:x:990:\n", 0o644)
 	if res, out := run(t, h, r, false, false, false); res.Changes != 0 {
 		t.Errorf("check after apply: %d changes, want 0 (amc update would restart for nothing):\n%s", res.Changes, out)
 	}
@@ -681,11 +723,11 @@ func TestCheckHint(t *testing.T) {
 	}
 }
 
-// legacyHost is a host on the layout before v0.19.0: otelcol-contrib + four helper units, all linked.
+// legacyHost is a host on the layout before v0.19.0: monitoring + four helper units, all linked.
 func legacyHost(t *testing.T) host {
 	h := smokeHost(t)
 	os.Remove(filepath.Join(h.root, "opt/monitoring/bin/monitoring-collector"))
-	h.write("/opt/monitoring/bin/otelcol-contrib", "OTELCOL", 0o755)
+	h.write("/opt/monitoring/bin/monitoring", "OTELCOL", 0o755)
 	h.write("/opt/monitoring/config/config.yaml", "old config\n", 0o644)
 	for _, u := range assets.LegacyUnits {
 		h.write("/opt/monitoring/systemd/"+u+".service", "old unit "+u+"\n", 0o644)
@@ -733,7 +775,7 @@ func TestSwitchFromOtelcolContrib(t *testing.T) {
 	if !linked(h, "monitoring-collector.service") || h.read("/opt/monitoring/bin/monitoring-collector") != "BIN" {
 		t.Errorf("new collector not installed / linked:\n%s", out)
 	}
-	if h.read("/opt/monitoring/bin/otelcol-contrib") != "OTELCOL" {
+	if h.read("/opt/monitoring/bin/monitoring") != "OTELCOL" {
 		t.Error("the old binary must stay until the next release (a manual downgrade needs it)")
 	}
 	for _, want := range []string{"STOP   monitoring-otelcol.service (replaced by monitoring-collector",

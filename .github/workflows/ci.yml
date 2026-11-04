@@ -286,6 +286,11 @@ jobs:
             || die "old units not running after the failed switch"
           [ ! -e /etc/systemd/system/monitoring-collector.service ] || die "new unit left linked after the rollback"
           sudo test -x /opt/monitoring/netconn/otel-sshd.sh || die "helper scripts not restored"
+          # v0.21.0: the failed switch also moved the users back: old user, old owner, no new user
+          id otelcol-contrib > /dev/null || die "old user otelcol-contrib gone after the rollback"
+          if id monitoring 2>/dev/null; then die "new user monitoring left after the rollback"; fi
+          [ "$(sudo stat -c '%U' /opt/monitoring/data/file_storage)" = otelcol-contrib ] || die "data/ not owned by otelcol-contrib again"
+          systemctl show -p User --value monitoring-otelcol | grep -qx otelcol-contrib || die "old unit not run as otelcol-contrib"
           echo "::group::apply --start (the switch)"
           sudo $amc apply --host-dir examples/oracle-db --start | tee apply.txt
           echo "::endgroup::"
@@ -297,6 +302,15 @@ jobs:
             [ ! -e /etc/systemd/system/$u.service ] || die "$u still linked"
           done
           [ ! -e /opt/monitoring/netconn/otel-sshd.sh ] || die "helper scripts left"
+          # v0.21.0: the switch moved the users: monitoring runs the collector, owns data/, reads the alert log;
+          # otelcol-contrib is gone (with its ACL entries); the old binaries are removed after the successful start
+          must 'MOVE   user otelcol-contrib -> monitoring' apply.txt
+          must 'old user otelcol-contrib removed' apply.txt
+          if id otelcol-contrib 2>/dev/null; then die "old user otelcol-contrib left"; fi
+          systemctl show -p User --value monitoring-collector | grep -qx monitoring || die "collector not run as monitoring"
+          [ -z "$(sudo find /opt/monitoring/data -not -user monitoring -print -quit)" ] || die "files in data/ not owned by monitoring"
+          if sudo getfacl -p --omit-header "$alert" | grep -q '^user:[0-9]'; then die "a numeric ACL entry (old user) left on the alert log"; fi
+          [ ! -e /opt/monitoring/bin/otelcol-contrib ] || die "old binary bin/otelcol-contrib left after the successful switch"
           # least privilege (accepted 2026-11-03): ONLY the collector process has the journal group
           jg=$(getent group systemd-journal | cut -d: -f3)
           pid=$(systemctl show -p MainPID --value monitoring-collector)
@@ -339,9 +353,9 @@ jobs:
           # a real read, not `test -r`: since the Ubuntu 26.04 runner `test -r` failed although the ACL grants r
           # (2026-11-02, also on the last green commit); the two diagnostic lines show what `test` is
           test --version 2>&1 | head -1 || true
-          sudo runuser -u otelcol-contrib -- test -r "$alert" && echo "test -r: yes" || echo "test -r: no (ACL ignored?)"
-          sudo runuser -u otelcol-contrib -- head -c 1 "$alert" > /dev/null || die "alert log not readable for the collector"
-          if id -nG otelcol-contrib | grep -qwE 'root|sudo|adm'; then die "collector user in an admin group"; fi
+          sudo runuser -u monitoring -- test -r "$alert" && echo "test -r: yes" || echo "test -r: no (ACL ignored?)"
+          sudo runuser -u monitoring -- head -c 1 "$alert" > /dev/null || die "alert log not readable for the collector"
+          if id -nG monitoring | grep -qwE 'root|sudo|adm'; then die "collector user in an admin group"; fi
           echo "::group::plan again (must be unchanged)"
           sudo $amc plan --host-dir examples/oracle-db | tee plan2.txt
           echo "::endgroup::"
@@ -456,7 +470,7 @@ jobs:
           must 'NEW    systemd/monitoring-prober.service' pr0.txt
           sudo $amc apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr1.txt
           must 'monitoring-prober.service active' pr1.txt
-          systemctl show -p User --value monitoring-prober | grep -qx otelcol-contrib || die "cloudprober not run as the collector user"
+          systemctl show -p User --value monitoring-prober | grep -qx monitoring || die "prober not run as the collector user"
           ok=""
           for i in $(seq 1 40); do
             m=$(curl -fsS http://127.0.0.1:9313/metrics || true)
@@ -501,14 +515,14 @@ jobs:
           sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag1.txt
           must 'monitoring-agent.service active' ag1.txt
           must 'monitoring-prober.service active' ag1.txt
-          id amc-agent > /dev/null || die "user amc-agent missing"
+          id monitoring-agent > /dev/null || die "user monitoring-agent missing"
           sudo test -f /etc/polkit-1/rules.d/50-monitoring-agent.rules || die "polkit rule missing"
-          [ "$(stat -c '%a %G' /opt/monitoring/config/prober)" = "2775 amc-agent" ] || die "config/prober not group amc-agent setgid"
-          systemctl show -p User --value monitoring-agent | grep -qx amc-agent || die "agent not run as amc-agent"
+          [ "$(stat -c '%a %G' /opt/monitoring/config/prober)" = "2775 monitoring-agent" ] || die "config/prober not group monitoring-agent setgid"
+          systemctl show -p User --value monitoring-agent | grep -qx monitoring-agent || die "agent not run as monitoring-agent"
           echo "wrong-token" | sudo $amc agent enrol --token-stdin > ag-bad.txt 2>&1 && die "a wrong token enrolled"
           echo "test-enrol-token-0123456789" | sudo $amc agent enrol --token-stdin | tee ag2.txt
           must 'enrolled as' ag2.txt
-          [ "$(sudo stat -c '%a %U' /opt/monitoring/agent/key)" = "600 amc-agent" ] || die "agent key not amc-agent 600"
+          [ "$(sudo stat -c '%a %U' /opt/monitoring/agent/key)" = "600 monitoring-agent" ] || die "agent key not monitoring-agent 600"
           host=$(hostname)
           publish() { curl -fsS -X POST http://127.0.0.1:18091/_test/publish -d "$1" > /dev/null; }
           nstatus() { curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; print(len(json.load(sys.stdin) or []))'; }
@@ -567,8 +581,8 @@ jobs:
           [ ! -e /etc/systemd/system/monitoring-prober.service ] || die "cloudprober unit link left"
           if systemctl is-active -q monitoring-prober; then die "cloudprober still running"; fi
           [ ! -e /opt/monitoring ] || die "/opt/monitoring left"
-          if id otelcol-contrib 2>/dev/null; then die "collector user left"; fi
-          if id amc-agent 2>/dev/null; then die "agent user left"; fi
+          if id monitoring 2>/dev/null || id otelcol-contrib 2>/dev/null; then die "collector user left"; fi
+          if id monitoring-agent 2>/dev/null || id amc-agent 2>/dev/null; then die "agent user left"; fi
           [ ! -e /etc/polkit-1/rules.d/50-monitoring-agent.rules ] || die "polkit rule left after uninstall"
           [ ! -e /etc/systemd/system/monitoring-agent.service ] || die "agent unit link left"
           for p in "$alert" /u01 /u01/app/oracle/diag/rdbms/orcl/ORCL/trace; do

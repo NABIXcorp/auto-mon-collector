@@ -12,7 +12,8 @@ real host, network or company. Examples use generic values (`ORCL`, `/u01/app/or
 > `config/prober/prober.cfg` + `targets-*.json`), `amc-state.json` = `state.json`, `.amc.lock` = `.monitoring.lock`,
 > polkit `50-amc-agent.rules` = `50-monitoring-agent.rules`, release assets `amc-linux-*` = `monitoring-agent-linux-*`
 > (both published), `keys/amc-release.pub` = `keys/release.pub`. Older names below are history; data names
-> (metrics `cloudprober_*`, streams) and the Unix users (renamed later) stay.
+> (metrics `cloudprober_*`, streams) stay. v0.21.0: Unix users `monitoring` (was `otelcol-contrib`) and
+> `monitoring-agent` (was `amc-agent`), moved by an apply (see internal/engine/users.go).
 ## 1. Purpose
 
 One command turns a Linux server into a monitored host:

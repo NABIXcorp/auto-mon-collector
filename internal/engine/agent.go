@@ -18,8 +18,8 @@ import (
 // (`monitoring-agent self-update`), linked but never enabled; the polkit rule lets the agent START it (a remote
 // update, re-verified by root).
 
-// AgentUser runs the agent.
-const AgentUser = "amc-agent"
+// AgentUser runs the agent (v0.21.0; before: LegacyAgentUser amc-agent, moved by an apply, see users.go).
+const AgentUser = "monitoring-agent"
 
 // PolkitRule: the only file the agent part writes outside the prefix (v0.20.0 name; LegacyPolkitRule before).
 const (
@@ -49,6 +49,7 @@ func (e *eng) agentUserAndDirs() {
 		} else if e.doCmd("useradd", "--system", "--user-group", "--no-create-home", "--home-dir", e.pre("agent"),
 			"--shell", e.nologin(), AgentUser) && e.o.Apply {
 			e.st.AgentUserCreated, e.st.Changed = true, true
+			e.markNewCreated(AgentUser)
 		}
 		uid, gid, _ := e.lookupUser(AgentUser)
 		e.ensureDir(e.pre("agent"), 0o700, uid, gid)
@@ -151,10 +152,14 @@ func (e *eng) agentBinary() {
 		return
 	}
 	rule := assets.AgentPolkit()
-	if have, err := os.ReadFile(e.fs(PolkitRule)); err == nil && bytes.Equal(have, rule) {
+	have, herr := os.ReadFile(e.fs(PolkitRule))
+	if herr == nil && bytes.Equal(have, rule) {
 		e.r.ok("%s", PolkitRule)
 		e.st.add(&e.st.Polkit, PolkitRule)
 		return
+	}
+	if herr == nil {
+		e.prevPolkit = have // e.g. the rule for amc-agent (v0.20.0): a rollback writes it back
 	}
 	e.r.changes++
 	if e.do("write "+PolkitRule+" (the agent may restart monitoring-prober and start monitoring-update, nothing else)",
