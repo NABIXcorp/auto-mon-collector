@@ -2,10 +2,10 @@
 
 **An installer that looks at a Linux host and sets up an OpenTelemetry Collector for what it finds.** Since v0.19.0
 the collector is `monitoring-collector`: an OpenTelemetry Collector build (OCB, `collector/`) with the stock
-components amc uses plus small receivers of its own (TCP connections per port, top processes), published in the same
-signed release as amc. Before v0.19.0: the official `otelcol-contrib` plus four helper scripts.
+components monitoring-agent uses plus small receivers of its own (TCP connections per port, top processes), published in the same
+signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus four helper scripts.
 
-> **Status: v0.19.0, early.** Detection, generator, interactive questions and the install engine are tested on
+> **Status: v0.20.0, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
@@ -41,6 +41,13 @@ signed release as amc. Before v0.19.0: the official `otelcol-contrib` plus four 
 > key embedded in amc (the same check as `get.sh`), keeps `bin/amc.before-<version>`, then runs the new `amc update`;
 > the old binary goes back when the new one fails. `apply` / `update` / `self-update` never run at the same time
 > (`<prefix>/.amc.lock`). See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
+> v0.20.0: one naming standard, everything that runs is `monitoring-*`: the installer / agent binary is
+> `monitoring-agent` (was `amc`; `bin/amc` stays as a symlink, the command still works under the old name),
+> the prober `monitoring-prober` (Cloudprober: unit, `bin/monitoring-prober`, `config/prober/prober.cfg` +
+> `targets-*.json`), `state.json` (was `amc-state.json`), `.monitoring.lock`, polkit `50-monitoring-agent.rules`,
+> release assets `monitoring-agent-linux-*` (also still as `amc-linux-*` for older hosts), `keys/release.pub`,
+> `MONITORING_VERSION` for get.sh (`AMC_VERSION` still works). An update switches a host and keeps the old
+> names for a rollback. Metric and stream names do not change. The Unix users are renamed in a later release.
 > v0.19.0: amc installs `monitoring-collector` (same signed release, checked with the release key in amc; "up to date" =
 > sha256, not the version) instead of `otelcol-contrib` + the helper units netconn / procs / kmsg / sshd: built-in
 > receivers `netconn` and `procs`, kernel warnings + SSH logins from the journal (`config/journal.yaml`: fixed filters,
@@ -90,10 +97,10 @@ overlay use `plan` / `apply --answers FILE [--site-dir DIR]` as before.
 
 ## Verify instead of trusting
 
-`get.sh` checks an ECDSA P-256 signature over `SHA256SUMS` (public key: [keys/amc-release.pub](keys/amc-release.pub),
+`get.sh` checks an ECDSA P-256 signature over `SHA256SUMS` (public key: [keys/release.pub](keys/release.pub),
 also embedded in `get.sh`) and the binary's sha256 before it runs anything; without `openssl` it stops. The same
-signed `SHA256SUMS` also lists `monitoring-collector-linux-amd64` / `-arm64` (the collector amc installs since v0.19.0;
-amc checks the signature and the sha256 itself before it installs it). To read it first:
+signed `SHA256SUMS` also lists `monitoring-collector-linux-amd64` / `-arm64` (the collector installed since v0.19.0;
+monitoring-agent checks the signature and the sha256 itself before it installs it). To read it first:
 
 ```bash
 curl -fsSLO https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh
@@ -111,11 +118,11 @@ less get.sh && sudo bash get.sh            # AMC_VERSION=v0.2.0 pins a release
 ## Try it now (build from source, as root)
 
 ```bash
-sudo amc detect                       # read-only: what runs on this host
-sudo amc                              # asks what a scan cannot know, then a full plan; "Apply now?" at the end
-sudo amc plan --answers answers.yaml  # the same without questions (automation), see examples/app-host
-sudo amc update                      # new release: saved answers + installed site.d, restart only on changes
-sudo amc uninstall                    # check mode; --yes removes (secrets / data / user kept unless --purge*)
+sudo monitoring-agent detect                       # read-only: what runs on this host
+sudo monitoring-agent                              # asks what a scan cannot know, then a full plan; "Apply now?" at the end
+sudo monitoring-agent plan --answers answers.yaml  # the same without questions (automation), see examples/app-host
+sudo monitoring-agent update                       # new release: saved answers + installed site.d, restart only on changes
+sudo monitoring-agent uninstall                    # check mode; --yes removes (secrets / data / user kept unless --purge*)
 ```
 
 Secrets (backend auth header, database password) are typed hidden or come from
@@ -125,8 +132,8 @@ Secrets (backend auth header, database password) are typed hidden or come from
 
 ```bash
 go test ./...
-CGO_ENABLED=0 go build -o amc ./cmd/amc
-./amc version
+CGO_ENABLED=0 go build -o monitoring-agent ./cmd/monitoring-agent
+./monitoring-agent version
 ```
 
 ## License

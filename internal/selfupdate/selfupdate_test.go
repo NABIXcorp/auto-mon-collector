@@ -312,7 +312,7 @@ func TestSelfUpdateRestoresOldBinary(t *testing.T) {
 		e.version = func([]byte) string { return "auto-mon-collector v0.16.10 (commit x)\n" } // a prefix of v0.16.1 must not pass
 		e.request(nil, nil)
 		res := e.run()
-		if res.Result != "rolled_back" || !strings.Contains(res.Detail, "previous amc v0.16.0 restored") {
+		if res.Result != "rolled_back" || !strings.Contains(res.Detail, "previous version v0.16.0 restored") {
 			t.Fatalf("%+v", res)
 		}
 		if e.read("bin/amc") != oldBin {
@@ -329,7 +329,7 @@ func TestSelfUpdateRestoresOldBinary(t *testing.T) {
 		e.update = errors.New("exit status 1")
 		e.request(nil, nil)
 		res := e.run()
-		if res.Result != "rolled_back" || !strings.Contains(res.Detail, "amc update failed") {
+		if res.Result != "rolled_back" || !strings.Contains(res.Detail, "update failed") {
 			t.Fatalf("%+v", res)
 		}
 		if e.read("bin/amc") != oldBin || e.read("bin/amc.before-v0.16.0") != oldBin {

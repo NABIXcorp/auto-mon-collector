@@ -10,28 +10,38 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/assets"
 )
 
-// The amc agent (v0.13.0): installed only when Desired.Agent is set. Its parts: user amc-agent (system, no
-// shell), <prefix>/agent/ (key + state, amc-agent 700), bin/amc (a copy of this amc), unit monitoring-agent,
-// config/agent-allow.yaml (the project's allowlist template, optional), the polkit rule that lets it restart
-// Cloudprober, and write access to config/cloudprober/ (group amc-agent, setgid) - nothing else. v0.16.0: the root
-// oneshot unit monitoring-update (`amc self-update`), linked but never enabled; the polkit rule lets the agent
-// START it (a remote amc update, re-verified by root).
+// The agent (v0.13.0): installed only when Desired.Agent is set. Its parts: user amc-agent (system, no shell; renamed
+// in a later release), <prefix>/agent/ (key + state, 700), bin/monitoring-agent (a copy of this binary; v0.20.0, the
+// old name bin/amc stays as a symlink to it), unit monitoring-agent, config/agent-allow.yaml (the project's
+// allowlist template, optional), the polkit rule that lets it restart monitoring-prober, and write access to
+// config/prober/ (group of the agent user, setgid) - nothing else. v0.16.0: the root oneshot unit monitoring-update
+// (`monitoring-agent self-update`), linked but never enabled; the polkit rule lets the agent START it (a remote
+// update, re-verified by root).
 
 // AgentUser runs the agent.
 const AgentUser = "amc-agent"
 
-// PolkitRule: the only file the agent part writes outside the prefix.
-const PolkitRule = "/etc/polkit-1/rules.d/50-amc-agent.rules"
+// PolkitRule: the only file the agent part writes outside the prefix (v0.20.0 name; LegacyPolkitRule before).
+const (
+	PolkitRule       = "/etc/polkit-1/rules.d/50-monitoring-agent.rules"
+	LegacyPolkitRule = "/etc/polkit-1/rules.d/50-amc-agent.rules"
+)
+
+// agentBinRel is the agent binary below the prefix; legacyAgentBinRel (bin/amc, before v0.20.0) points to it.
+const (
+	agentBinRel       = "bin/monitoring-agent"
+	legacyAgentBinRel = "bin/amc"
+)
 
 // Agent is what the agent part needs.
 type Agent struct {
 	AllowTemplate []byte // config/agent-allow.yaml (project template); nil = none
-	Binary        string // the amc binary installed as bin/amc (normally the running one)
+	Binary        string // the binary installed as bin/monitoring-agent (normally the running one)
 }
 
 const allowFile = "config/agent-allow.yaml"
 
-// agentUserAndDirs: step 2 part for the agent and the Cloudprober directory owner.
+// agentUserAndDirs: step 2 part for the agent and the prober directory owner.
 func (e *eng) agentUserAndDirs() {
 	if e.d.Agent != nil {
 		if _, _, ok := e.lookupUser(AgentUser); ok {
@@ -46,12 +56,12 @@ func (e *eng) agentUserAndDirs() {
 	if e.d.Probes == nil {
 		return
 	}
-	// config/cloudprober/: the agent replaces files here (group amc-agent, setgid); without agent root only
+	// config/prober/: the agent replaces files here (group of the agent user, setgid); without agent root only
 	if e.d.Agent != nil {
 		_, gid, _ := e.lookupUser(AgentUser)
-		e.ensureDir(e.pre("config/cloudprober"), os.ModeSetgid|0o775, 0, gid)
+		e.ensureDir(e.pre(probeDir), os.ModeSetgid|0o775, 0, gid)
 	} else {
-		e.ensureDir(e.pre("config/cloudprober"), 0o755, 0, 0)
+		e.ensureDir(e.pre(probeDir), 0o755, 0, 0)
 	}
 }
 
@@ -83,27 +93,61 @@ func modeBits(m os.FileMode) uint32 {
 	return b
 }
 
-// agentBinary: step 4c, bin/amc = a copy of this amc (the agent unit runs it).
+// agentBinary: step 4c, bin/monitoring-agent = a copy of this binary (the agent unit runs it); bin/amc (the name
+// before v0.20.0) becomes a symlink to it (an old regular bin/amc is kept as bin/amc.previous for a rollback).
 func (e *eng) agentBinary() {
 	if e.d.Agent == nil {
 		return
 	}
 	e.r.step("4c. agent: binary + polkit rule")
-	bin := e.pre("bin/amc")
+	bin := e.pre(agentBinRel)
 	want, err := os.ReadFile(e.d.Agent.Binary)
 	if err != nil {
-		e.r.fail("read the amc binary %s: %v", e.d.Agent.Binary, err)
+		e.r.fail("read the agent binary %s: %v", e.d.Agent.Binary, err)
 		return
 	}
 	if have, err := os.ReadFile(e.fs(bin)); err == nil && sha256.Sum256(have) == sha256.Sum256(want) {
-		e.r.ok("%s is this amc", bin)
+		e.r.ok("%s is this binary", bin)
 	} else {
 		e.r.changes++
-		e.do("install "+bin+" (copy of this amc, mode 755, root)", func() error { return e.writeFile(bin, want, 0o755) })
+		e.do("install "+bin+" (copy of this binary, mode 755, root)", func() error { return e.writeFile(bin, want, 0o755) })
+	}
+	old := e.pre(legacyAgentBinRel)
+	if t, err := os.Readlink(e.fs(old)); err == nil && t == path.Base(agentBinRel) {
+		e.r.ok("%s -> %s", old, path.Base(agentBinRel))
+	} else {
+		e.r.changes++
+		e.do("link "+old+" -> "+path.Base(agentBinRel)+" (the name before v0.20.0)", func() error {
+			if fi, err := os.Lstat(e.fs(old)); err == nil && fi.Mode().IsRegular() {
+				if err := os.Rename(e.fs(old), e.fs(old+".previous")); err != nil {
+					return err
+				}
+				e.agentBinMoved = true
+			}
+			tmp := e.fs(old) + ".link"
+			os.Remove(tmp)
+			if err := os.Symlink(path.Base(agentBinRel), tmp); err != nil {
+				return err
+			}
+			return os.Rename(tmp, e.fs(old))
+		})
+	}
+	if _, err := os.Lstat(e.fs(LegacyPolkitRule)); err == nil {
+		e.r.changes++
+		// kept as *.previous (polkit reads only *.rules) for a rollback, which links the old units again
+		if e.do("remove "+LegacyPolkitRule+" (replaced by "+path.Base(PolkitRule)+")", func() error {
+			if err := os.Rename(e.fs(LegacyPolkitRule), e.fs(LegacyPolkitRule)+".previous"); err != nil {
+				return err
+			}
+			e.polkitMoved = true
+			return nil
+		}) && e.o.Apply {
+			e.st.remove(&e.st.Polkit, LegacyPolkitRule)
+		}
 	}
 	if _, err := os.Stat(e.fs(path.Dir(PolkitRule))); err != nil {
-		e.r.warn("polkit not installed (%s missing): the agent cannot restart Cloudprober; probe lists that change "+
-			"Cloudprober's config wait for the next `amc apply` (install polkit / polkitd)", path.Dir(PolkitRule))
+		e.r.warn("polkit not installed (%s missing): the agent cannot restart monitoring-prober; probe lists that change "+
+			"its config wait for the next `monitoring-agent apply` (install polkit / polkitd)", path.Dir(PolkitRule))
 		return
 	}
 	rule := assets.AgentPolkit()
@@ -113,7 +157,7 @@ func (e *eng) agentBinary() {
 		return
 	}
 	e.r.changes++
-	if e.do("write "+PolkitRule+" (amc-agent may restart monitoring-cloudprober and start monitoring-update, nothing else)",
+	if e.do("write "+PolkitRule+" (the agent may restart monitoring-prober and start monitoring-update, nothing else)",
 		func() error { return e.writeFile(PolkitRule, rule, 0o644) }) && e.o.Apply {
 		e.st.add(&e.st.Polkit, PolkitRule)
 	}

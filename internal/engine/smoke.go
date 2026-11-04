@@ -12,7 +12,7 @@ import (
 
 // smokeOverlay keeps a second collector away from the one already running on the host: own OTLP ports
 // (random), no telemetry listener (8888). Exporters go to a local sink via OO_ENDPOINT.
-const smokeOverlay = `# amc smoke run only (never installed)
+const smokeOverlay = `# monitoring-agent smoke run only (never installed)
 receivers:
   otlp:
     protocols:

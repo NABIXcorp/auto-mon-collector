@@ -96,7 +96,7 @@ func (r *Release) Sum(ctx context.Context, arch string) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 	if !tagRE.MatchString(r.Version) {
-		return [32]byte{}, fmt.Errorf("amc %q is not a release build: no collector to download (use --collector-file)", r.Version)
+		return [32]byte{}, fmt.Errorf("monitoring-agent %q is not a release build: no collector to download (use --collector-file)", r.Version)
 	}
 	if r.sums == nil {
 		key, err := selfupdate.ParseReleaseKey(r.Key)
@@ -149,7 +149,7 @@ func (r *Release) open(ctx context.Context, name string, limit int64) (*http.Res
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "amc")
+	req.Header.Set("User-Agent", "monitoring-agent")
 	resp, err := r.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", name, err)

@@ -64,7 +64,7 @@ func startAgent(t *testing.T, policy, running string) (*agenttest.Server, string
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		_ = agent.Run(ctx, agent.Config{Prefix: pre, Host: "app-1", Run: f.run, Versions: map[string]string{"amc": running},
+		_ = agent.Run(ctx, agent.Config{Prefix: pre, Host: "app-1", Run: f.run, Versions: map[string]string{agent.VersionKey: running},
 			NotEnrolledWait: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond})
 		close(done)
 	}()

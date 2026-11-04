@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// ParseReleaseKey reads a PEM "PUBLIC KEY" (PKIX) that must be ECDSA P-256 (keys/amc-release.pub).
+// ParseReleaseKey reads a PEM "PUBLIC KEY" (PKIX) that must be ECDSA P-256 (keys/release.pub).
 func ParseReleaseKey(b []byte) (*ecdsa.PublicKey, error) {
 	blk, rest := pem.Decode(b)
 	if blk == nil || blk.Type != "PUBLIC KEY" || strings.TrimSpace(string(rest)) != "" {

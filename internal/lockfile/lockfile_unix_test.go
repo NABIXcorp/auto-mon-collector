@@ -29,7 +29,7 @@ func TestBusyAndRelease(t *testing.T) {
 // The child of a lock holder takes the lock over only through the inherited fd 3 (self-update -> amc update);
 // without it, it is refused like any other amc.
 func TestInheritedLock(t *testing.T) {
-	if dir := os.Getenv("AMC_LOCK_TEST_DIR"); dir != "" { // the child
+	if dir := os.Getenv("MONITORING_LOCK_TEST_DIR"); dir != "" { // the child
 		l, err := Acquire(dir)
 		if err != nil {
 			os.Exit(3)
@@ -45,7 +45,7 @@ func TestInheritedLock(t *testing.T) {
 	defer l.Release()
 	child := func(pass bool) error {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestInheritedLock$")
-		cmd.Env = append(os.Environ(), "AMC_LOCK_TEST_DIR="+dir)
+		cmd.Env = append(os.Environ(), "MONITORING_LOCK_TEST_DIR="+dir)
 		if pass {
 			cmd.ExtraFiles = []*os.File{l.File()}
 			cmd.Env = append(cmd.Env, EnvFD+"=3")
@@ -62,7 +62,7 @@ func TestInheritedLock(t *testing.T) {
 	other, _ := os.CreateTemp(dir, "other")
 	defer other.Close()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestInheritedLock$")
-	cmd.Env = append(os.Environ(), "AMC_LOCK_TEST_DIR="+dir, EnvFD+"=3")
+	cmd.Env = append(os.Environ(), "MONITORING_LOCK_TEST_DIR="+dir, EnvFD+"=3")
 	cmd.ExtraFiles = []*os.File{other}
 	if cmd.Run() == nil {
 		t.Error("a foreign fd 3 was accepted as the lock")

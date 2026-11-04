@@ -1,4 +1,4 @@
-// Command amc (auto-mon-collector) scans a Linux host, proposes what to monitor, generates the configuration
+// Command monitoring-agent (amc before v0.20.0; repository auto-mon-collector) scans a Linux host, proposes what to monitor, generates the configuration
 // for monitoring-collector (our OpenTelemetry Collector build, same signed release) and installs it on request.
 // See docs/design.md.
 package main
@@ -27,27 +27,35 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/version"
 )
 
-const usage = `auto-mon-collector (amc): host discovery installer for monitoring-collector (OpenTelemetry)
+const usage = `monitoring-agent: host discovery installer and agent for monitoring-collector (OpenTelemetry)
+(called amc before v0.20.0: that name still works)
 
 Usage:
-  amc plan  --answers FILE [flags]           detect + generate + diff + validate + smoke run; changes nothing
-  amc apply --answers FILE [--start] [flags] the same, then install (backup first), optionally (re)start
-  amc update [--plan] [flags]                new release on an installed host, no files to copy: the saved
-                                             answers + the installed site.d, plan, then apply + start only
-                                             when something changes (--plan: stop after the plan)
-  amc generate --answers FILE [--out DIR]    only write host.yaml + host.env (nothing installed)
-  amc detect [--json]                        read-only: which services this host runs (needs root)
-  amc agent enrol --token-stdin [--prefix DIR]  register this host with the control plane (answers: agent:)
-  amc agent run [--prefix DIR]               the agent daemon (started by the unit monitoring-agent)
-  amc self-update --request FILE [--prefix DIR]  root: a signed update request saved by the agent: verify it,
-                                             download + verify the signed release, install it, amc update
-                                             (run by the unit monitoring-update; answers: agent.update)
-  amc uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]   check mode unless --yes
-  amc version
+  monitoring-agent plan  --answers FILE [flags]
+        detect + generate + diff + validate + smoke run; changes nothing
+  monitoring-agent apply --answers FILE [--start] [flags]
+        the same, then install (backup first), optionally (re)start
+  monitoring-agent update [--plan] [flags]
+        new release on an installed host, no files to copy: the saved answers + the installed site.d, plan,
+        then apply + start only when something changes (--plan: stop after the plan)
+  monitoring-agent generate --answers FILE [--out DIR]
+        only write host.yaml + host.env (nothing installed)
+  monitoring-agent detect [--json]
+        read-only: which services this host runs (needs root)
+  monitoring-agent agent enrol --token-stdin [--prefix DIR]
+        register this host with the control plane (answers: agent:)
+  monitoring-agent agent run [--prefix DIR]
+        the agent daemon (started by the unit monitoring-agent)
+  monitoring-agent self-update --request FILE [--prefix DIR]
+        root: a signed update request saved by the agent: verify it, download + verify the signed release,
+        install it, then update (run by the unit monitoring-update; answers: agent.update)
+  monitoring-agent uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]
+        check mode unless --yes
+  monitoring-agent version
 
 Flags (plan / apply / generate):
   --answers FILE      what a scan cannot know: Oracle service name + user, HTTP checks, services on/off
-  --detect-json FILE  use a saved "amc detect --json" instead of scanning (offline / review)
+  --detect-json FILE  use a saved "monitoring-agent detect --json" instead of scanning (offline / review)
   --site-dir DIR      operator overlay *.yaml, installed as config/site.d/ (plan / apply)
   --agent-allow FILE  project allowlist template for the agent, installed as config/agent-allow.yaml
                       (plan / apply; without it an installed template is removed; update keeps it)
@@ -61,18 +69,18 @@ Flags (plan / apply / generate):
   --no-rollback       (apply --start) keep the new state even when a unit does not start
   --start             (apply) restart the units and check them
 
-Flags (uninstall): removes units, files and what amc recorded in <prefix>/amc-state.json (ACLs, groups,
+Flags (uninstall): removes units, files and what it recorded in <prefix>/state.json (ACLs, groups,
 SELinux rules). Kept unless asked: data/ + backup/ (--purge-data), secrets/ (--purge-secrets: you type
-"yes"; without a terminal --yes counts), the collector user (--purge, only if amc created it).
+"yes"; without a terminal --yes counts), the collector user (--purge, only if it created it).
 
 Not yet available: sql, interactive questions (see docs/design.md, section 14).
 `
 
-// collectorSource: the collector of this amc release, downloaded once per command (plan + apply reuse it); the
+// collectorSource: the collector of this release, downloaded once per command (plan + apply reuse it); the
 // download directory is removed at the end.
 func collectorSource() (*collector.Release, func()) {
 	r := &collector.Release{Version: version.Version}
-	dir, err := os.MkdirTemp("", "amc-collector-")
+	dir, err := os.MkdirTemp("", "monitoring-collector-")
 	if err != nil {
 		return r, func() {}
 	}
@@ -134,16 +142,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "generate":
 		return generateCmd(args, stdout, stderr)
 	case "sql":
-		fmt.Fprintf(stderr, "amc %s: not implemented yet (see docs/design.md, section 14)\n", cmd)
+		fmt.Fprintf(stderr, "monitoring-agent %s: not implemented yet (see docs/design.md, section 14)\n", cmd)
 		return exitPlan
 	default:
-		fmt.Fprintf(stderr, "amc: unknown command %q\n\n%s", cmd, usage)
+		fmt.Fprintf(stderr, "monitoring-agent: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
 	}
 }
 
 func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("amc", flag.ContinueOnError)
+	fs := flag.NewFlagSet("monitoring-agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	hostDir := fs.String("host-dir", "", "")
 	answers := fs.String("answers", "", "")
@@ -162,11 +170,11 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if *hostDir != "" && *answers != "" {
-		fmt.Fprintln(stderr, "amc: give --answers FILE or --host-dir DIR, not both")
+		fmt.Fprintln(stderr, "monitoring-agent: give --answers FILE or --host-dir DIR, not both")
 		return exitUsage
 	}
 	if *start && !apply {
-		fmt.Fprintln(stderr, "amc: --start only works with apply")
+		fmt.Fprintln(stderr, "monitoring-agent: --start only works with apply")
 		return exitUsage
 	}
 	var (
@@ -186,7 +194,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	default: // no answers file: ask on the terminal (previous answers are the defaults)
 		tty, terr := openPrompter()
 		if terr != nil {
-			fmt.Fprintf(stderr, "amc: %v (example: examples/app-host/answers.yaml)\n", terr)
+			fmt.Fprintf(stderr, "monitoring-agent: %v (example: examples/app-host/answers.yaml)\n", terr)
 			return exitUsage
 		}
 		defer tty.Close()
@@ -194,13 +202,13 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		d, secrets, err = interview(stdout, p, *prefix, *detectFile, *siteDir, inputs{prefix: *prefix, allow: *allowFile})
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "amc: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
 		return exitUsage
 	}
 	if apply {
 		lk, err := lockInstall(*prefix)
 		if err != nil {
-			fmt.Fprintf(stderr, "amc: %v\n", err)
+			fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
 			return exitUsage
 		}
 		defer lk.Release()
@@ -221,7 +229,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		if aerr == nil && yes {
 			lk, lerr := lockInstall(*prefix)
 			if lerr != nil {
-				fmt.Fprintf(stderr, "amc: %v\n", lerr)
+				fmt.Fprintf(stderr, "monitoring-agent: %v\n", lerr)
 				return exitUsage
 			}
 			defer lk.Release()
@@ -231,7 +239,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "amc: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
 		if errors.Is(err, context.Canceled) {
 			return exitPlan
 		}
@@ -248,7 +256,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 // files, new services). Plan first (validate + smoke run); apply + start + rollback only after a clean plan
 // that changes something: an up-to-date host is not restarted (a restart resets the counters).
 func update(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("amc update", flag.ContinueOnError)
+	fs := flag.NewFlagSet("monitoring-agent update", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	planOnly := fs.Bool("plan", false, "")
 	detectFile := fs.String("detect-json", "", "")
@@ -263,22 +271,22 @@ func update(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "amc update: unexpected argument %q (to change answers or site.d use plan / apply --answers)\n", fs.Arg(0))
+		fmt.Fprintf(stderr, "monitoring-agent update: unexpected argument %q (to change answers or site.d use plan / apply --answers)\n", fs.Arg(0))
 		return exitUsage
 	}
 	saved := filepath.Join(*prefix, "answers.yaml")
 	a, err := generate.LoadAnswers(saved)
 	if os.IsNotExist(err) {
-		fmt.Fprintf(stderr, "amc update: %s is missing: install first (`amc` asks, or `amc apply --answers FILE --start`)\n", saved)
+		fmt.Fprintf(stderr, "monitoring-agent update: %s is missing: install first (`monitoring-agent` asks, or `monitoring-agent apply --answers FILE --start`)\n", saved)
 		return exitUsage
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent update: %v\n", err)
 		return exitUsage
 	}
 	lk, err := lockInstall(*prefix)
 	if err != nil {
-		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent update: %v\n", err)
 		return exitUsage
 	}
 	defer lk.Release()
@@ -290,7 +298,7 @@ func update(args []string, stdout, stderr io.Writer) int {
 	}
 	d, err := desiredFrom(stdout, a, *detectFile, siteDir, in)
 	if err != nil {
-		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent update: %v\n", err)
 		return exitUsage
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -305,7 +313,7 @@ func update(args []string, stdout, stderr io.Writer) int {
 	res, err := runEngine(ctx, opts, d)
 	switch {
 	case err != nil:
-		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent update: %v\n", err)
 		if errors.Is(err, context.Canceled) {
 			return exitPlan
 		}
@@ -329,7 +337,7 @@ func update(args []string, stdout, stderr io.Writer) int {
 	opts.Smoke = false // the identical configuration passed the smoke run seconds ago
 	noRestart := res.NoRestart
 	if res, err = runEngine(ctx, opts, d); err != nil {
-		fmt.Fprintf(stderr, "amc update: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent update: %v\n", err)
 		return exitUsage
 	}
 	if res.Failures > 0 || res.RolledBack {
@@ -350,7 +358,7 @@ type promptCloser interface {
 // openPrompter is replaced in tests.
 var openPrompter = func() (promptCloser, error) { return ask.OpenTTY() }
 
-// scan detects live, or reads a saved "amc detect --json".
+// scan detects live, or reads a saved "monitoring-agent detect --json".
 func scan(detectPath string) (generate.Host, error) {
 	if detectPath == "" {
 		snap := detect.Collect(detectSource)
@@ -485,7 +493,7 @@ func interview(w io.Writer, p ask.Prompter, prefix, detectPath, siteDir string, 
 // detectSource is replaced in tests.
 var detectSource detect.Source = detect.OS{}
 
-// detectJSON is the `amc detect --json` format; `--detect-json FILE` reads it back (offline generation).
+// detectJSON is the `monitoring-agent detect --json` format; `--detect-json FILE` reads it back (offline generation).
 type detectJSON struct {
 	OS       string           `json:"os"`
 	TimeZone string           `json:"time_zone"`
@@ -495,7 +503,7 @@ type detectJSON struct {
 	Findings []detect.Finding `json:"findings"`
 }
 
-// hostPart detects (live, or from a saved "amc detect --json") and generates host.yaml + host.env.
+// hostPart detects (live, or from a saved "monitoring-agent detect --json") and generates host.yaml + host.env.
 func hostPart(answersPath, detectPath string) (generate.Output, error) {
 	a, err := generate.LoadAnswers(answersPath)
 	if err != nil {
@@ -523,7 +531,7 @@ func orNone(xs []string) string {
 }
 
 func generateCmd(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("amc generate", flag.ContinueOnError)
+	fs := flag.NewFlagSet("monitoring-agent generate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	answers := fs.String("answers", "", "")
 	detectFile := fs.String("detect-json", "", "")
@@ -533,12 +541,12 @@ func generateCmd(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if *answers == "" {
-		fmt.Fprintln(stderr, "amc generate: --answers FILE is required")
+		fmt.Fprintln(stderr, "monitoring-agent generate: --answers FILE is required")
 		return exitUsage
 	}
 	g, err := hostPart(*answers, *detectFile)
 	if err != nil {
-		fmt.Fprintf(stderr, "amc: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
 		return exitUsage
 	}
 	if *out == "" {
@@ -547,12 +555,12 @@ func generateCmd(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 	if err := os.MkdirAll(*out, 0o755); err != nil {
-		fmt.Fprintf(stderr, "amc: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
 		return exitUsage
 	}
 	for name, b := range map[string][]byte{"host.yaml": g.HostYAML, "host.env": g.HostEnv} {
 		if err := os.WriteFile(filepath.Join(*out, name), b, 0o644); err != nil {
-			fmt.Fprintf(stderr, "amc: %v\n", err)
+			fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
 			return exitUsage
 		}
 	}
@@ -562,7 +570,7 @@ func generateCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 func detectCmd(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("amc detect", flag.ContinueOnError)
+	fs := flag.NewFlagSet("monitoring-agent detect", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "")
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
@@ -575,18 +583,18 @@ func detectCmd(args []string, stdout, stderr io.Writer) int {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(detectJSON{snap.OS, snap.TimeZone, snap.PortsListening(), snap.Listens, snap.Notes, found}); err != nil {
-			fmt.Fprintf(stderr, "amc: %v\n", err)
+			fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
 			return exitUsage
 		}
 		return exitOK
 	}
 	detect.Print(stdout, snap, found)
-	fmt.Fprintln(stdout, "\nRead-only: nothing was changed. Next: `sudo amc` (asks, then plans) or `sudo amc plan --answers FILE`.")
+	fmt.Fprintln(stdout, "\nRead-only: nothing was changed. Next: `sudo monitoring-agent` (asks, then plans) or `sudo monitoring-agent plan --answers FILE`.")
 	return exitOK
 }
 
 func uninstall(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("amc uninstall", flag.ContinueOnError)
+	fs := flag.NewFlagSet("monitoring-agent uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	prefix := fs.String("prefix", "/opt/monitoring", "")
 	user := fs.String("user", "otelcol-contrib", "")
@@ -598,11 +606,11 @@ func uninstall(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	// Secrets cannot be recreated by amc: a typed "yes" on the terminal; in automation (no terminal) the
+	// Secrets cannot be recreated by monitoring-agent: a typed "yes" on the terminal; in automation (no terminal) the
 	// two explicit flags --purge-secrets --yes are the confirmation.
 	if *purgeSecrets && *yes {
 		if answer, isTTY := confirm("Delete " + *prefix + "/secrets (backend + database credentials)? Type yes: "); isTTY && answer != "yes" {
-			fmt.Fprintln(stderr, "amc: secrets kept (answer was not yes); nothing removed")
+			fmt.Fprintln(stderr, "monitoring-agent: secrets kept (answer was not yes); nothing removed")
 			return exitPlan
 		}
 	}
@@ -610,7 +618,7 @@ func uninstall(args []string, stdout, stderr io.Writer) int {
 		Prefix: *prefix, User: *user, Apply: *yes, Out: stdout, Runner: sysexec.Runner{},
 	}, engine.UninstallOptions{PurgeData: *purgeData, PurgeSecrets: *purgeSecrets, PurgeUser: *purgeUser})
 	if err != nil {
-		fmt.Fprintf(stderr, "amc: %v\n", err)
+		fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
 		return exitUsage
 	}
 	if res.Failures > 0 {

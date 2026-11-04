@@ -14,7 +14,7 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/lockfile"
 )
 
-// v0.16.0: apply and update refuse to run while another amc (e.g. a self-update) holds <prefix>/.amc.lock.
+// v0.16.0: apply and update refuse to run while another amc (e.g. a self-update) holds <prefix>/.monitoring.lock.
 func TestApplyAndUpdateWaitForTheLock(t *testing.T) {
 	pre := t.TempDir()
 	if err := os.WriteFile(filepath.Join(pre, "answers.yaml"), []byte("project: demo\n"), 0o644); err != nil {

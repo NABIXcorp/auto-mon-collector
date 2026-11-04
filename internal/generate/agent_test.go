@@ -78,14 +78,14 @@ func TestGenerateWithAgent(t *testing.T) {
 	// the agent's last list is part of the files; the scrape interval stays the answers' (default 30 s)
 	h.AgentProbes = Probes{IntervalS: 15, TCP: []TCPProbe{{Name: "link_a_b", Host: "db.example.com", Port: 443}}}
 	out, _ = Generate(h, a)
-	if !strings.Contains(string(out.Probes.Targets["cloudprober-tcp.json"]), "link_a_b") ||
+	if !strings.Contains(string(out.Probes.Targets["targets-tcp.json"]), "link_a_b") ||
 		!strings.Contains(string(out.Probes.Config), "interval_msec: 15000") || !strings.Contains(string(out.HostYAML), "scrape_interval: 30s") {
 		t.Fatalf("agent list not generated:\n%s\n%s", out.Probes.Config, out.HostYAML)
 	}
 	// the allowlist got smaller: the applied list is left out (and said so), not installed
 	h.AgentAllow = Allow{}.Merge(Allow{Domains: []string{"other.example.org"}, Ports: []int{443}})
 	out, _ = Generate(h, a)
-	if _, ok := out.Probes.Targets["cloudprober-tcp.json"]; ok || !strings.Contains(strings.Join(out.Defaults, " "), "outside the allowlist") {
+	if _, ok := out.Probes.Targets["targets-tcp.json"]; ok || !strings.Contains(strings.Join(out.Defaults, " "), "outside the allowlist") {
 		t.Fatalf("list outside the allowlist was installed: %v", out.Defaults)
 	}
 }

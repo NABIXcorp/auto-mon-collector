@@ -1,12 +1,14 @@
-// Package selfupdate is `amc self-update` (v0.16.0): root's half of a remote amc update requested through the agent
+// Package selfupdate is `monitoring-agent self-update` (v0.16.0): root's half of a remote update requested through
+// the agent
 // (docs/design.md, section 17). Root does not trust the agent (user amc-agent): the ONLY input is the signed
 // document the agent saved, and it is verified again here with the control-plane key pinned in the root-owned
 // answers.yaml. The host owner's policy comes from answers.yaml agent.update only. The release is downloaded from
 // the one repository compiled in below and must carry a valid signature of the release key embedded in this binary
-// (keys/amc-release.pub, the same check get.sh does); nothing of the URL, key or commands comes from the request.
+// (keys/release.pub, the same check get.sh does); nothing of the URL, key or commands comes from the request.
 //
 //	verify the request -> policy (allow, downgrade, window) -> lock -> download SHA256SUMS + .sig + asset
-//	-> verify -> keep bin/amc.before-<old> -> install bin/amc -> new `amc version` -> new `amc update`
+//	-> verify -> keep bin/monitoring-agent.before-<old> -> install bin/monitoring-agent (bin/amc before v0.20.0)
+//	-> new `version` -> new `update`
 //	-> result (<prefix>/agent/update-result.json); on a failed version check or update the old binary goes back.
 package selfupdate
 
@@ -125,14 +127,22 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	}
 	fmt.Fprintf(o.Out, "self-update: request %s accepted: %s -> %s\n", res.ID, o.Running, target)
 
-	asset := "amc-linux-" + o.Arch
+	// v0.20.0: the release asset is monitoring-agent-linux-<arch>; a release before that has only amc-linux-<arch>
+	asset := "monitoring-agent-linux-" + o.Arch
 	bin, err := o.download(ctx, target, asset)
+	if err != nil && (strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "lists no")) {
+		asset = "amc-linux-" + o.Arch
+		bin, err = o.download(ctx, target, asset)
+	}
 	if err != nil {
 		return set("failed", "nothing changed: %v", err)
 	}
 	fmt.Fprintf(o.Out, "self-update: %s %s: signature and sha256 verified\n", asset, target)
 
-	binPath := filepath.Join(o.Prefix, "bin", "amc")
+	binPath := filepath.Join(o.Prefix, "bin", "monitoring-agent")
+	if _, err := os.Stat(binPath); err != nil {
+		binPath = filepath.Join(o.Prefix, "bin", "amc") // installed before v0.20.0
+	}
 	old, err := os.ReadFile(binPath)
 	if err != nil {
 		return set("failed", "nothing changed: %v", err)
@@ -147,21 +157,21 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	changed = true
 	restore := func(why string) agent.UpdateResult {
 		if err := writeRoot(binPath, old, 0o755); err != nil {
-			return set("failed", "%s; RESTORING the previous amc FAILED (%v): it is in %s", why, err, keep)
+			return set("failed", "%s; RESTORING the previous binary FAILED (%v): it is in %s", why, err, keep)
 		}
-		return set("rolled_back", "%s; previous amc %s restored", why, o.Running)
+		return set("rolled_back", "%s; previous version %s restored", why, o.Running)
 	}
 	out, err := o.Run(nil, binPath, "version")
 	if got := strings.TrimSpace(string(out)); err != nil || !strings.HasPrefix(got, "auto-mon-collector "+target+" ") {
 		return restore(fmt.Sprintf("the new binary reports %q, want %s", lastLine(got), target))
 	}
-	fmt.Fprintf(o.Out, "self-update: bin/amc is %s (previous kept as %s); running `amc update`\n", target, filepath.Base(keep))
+	fmt.Fprintf(o.Out, "self-update: bin/%s is %s (previous kept as %s); running `update`\n", filepath.Base(binPath), target, filepath.Base(keep))
 	out, err = o.Run(lk.File(), binPath, "update", "--prefix", o.Prefix)
 	o.Out.Write(out)
 	if err != nil {
-		return restore(fmt.Sprintf("amc update failed (%v): %s", err, lastLine(string(out))))
+		return restore(fmt.Sprintf("update failed (%v): %s", err, lastLine(string(out))))
 	}
-	return set("ok", "amc %s installed, `amc update` done", target)
+	return set("ok", "%s installed, `update` done", target)
 }
 
 func (o *Options) defaults() {
@@ -314,7 +324,7 @@ func (o *Options) get(ctx context.Context, base, name string, limit int64) ([]by
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "amc-self-update")
+	req.Header.Set("User-Agent", "monitoring-agent-self-update")
 	resp, err := o.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", name, err)

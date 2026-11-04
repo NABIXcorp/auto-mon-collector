@@ -48,7 +48,7 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	}
 	if !found {
 		e.r.warn("%s not found: units and files are removed, but ACLs / groups / SELinux rules from an older "+
-			"installer are not known and stay (run `amc apply` once first to record them)", StateFile)
+			"installer are not known and stay (run `monitoring-agent apply` once first to record them)", StateFile)
 	}
 	if st.User != "" && st.User != o.User {
 		e.r.warn("state file is for user %s, removing that one", st.User)
@@ -111,7 +111,7 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 
 	e.r.step("4. files in %s", o.Prefix)
 	remove := []string{"bin", "config", "systemd", "netconn", "agent", "VERSION", "answers.yaml", inventoryFile, StateFile,
-		selfUpdateRecord, lockFile}
+		LegacyStateFile, selfUpdateRecord, lockFile, legacyLockFile}
 	keep := []string{}
 	if u.PurgeData {
 		remove = append(remove, "data", "backup")
@@ -154,7 +154,7 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	case !u.PurgeUser:
 		e.r.ok("kept user %s (remove with --purge)", e.o.User)
 	case !st.UserCreated:
-		e.r.warn("user %s was not created by amc: kept", e.o.User)
+		e.r.warn("user %s was not created by monitoring-agent: kept", e.o.User)
 	default:
 		e.doCmd("userdel", e.o.User)
 	}
@@ -162,7 +162,7 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	res := Result{Failures: e.r.failures, Warnings: e.r.warnings, Applied: o.Apply}
 	switch {
 	case !o.Apply:
-		fmt.Fprintf(o.Out, "\nCHECK done: %d failure(s), %d warning(s). Run `amc uninstall --yes` to remove.\n",
+		fmt.Fprintf(o.Out, "\nCHECK done: %d failure(s), %d warning(s). Run `monitoring-agent uninstall --yes` to remove.\n",
 			res.Failures, res.Warnings)
 	default:
 		fmt.Fprintf(o.Out, "\nUNINSTALLED: %d failure(s), %d warning(s).\n", res.Failures, res.Warnings)

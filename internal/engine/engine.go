@@ -76,7 +76,7 @@ type Options struct {
 	// ProbeFetcher downloads the pinned Cloudprober for an architecture into a directory (default cloudprober.Fetch)
 	ProbeFetcher func(ctx context.Context, arch, dir string) (string, error)
 
-	// CheckHint: the hint after a clean check (default: run `amc apply`); "-" = none (the caller prints its own)
+	// CheckHint: the hint after a clean check (default: run `monitoring-agent apply`); "-" = none (the caller prints its own)
 	CheckHint string
 }
 
@@ -94,7 +94,7 @@ type Desired struct {
 	// Probes (v0.12.0): Cloudprober config + target files; nil = no probes (Cloudprober is not installed, an
 	// installed one is stopped and its files removed)
 	Probes *Probes
-	// Agent (v0.13.0): the amc agent (probe lists from a control plane); nil = no agent (an installed one is
+	// Agent (v0.13.0): the agent (probe lists from a control plane); nil = no agent (an installed one is
 	// stopped, its unit and polkit rule removed)
 	Agent *Agent
 }
@@ -102,7 +102,7 @@ type Desired struct {
 // Probes is what Cloudprober runs. Config may contain ProbePrefix (replaced by the install prefix).
 type Probes struct {
 	Config  []byte
-	Targets map[string][]byte // config/cloudprober/<name> (JSON target lists Cloudprober re-reads)
+	Targets map[string][]byte // config/prober/<name> (JSON target lists the prober re-reads)
 	Ping    bool              // ping probes: the unit gets CAP_NET_RAW
 }
 
@@ -137,10 +137,12 @@ type eng struct {
 	firstInstall     bool     // there was no config.yaml before
 	backupDir        string   // backup of the files before this apply ("" = files unchanged)
 	binReplaced      bool     // the previous binary is in bin/monitoring-collector.previous
+	agentBinMoved    bool     // the old regular bin/amc is in bin/amc.previous (bin/amc is now a symlink)
+	polkitMoved      bool     // the old polkit rule 50-amc-agent.rules is in 50-amc-agent.rules.previous
 	droppedUnits     []string // legacy units (before v0.19.0) this apply stopped, disabled and unlinked
 	addedUnits       []string // units this apply linked for the first time (a rollback unlinks them again)
 	probeBin         string   // Cloudprober binary usable for --configtest ("" = none)
-	probeBinReplaced bool     // the previous Cloudprober is in bin/cloudprober.previous
+	probeBinReplaced bool     // the previous prober is in bin/monitoring-prober.previous
 	rolledBack       bool
 
 	st    *state // what amc changed outside <prefix> (amc-state.json), for uninstall
@@ -203,7 +205,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 	}
 	fmt.Fprintf(o.Out, "prefix: %s   mode: %s\n", o.Prefix, mode)
 
-	tmp, err := os.MkdirTemp("", "amc-")
+	tmp, err := os.MkdirTemp("", "monitoring-agent-")
 	if err != nil {
 		return Result{}, err
 	}
@@ -234,7 +236,7 @@ func Run(ctx context.Context, o Options, d Desired) (Result, error) {
 		return res, nil
 	}
 	if !o.Apply {
-		hint := " Run `amc apply` to change things."
+		hint := " Run `monitoring-agent apply` to change things."
 		switch o.CheckHint {
 		case "":
 		case "-":
@@ -367,7 +369,7 @@ func (e *eng) writeFile(p string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(dst), ".amc-*")
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".monitoring-*")
 	if err != nil {
 		return err
 	}
@@ -484,7 +486,7 @@ func (e *eng) desiredFiles() ([]file, error) {
 			return nil, err
 		}
 		files = append(files, file{"systemd/" + assets.ProbeUnit + ".service", b, 0o644},
-			file{probeDir + "/cloudprober.cfg", bytes.ReplaceAll(p.Config, []byte(ProbePrefix), []byte(e.o.Prefix)), 0o644})
+			file{probeDir + "/" + probeConfig, bytes.ReplaceAll(p.Config, []byte(ProbePrefix), []byte(e.o.Prefix)), 0o644})
 		var names []string
 		for n := range p.Targets {
 			if !probeTargetRE.MatchString(n) {
@@ -519,7 +521,8 @@ const inventoryFile = "inventory.json"
 // of apply / update / self-update (lockfile.Name)
 const (
 	selfUpdateRecord = "self-update.json"
-	lockFile         = ".amc.lock"
+	lockFile         = ".monitoring.lock"
+	legacyLockFile   = ".amc.lock" // before v0.20.0
 )
 
 // onlyNoRestartFiles: the changed files are all ones no unit reads (see Result.NoRestart).
@@ -735,7 +738,7 @@ func (e *eng) copyBinary(src, p string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(dst), ".amc-*")
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".monitoring-*")
 	if err != nil {
 		return err
 	}
@@ -844,6 +847,7 @@ func (e *eng) installFiles(context.Context, string) bool {
 			e.r.fail("remove %s: %v", rel, err)
 		}
 	}
+	os.Remove(e.fs(e.pre(legacyProbeDir))) // the prober directory before v0.20.0, once empty (in the backup)
 	e.r.ok("files installed")
 	return true
 }
@@ -924,7 +928,7 @@ func copyTree(src, dst string) error {
 	}
 	if fi.IsDir() {
 		// keep the directory mode, setgid and owner: a restored config/ must stay readable for the collector user,
-		// a restored config/cloudprober/ must stay root:amc-agent 2775 for the agent (lost before v0.14.0)
+		// a restored config/prober/ must stay root:<agent group> 2775 for the agent (lost before v0.14.0)
 		if err := os.MkdirAll(dst, fi.Mode().Perm()); err != nil {
 			return err
 		}
@@ -1002,10 +1006,10 @@ func (e *eng) selinux(context.Context, string) bool {
 	e.r.warn("semanage not installed -> chcon (lost on a full relabel; install policycoreutils-python-utils)")
 	paths := append(append([]string{}, dirs...), e.pre("bin", collector.Name))
 	if e.d.Probes != nil {
-		paths = append(paths, e.pre("bin/cloudprober"))
+		paths = append(paths, e.pre(probeBinRel))
 	}
 	if e.d.Agent != nil {
-		paths = append(paths, e.pre("bin/amc"))
+		paths = append(paths, e.pre(agentBinRel))
 	}
 	out, err := e.o.Runner.Output(nil, "stat", append([]string{"-c", "%C"}, paths...)...)
 	if err == nil && allBinT(out, len(paths)) {

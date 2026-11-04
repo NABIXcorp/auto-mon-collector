@@ -33,7 +33,7 @@ func TestProbesGenerateCloudproberAndScrape(t *testing.T) {
 	cfg := string(out.Probes.Config)
 	for _, want := range []string{
 		`host: "127.0.0.1"`, "port: 9313",
-		`file_path: "@PREFIX@/config/cloudprober/cloudprober-tcp.json"`, "ping_probe { use_datagram_socket: false }",
+		`file_path: "@PREFIX@/config/prober/targets-tcp.json"`, "ping_probe { use_datagram_socket: false }",
 		`name: "http_payments_api"`, "protocol: HTTPS", "port: 443", `relative_url: "/health?x=1"`,
 		`name: "http_local_app"`, "protocol: HTTP", "port: 8080", `ip: "127.0.0.1"`,
 		"interval_msec: 30000", `metrics_prefix: "cloudprober_"`, `value: "@target.label.target@"`,
@@ -42,7 +42,7 @@ func TestProbesGenerateCloudproberAndScrape(t *testing.T) {
 			t.Errorf("cloudprober.cfg lacks %q:\n%s", want, cfg)
 		}
 	}
-	tcp := string(out.Probes.Targets["cloudprober-tcp.json"])
+	tcp := string(out.Probes.Targets["targets-tcp.json"])
 	if !strings.Contains(tcp, `"name": "db.example.com"`) || strings.Contains(tcp, `"ip": "db.example.com"`) ||
 		!strings.Contains(tcp, `"ip": "192.0.2.10"`) || !strings.Contains(tcp, `"target": "app2"`) {
 		t.Errorf("tcp targets:\n%s", tcp)
@@ -155,10 +155,10 @@ func TestProbePathLabelAndPingPerTarget(t *testing.T) {
 			t.Errorf("cloudprober.cfg lacks %q:\n%s", want, cfg)
 		}
 	}
-	if _, ok := pf.Targets["cloudprober-ping.json"]; ok || strings.Contains(cfg, "cloudprober-ping.json") {
+	if _, ok := pf.Targets["targets-ping.json"]; ok || strings.Contains(cfg, "targets-ping.json") {
 		t.Error("ping must not use file targets any more")
 	}
-	if tcp := string(pf.Targets["cloudprober-tcp.json"]); !strings.Contains(tcp, `"path": "private"`) || strings.Count(tcp, `"path"`) != 1 {
+	if tcp := string(pf.Targets["targets-tcp.json"]); !strings.Contains(tcp, `"path": "private"`) || strings.Count(tcp, `"path"`) != 1 {
 		t.Errorf("tcp targets:\n%s", tcp)
 	}
 	// no path anywhere = no path label at all (hosts without mesh paths keep exactly their metrics)

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# get.sh: download, VERIFY and start amc (auto-mon-collector).
+# get.sh: download, VERIFY and start monitoring-agent (called amc before v0.20.0; repository auto-mon-collector).
 #
 #   curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh | sudo bash
-#   ... | sudo bash -s -- plan --answers answers.yaml        (arguments go to amc; default: interactive plan)
+#   ... | sudo bash -s -- plan --answers answers.yaml        (arguments go to monitoring-agent; default: interactive plan)
 #   ... | sudo bash -s -- update                             (installed host: new release, nothing to copy)
-#   AMC_VERSION=v0.1.0 ... (pin a release instead of latest)
+#   MONITORING_VERSION=v0.20.0 ... (pin a release instead of latest; AMC_VERSION works too)
 #
 # Trust: SHA256SUMS is signed (ECDSA P-256, openssl). The public key is embedded below. The binary runs only
 # if the signature AND its sha256 match. Without openssl this script stops: it never skips the check.
@@ -14,47 +14,51 @@ set -euo pipefail
 main() {
   local repo="https://github.com/NABIXcorp/auto-mon-collector/releases"
   local base="$repo/latest/download"
-  if [ -n "${AMC_VERSION:-}" ]; then base="$repo/download/$AMC_VERSION"; fi
-  base="${AMC_BASE_URL_FOR_TESTS:-$base}"
+  local version="${MONITORING_VERSION:-${AMC_VERSION:-}}"
+  if [ -n "$version" ]; then base="$repo/download/$version"; fi
+  base="${MONITORING_BASE_URL_FOR_TESTS:-$base}"
 
   local arch
   case "$(uname -m)" in
     x86_64) arch=amd64 ;;
     aarch64 | arm64) arch=arm64 ;;
-    *) echo "amc: unsupported CPU $(uname -m) (amd64, arm64)" >&2; exit 1 ;;
+    *) echo "monitoring-agent: unsupported CPU $(uname -m) (amd64, arm64)" >&2; exit 1 ;;
   esac
   for tool in openssl sha256sum; do
-    command -v "$tool" > /dev/null || { echo "amc: $tool is needed to verify the download; install it first" >&2; exit 1; }
+    command -v "$tool" > /dev/null || { echo "monitoring-agent: $tool is needed to verify the download; install it first" >&2; exit 1; }
   done
   local get
   if command -v curl > /dev/null; then get="curl -fsSL --retry 2 -o"
   elif command -v wget > /dev/null; then get="wget -q -O"
-  else echo "amc: curl or wget is needed" >&2; exit 1; fi
+  else echo "monitoring-agent: curl or wget is needed" >&2; exit 1; fi
 
   # global, not local: the EXIT trap runs after main() has returned (a local would be unset -> set -u error)
-  AMC_GET_TMP=$(mktemp -d)
-  trap 'rm -rf "$AMC_GET_TMP"' EXIT
-  local tmp=$AMC_GET_TMP
+  MONITORING_GET_TMP=$(mktemp -d)
+  trap 'rm -rf "$MONITORING_GET_TMP"' EXIT
+  local tmp=$MONITORING_GET_TMP
   cat > "$tmp/release.pub" <<'PUBKEY'
-@AMC_PUBKEY@
+@PUBKEY@
 PUBKEY
 
-  echo "amc: downloading amc-linux-$arch from $base" >&2
   $get "$tmp/SHA256SUMS" "$base/SHA256SUMS"
   $get "$tmp/SHA256SUMS.sig" "$base/SHA256SUMS.sig"
-  $get "$tmp/amc-linux-$arch" "$base/amc-linux-$arch"
-
   if ! openssl dgst -sha256 -verify "$tmp/release.pub" -signature "$tmp/SHA256SUMS.sig" "$tmp/SHA256SUMS" > /dev/null 2>&1; then
-    echo "amc: SIGNATURE CHECK FAILED: SHA256SUMS is not signed by the auto-mon-collector key. Nothing was run." >&2
+    echo "monitoring-agent: SIGNATURE CHECK FAILED: SHA256SUMS is not signed by the release key. Nothing was run." >&2
     exit 3
   fi
-  if ! (cd "$tmp" && grep -E "^[0-9a-f]{64} [ *]amc-linux-$arch$" SHA256SUMS | sha256sum -c --quiet - > /dev/null 2>&1); then
-    echo "amc: CHECKSUM MISMATCH for amc-linux-$arch. Nothing was run." >&2
+  # v0.20.0+: monitoring-agent-linux-<arch>; a pinned older release has only amc-linux-<arch>
+  local asset="monitoring-agent-linux-$arch"
+  grep -qE "^[0-9a-f]{64} [ *]$asset$" "$tmp/SHA256SUMS" || asset="amc-linux-$arch"
+  echo "monitoring-agent: downloading $asset from $base" >&2
+  $get "$tmp/$asset" "$base/$asset"
+  if ! (cd "$tmp" && grep -E "^[0-9a-f]{64} [ *]$asset$" SHA256SUMS | sha256sum -c --quiet - > /dev/null 2>&1); then
+    echo "monitoring-agent: CHECKSUM MISMATCH for $asset. Nothing was run." >&2
     exit 3
   fi
-  echo "amc: signature and sha256 verified" >&2
-  chmod 755 "$tmp/amc-linux-$arch"
-  "$tmp/amc-linux-$arch" "$@"
+  echo "monitoring-agent: signature and sha256 verified" >&2
+  mv "$tmp/$asset" "$tmp/monitoring-agent"
+  chmod 755 "$tmp/monitoring-agent"
+  "$tmp/monitoring-agent" "$@"
 }
 
 main "$@"   # the whole script is inside main(): a partly downloaded script never runs

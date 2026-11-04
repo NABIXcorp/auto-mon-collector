@@ -28,7 +28,7 @@ var _ = errors.New
 func setupPrefix(t *testing.T, cpKey string, url string) string {
 	t.Helper()
 	pre := t.TempDir()
-	for _, d := range []string{"agent", "config/cloudprober", "bin"} {
+	for _, d := range []string{"agent", "config/prober", "bin"} {
 		if err := os.MkdirAll(filepath.Join(pre, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func TestRunAgainstFakeControlPlane(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		_ = agent.Run(ctx, agent.Config{Prefix: pre, Host: "app-1", Run: f.run, Versions: map[string]string{"amc": "test"},
+		_ = agent.Run(ctx, agent.Config{Prefix: pre, Host: "app-1", Run: f.run, Versions: map[string]string{agent.VersionKey: "test"},
 			NotEnrolledWait: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond})
 		close(done)
 	}()
@@ -77,7 +77,7 @@ func TestRunAgainstFakeControlPlane(t *testing.T) {
 		return nil
 	}
 	cp.Publish("app-1", 0, generate.Probes{TCP: []generate.TCPProbe{{Name: "link_web_db", Host: "db.example.com", Port: 5432}}}, 0, false, false)
-	if s := waitStatus(1); s[0].Result != "applied" || s[0].Revision != 1 || s[0].Versions["amc"] != "test" {
+	if s := waitStatus(1); s[0].Result != "applied" || s[0].Revision != 1 || s[0].Versions[agent.VersionKey] != "test" {
 		t.Fatalf("status: %+v", s[0])
 	}
 	st, _ := agent.LoadState(pre)
@@ -123,7 +123,7 @@ func TestInventorySent(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			_ = agent.Run(ctx, agent.Config{Prefix: pre, Host: "app-1", Run: (&fakeRun2{}).run,
-				Versions: map[string]string{"amc": "v-test"}, NotEnrolledWait: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond})
+				Versions: map[string]string{agent.VersionKey: "v-test"}, NotEnrolledWait: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond})
 			close(done)
 		}()
 		waitFor := func(what string, ok func() bool) {
@@ -147,7 +147,7 @@ func TestInventorySent(t *testing.T) {
 		} else {
 			waitFor("inventory after the revision", func() bool { i, _ := cp.Inventories(); return len(i) >= 2 })
 			invs, _ := cp.Inventories()
-			if invs[0].Revision != 0 || invs[0].Versions["amc"] != "v-test" || string(invs[0].Services) != `{"schema":1,"services":[]}` ||
+			if invs[0].Revision != 0 || invs[0].Versions[agent.VersionKey] != "v-test" || string(invs[0].Services) != `{"schema":1,"services":[]}` ||
 				invs[1].Revision != 1 {
 				t.Errorf("inventories: %+v", invs)
 			}

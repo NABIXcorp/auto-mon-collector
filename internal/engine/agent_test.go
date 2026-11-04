@@ -37,7 +37,7 @@ func TestAgentCheckMode(t *testing.T) {
 		t.Fatalf("check failed:\n%s", out)
 	}
 	for _, want := range []string{"would: useradd --system --user-group --no-create-home --home-dir /opt/monitoring/agent",
-		"4c. agent: binary + polkit rule", "would: install /opt/monitoring/bin/amc", "would: write " + PolkitRule,
+		"4c. agent: binary + polkit rule", "would: install /opt/monitoring/bin/monitoring-agent", "would: write " + PolkitRule,
 		"NEW    systemd/monitoring-agent.service", "NEW    config/agent-allow.yaml"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
@@ -84,15 +84,15 @@ func TestAgentApplyThenRemove(t *testing.T) {
 		t.Error("bin/amc not installed")
 	}
 	if u := h.read("/opt/monitoring/systemd/monitoring-agent.service"); !strings.Contains(u, "User=amc-agent") ||
-		!strings.Contains(u, "ReadWritePaths=/opt/monitoring/agent /opt/monitoring/config/cloudprober") {
+		!strings.Contains(u, "ReadWritePaths=/opt/monitoring/agent /opt/monitoring/config/prober") {
 		t.Errorf("agent unit:\n%s", u)
 	}
-	if rule := h.read(PolkitRule); !strings.Contains(rule, `"monitoring-cloudprober.service"`) || !strings.Contains(rule, `"restart"`) {
+	if rule := h.read(PolkitRule); !strings.Contains(rule, `"monitoring-prober.service"`) || !strings.Contains(rule, `"restart"`) {
 		t.Errorf("polkit rule:\n%s", rule)
 	}
-	fi, err := os.Stat(filepath.Join(h.root, "opt/monitoring/config/cloudprober"))
+	fi, err := os.Stat(filepath.Join(h.root, "opt/monitoring/config/prober"))
 	if err != nil || fi.Mode()&os.ModeSetgid == 0 || fi.Mode().Perm() != 0o775 {
-		t.Errorf("config/cloudprober mode: %v %v", fi.Mode(), err)
+		t.Errorf("config/prober mode: %v %v", fi.Mode(), err)
 	}
 	// v0.16.0: the self-update unit is written and linked, but never enabled, restarted or checked
 	if u := h.read("/opt/monitoring/systemd/monitoring-update.service"); !strings.Contains(u, "Type=oneshot") {
@@ -119,7 +119,7 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	// a plan right after: nothing to do
 	r1 := &fakeRunner{readable: true, probeVersion: "v" + cloudprober.Version}
 	_, out = runWith(t, h, r1, false, false, false, false, withAgent(t, h, true))
-	for _, bad := range []string{"CHANGE ", "NEW    ", "REMOVE ", "would: install /opt/monitoring/bin/amc", "would: write " + PolkitRule, "would: chmod"} {
+	for _, bad := range []string{"CHANGE ", "NEW    ", "REMOVE ", "would: install /opt/monitoring/bin/monitoring-agent", "would: write " + PolkitRule, "would: chmod"} {
 		if strings.Contains(out, bad) {
 			t.Errorf("plan after apply not clean (%q):\n%s", bad, out)
 		}
@@ -147,9 +147,9 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	if strings.Contains(h.read("/opt/monitoring/"+StateFile), "monitoring-update") {
 		t.Error("update unit still in the state")
 	}
-	fi, _ = os.Stat(filepath.Join(h.root, "opt/monitoring/config/cloudprober"))
+	fi, _ = os.Stat(filepath.Join(h.root, "opt/monitoring/config/prober"))
 	if fi.Mode()&os.ModeSetgid != 0 || fi.Mode().Perm() != 0o755 {
-		t.Errorf("config/cloudprober not root-only again: %v", fi.Mode())
+		t.Errorf("config/prober not root-only again: %v", fi.Mode())
 	}
 }
 
@@ -183,5 +183,78 @@ func TestUninstallRemovesTheAgent(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(h.root, gone)); err == nil {
 			t.Errorf("%s still there", gone)
 		}
+	}
+}
+
+// v019Host: a v0.19.0 host with agent + probes: bin/amc, bin/cloudprober, config/cloudprober/, unit
+// monitoring-cloudprober, polkit 50-amc-agent.rules, amc-state.json (all renamed in v0.20.0).
+func v019Host(t *testing.T) host {
+	h := agentHost(t)
+	h.write("/opt/monitoring/bin/amc", "OLD-AMC", 0o755)
+	h.write("/opt/monitoring/bin/cloudprober", "OLD-PROBER", 0o755)
+	h.write("/opt/monitoring/config/config.yaml", "old config\n", 0o644)
+	h.write("/opt/monitoring/config/cloudprober/cloudprober.cfg", "old cfg\n", 0o644)
+	h.write("/opt/monitoring/config/cloudprober/cloudprober-tcp.json", "{}\n", 0o644)
+	h.write("/opt/monitoring/systemd/monitoring-cloudprober.service", "old prober unit\n", 0o644)
+	h.write("/etc/polkit-1/rules.d/50-amc-agent.rules", "old rule\n", 0o644)
+	h.write("/opt/monitoring/amc-state.json", `{"version":1,"prefix":"/opt/monitoring","user":"otelcol-contrib","units":["monitoring-cloudprober.service"],"polkit_rules":["/etc/polkit-1/rules.d/50-amc-agent.rules"]}`+"\n", 0o644)
+	link := filepath.Join(h.root, "etc/systemd/system/monitoring-cloudprober.service")
+	os.MkdirAll(filepath.Dir(link), 0o755)
+	if err := os.Symlink("/opt/monitoring/systemd/monitoring-cloudprober.service", link); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func TestRenameToMonitoringNames(t *testing.T) {
+	needSymlinks(t)
+	h := v019Host(t)
+	r := &fakeRunner{readable: true}
+	res, out := runWith(t, h, r, true, true, true, false, withAgent(t, h, false))
+	if res.Failures != 0 || res.RolledBack {
+		t.Fatalf("apply failed:\n%s", out)
+	}
+	if h.read("/opt/monitoring/bin/monitoring-agent") != "AMC-BINARY" || h.read("/opt/monitoring/bin/amc.previous") != "OLD-AMC" {
+		t.Errorf("agent binary not installed / old one not kept:\n%s", out)
+	}
+	if l, err := os.Readlink(filepath.Join(h.root, "opt/monitoring/bin/amc")); err != nil || l != "monitoring-agent" {
+		t.Errorf("bin/amc = %q %v, want a symlink to monitoring-agent", l, err)
+	}
+	if h.read("/opt/monitoring/bin/monitoring-prober") != "PROBER" || h.read("/opt/monitoring/config/prober/targets-tcp.json") == "" {
+		t.Errorf("prober not installed under the new names:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "opt/monitoring/config/cloudprober")); err == nil {
+		t.Errorf("config/cloudprober left:\n%s", out)
+	}
+	if linked(h, "monitoring-cloudprober.service") || !linked(h, "monitoring-prober.service") || !r.has("systemctl disable --now monitoring-cloudprober.service") {
+		t.Errorf("prober unit not switched: %v", r.cmds)
+	}
+	if h.read("/etc/polkit-1/rules.d/50-monitoring-agent.rules") == "" || h.read("/etc/polkit-1/rules.d/50-amc-agent.rules.previous") != "old rule\n" {
+		t.Error("polkit rule not renamed (old one kept as .previous)")
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "etc/polkit-1/rules.d/50-amc-agent.rules")); err == nil {
+		t.Error("old polkit rule still active")
+	}
+	st := h.read("/opt/monitoring/state.json")
+	if _, err := os.Stat(filepath.Join(h.root, "opt/monitoring/amc-state.json")); err == nil ||
+		strings.Contains(st, "50-amc-agent") || !strings.Contains(st, "50-monitoring-agent") || strings.Contains(st, "monitoring-cloudprober") {
+		t.Errorf("state not moved / updated: %s", st)
+	}
+}
+
+func TestRenameRollbackBringsTheOldNamesBack(t *testing.T) {
+	needSymlinks(t)
+	h := v019Host(t)
+	r := &fakeRunner{readable: true, inactive: 1}
+	res, out := runWith(t, h, r, true, true, true, false, withAgent(t, h, false))
+	if !res.RolledBack {
+		t.Fatalf("want a rollback:\n%s", out)
+	}
+	if h.read("/opt/monitoring/bin/amc") != "OLD-AMC" || h.read("/etc/polkit-1/rules.d/50-amc-agent.rules") != "old rule\n" ||
+		h.read("/opt/monitoring/config/cloudprober/cloudprober.cfg") != "old cfg\n" {
+		t.Errorf("old binary / polkit rule / prober config not back:\n%s", out)
+	}
+	if !linked(h, "monitoring-cloudprober.service") || linked(h, "monitoring-prober.service") {
+		t.Errorf("old prober unit not linked again:\n%s", out)
 	}
 }

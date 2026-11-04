@@ -13,8 +13,8 @@ import (
 func withProbes(ping bool) Desired {
 	d := desired()
 	d.Probes = &Probes{
-		Config:  []byte("host: \"127.0.0.1\"\nprobe { targets { file_targets { file_path: \"@PREFIX@/config/cloudprober/cloudprober-tcp.json\" } } }\n"),
-		Targets: map[string][]byte{"cloudprober-tcp.json": []byte(`{"resource":[]}` + "\n")},
+		Config:  []byte("host: \"127.0.0.1\"\nprobe { targets { file_targets { file_path: \"@PREFIX@/config/prober/targets-tcp.json\" } } }\n"),
+		Targets: map[string][]byte{"targets-tcp.json": []byte(`{"resource":[]}` + "\n")},
 		Ping:    ping,
 	}
 	return d
@@ -27,8 +27,8 @@ func TestProbesCheckModeDownloadsAndTestsConfig(t *testing.T) {
 	if res.Failures != 0 || res.Applied {
 		t.Fatalf("check failed:\n%s", out)
 	}
-	for _, want := range []string{"4b. Cloudprober binary " + cloudprober.Version, "downloaded cloudprober", "cloudprober --configtest: OK",
-		"NEW    config/cloudprober/cloudprober.cfg", "NEW    config/cloudprober/cloudprober-tcp.json", "NEW    systemd/monitoring-cloudprober.service"} {
+	for _, want := range []string{"4b. prober binary (Cloudprober " + cloudprober.Version, "downloaded cloudprober", "monitoring-prober --configtest: OK",
+		"NEW    config/prober/prober.cfg", "NEW    config/prober/targets-tcp.json", "NEW    systemd/monitoring-prober.service"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -38,7 +38,7 @@ func TestProbesCheckModeDownloadsAndTestsConfig(t *testing.T) {
 			t.Errorf("a Cloudprober file was given to otelcol validate: %s", c)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(h.root, "opt/monitoring/bin/cloudprober")); err == nil {
+	if _, err := os.Stat(filepath.Join(h.root, "opt/monitoring/bin/monitoring-prober")); err == nil {
 		t.Error("check mode installed the Cloudprober binary")
 	}
 }
@@ -47,7 +47,7 @@ func TestProbesConfigTestFailureStops(t *testing.T) {
 	h := smokeHost(t)
 	r := &fakeRunner{readable: true, configtest: errors.New("exit 1")}
 	res, out := runWith(t, h, r, false, false, true, false, withProbes(false))
-	if res.Failures == 0 || !strings.Contains(out, "cloudprober --configtest failed") || !strings.Contains(out, "unknown field") {
+	if res.Failures == 0 || !strings.Contains(out, "monitoring-prober --configtest failed") || !strings.Contains(out, "unknown field") {
 		t.Errorf("configtest failure not reported:\n%s", out)
 	}
 }
@@ -69,22 +69,22 @@ func TestProbesApplyThenRemove(t *testing.T) {
 	if res.Failures != 0 {
 		t.Fatalf("apply failed:\n%s", out)
 	}
-	if got := h.read("/opt/monitoring/config/cloudprober/cloudprober.cfg"); !strings.Contains(got, `"/opt/monitoring/config/cloudprober/cloudprober-tcp.json"`) {
+	if got := h.read("/opt/monitoring/config/prober/prober.cfg"); !strings.Contains(got, `"/opt/monitoring/config/prober/targets-tcp.json"`) {
 		t.Errorf("prefix not filled in:\n%s", got)
 	}
-	if h.read("/opt/monitoring/bin/cloudprober") != "PROBER" {
+	if h.read("/opt/monitoring/bin/monitoring-prober") != "PROBER" {
 		t.Error("cloudprober binary not installed")
 	}
-	if u := h.read("/opt/monitoring/systemd/monitoring-cloudprober.service"); !strings.Contains(u, "--config_file=/opt/monitoring/config/cloudprober/cloudprober.cfg") {
+	if u := h.read("/opt/monitoring/systemd/monitoring-prober.service"); !strings.Contains(u, "--config_file=/opt/monitoring/config/prober/prober.cfg") {
 		t.Errorf("unit does not run the installed config:\n%s", u)
 	}
-	if u := h.read("/opt/monitoring/systemd/monitoring-cloudprober.service"); !strings.Contains(u, "AmbientCapabilities=CAP_NET_RAW") {
+	if u := h.read("/opt/monitoring/systemd/monitoring-prober.service"); !strings.Contains(u, "AmbientCapabilities=CAP_NET_RAW") {
 		t.Errorf("ping unit without CAP_NET_RAW:\n%s", u)
 	}
-	if !r.has("systemctl restart monitoring-collector.service") || !r.has("monitoring-cloudprober.service") {
+	if !r.has("systemctl restart monitoring-collector.service") || !r.has("monitoring-prober.service") {
 		t.Errorf("cloudprober unit not managed: %v", r.cmds)
 	}
-	if !strings.Contains(h.read("/opt/monitoring/"+StateFile), "monitoring-cloudprober.service") {
+	if !strings.Contains(h.read("/opt/monitoring/"+StateFile), "monitoring-prober.service") {
 		t.Error("cloudprober unit not recorded for uninstall")
 	}
 
@@ -94,16 +94,16 @@ func TestProbesApplyThenRemove(t *testing.T) {
 	if res.Failures != 0 {
 		t.Fatalf("second apply failed:\n%s", out)
 	}
-	for _, want := range []string{"REMOVE config/cloudprober/cloudprober.cfg", "REMOVE config/cloudprober/cloudprober-tcp.json",
-		"REMOVE systemd/monitoring-cloudprober.service", "stopped, disabled and unlinked"} {
+	for _, want := range []string{"REMOVE config/prober/prober.cfg", "REMOVE config/prober/targets-tcp.json",
+		"REMOVE systemd/monitoring-prober.service", "stopped, disabled and unlinked"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
-	if !r2.has("systemctl disable --now monitoring-cloudprober.service") {
+	if !r2.has("systemctl disable --now monitoring-prober.service") {
 		t.Errorf("unit not disabled: %v", r2.cmds)
 	}
-	if _, err := os.Lstat(filepath.Join(h.root, "etc/systemd/system/monitoring-cloudprober.service")); err == nil {
+	if _, err := os.Lstat(filepath.Join(h.root, "etc/systemd/system/monitoring-prober.service")); err == nil {
 		t.Error("unit link left behind")
 	}
 	if strings.Contains(h.read("/opt/monitoring/"+StateFile), "monitoring-cloudprober") {
@@ -118,10 +118,10 @@ func TestProbesApplyThenRemove(t *testing.T) {
 
 func TestProbesInstalledVersionIsKept(t *testing.T) {
 	h := smokeHost(t)
-	h.write("/opt/monitoring/bin/cloudprober", "INSTALLED", 0o755)
+	h.write("/opt/monitoring/bin/monitoring-prober", "INSTALLED", 0o755)
 	r := &fakeRunner{readable: true, probeVersion: "v" + cloudprober.Version}
 	_, out := runWith(t, h, r, false, false, false, false, withProbes(false))
-	if !strings.Contains(out, "/opt/monitoring/bin/cloudprober is "+cloudprober.Version) || strings.Contains(out, "downloaded cloudprober") {
+	if !strings.Contains(out, "/opt/monitoring/bin/monitoring-prober is "+cloudprober.Version) || strings.Contains(out, "downloaded cloudprober") {
 		t.Errorf("installed pinned version not recognised:\n%s", out)
 	}
 }

@@ -144,7 +144,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		key, err := loadKey(cfg.Prefix)
 		if err != nil {
-			lg.Printf("agent: not enrolled (%v): run `sudo amc agent enrol --token-stdin`", err)
+			lg.Printf("agent: not enrolled (%v): run `sudo monitoring-agent agent enrol --token-stdin`", err)
 			if !sleep(ctx, cfg.NotEnrolledWait) {
 				break
 			}
@@ -225,7 +225,7 @@ func Run(ctx context.Context, cfg Config) error {
 				var upd *UpdateStatus
 				start := false
 				if u := doc.Update; u != nil && u.ID != st.UpdateID {
-					us, ok := prepareUpdate(cfg.Prefix, local.Agent.Update, cfg.Versions["amc"], u, raw)
+					us, ok := prepareUpdate(cfg.Prefix, local.Agent.Update, cfg.Versions[VersionKey], u, raw)
 					upd, start, next.UpdateID = &us, ok, u.ID
 				}
 				if err := saveState(cfg.Prefix, next); err != nil {
@@ -306,7 +306,7 @@ func inventoryBody(prefix string, versions map[string]string, revision int64, up
 	b, err := os.ReadFile(filepath.Join(prefix, generate.InventoryFile))
 	switch {
 	case os.IsNotExist(err):
-		inv.Error = generate.InventoryFile + " missing: run `amc update` (v0.15.0+)"
+		inv.Error = generate.InventoryFile + " missing: run `monitoring-agent update` (v0.15.0+)"
 	case err != nil:
 		inv.Error = err.Error()
 	case len(b) > maxInventory:

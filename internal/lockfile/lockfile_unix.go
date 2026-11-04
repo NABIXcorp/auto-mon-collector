@@ -12,12 +12,18 @@ import (
 // Lock is a held lock.
 type Lock struct{ f *os.File }
 
-// Acquire takes the lock of the installation below prefix without waiting (ErrBusy when another amc holds it).
+// Acquire takes the lock of the installation below prefix without waiting (ErrBusy when another run holds it).
 func Acquire(prefix string) (*Lock, error) {
 	p := filepath.Join(prefix, Name)
 	if os.Getenv(EnvFD) == "3" {
 		os.Unsetenv(EnvFD) // not passed on to our own children
 		if l := inherited(p); l != nil {
+			return l, nil
+		}
+	}
+	if os.Getenv(LegacyEnvFD) == "3" { // an older self-update (before v0.20.0) runs this update
+		os.Unsetenv(LegacyEnvFD)
+		if l := inherited(filepath.Join(prefix, LegacyName)); l != nil {
 			return l, nil
 		}
 	}

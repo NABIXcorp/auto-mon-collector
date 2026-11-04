@@ -20,10 +20,10 @@ var (
 	geteuid       = os.Geteuid
 )
 
-// selfUpdateCmd: `amc self-update --request FILE` (v0.16.0), run as root by the unit monitoring-update, which the
+// selfUpdateCmd: `monitoring-agent self-update --request FILE` (v0.16.0), run as root by the unit monitoring-update, which the
 // agent starts after a signed update request. Everything is checked again here (internal/selfupdate).
 func selfUpdateCmd(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("amc self-update", flag.ContinueOnError)
+	fs := flag.NewFlagSet("monitoring-agent self-update", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	prefix := fs.String("prefix", "/opt/monitoring", "")
 	request := fs.String("request", "", "")
@@ -32,11 +32,11 @@ func selfUpdateCmd(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if *request == "" {
-		fmt.Fprintln(stderr, "amc self-update: --request FILE is required (the signed request the agent saved)")
+		fmt.Fprintln(stderr, "monitoring-agent self-update: --request FILE is required (the signed request the agent saved)")
 		return exitUsage
 	}
 	if geteuid() != 0 {
-		fmt.Fprintln(stderr, "amc self-update: run as root (the unit monitoring-update does)")
+		fmt.Fprintln(stderr, "monitoring-agent self-update: run as root (the unit monitoring-update does)")
 		return exitUsage
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -48,7 +48,7 @@ func selfUpdateCmd(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// lockInstall (v0.16.0): apply / update hold <prefix>/.amc.lock, so they never run at the same time as each other
+// lockInstall (v0.16.0): apply / update hold <prefix>/.monitoring.lock, so they never run at the same time as each other
 // or as a self-update. No prefix yet (first install) = nothing to lock against.
 func lockInstall(prefix string) (*lockfile.Lock, error) {
 	if _, err := os.Stat(prefix); err != nil {

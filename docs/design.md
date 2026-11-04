@@ -6,6 +6,13 @@ real host, network or company. Examples use generic values (`ORCL`, `/u01/app/or
 
 ---
 
+
+> **Names since v0.20.0** (one standard: everything that runs is `monitoring-*`): `amc` = `monitoring-agent` (binary
+> `bin/monitoring-agent`, `bin/amc` a symlink), Cloudprober = `monitoring-prober` (unit, `bin/monitoring-prober`,
+> `config/prober/prober.cfg` + `targets-*.json`), `amc-state.json` = `state.json`, `.amc.lock` = `.monitoring.lock`,
+> polkit `50-amc-agent.rules` = `50-monitoring-agent.rules`, release assets `amc-linux-*` = `monitoring-agent-linux-*`
+> (both published), `keys/amc-release.pub` = `keys/release.pub`. Older names below are history; data names
+> (metrics `cloudprober_*`, streams) and the Unix users (renamed later) stay.
 ## 1. Purpose
 
 One command turns a Linux server into a monitored host:
@@ -532,7 +539,7 @@ Existing installations keep running unchanged until phase 5.
 | 1 | Project / repository name | **decided**: `auto-mon-collector`, binary `amc` (alias), env prefix `AMC_` |
 | 2 | License | Apache-2.0 (same as OpenTelemetry) |
 | 3 | Ownership | approved by the owner of the original setup (2026-10-05) |
-| 4 | Signing | **decided**: ECDSA P-256 with openssl (no extra tool on the hosts); key in the GitHub Actions secret AMC_SIGNING_KEY (option A, 2026-10-05); public key keys/amc-release.pub |
+| 4 | Signing | **decided**: ECDSA P-256 with openssl (no extra tool on the hosts); key in the GitHub Actions secret AMC_SIGNING_KEY (option A, 2026-10-05); public key keys/release.pub |
 | 5 | Go version | latest stable, `CGO_ENABLED=0`; check the minimum kernel for CentOS 7 (3.10) before release (unverified) |
 | 6 | Docker containers | after v1 (`docker_observer`) |
 | 7 | Backend presets | OpenObserve first; generic OTLP; others by contribution |
@@ -675,7 +682,7 @@ Inputs: only the request file and the prefix. No URL, key, path or command comes
 5. Download from `https://github.com/NABIXcorp/auto-mon-collector/releases/download/<version>/` (compiled in):
    `SHA256SUMS`, `SHA256SUMS.sig` (verified first), then `amc-linux-<amd64|arm64>` (limits 64 KiB / 1 KiB / 128 MiB,
    10 min; redirects never from https to http). `SHA256SUMS.sig` must be a DER ECDSA P-256 signature over
-   sha256(SHA256SUMS) by the release key embedded in amc (`keys/amc-release.pub`, the same bytes get.sh checks), and the
+   sha256(SHA256SUMS) by the release key embedded in amc (`keys/release.pub`, the same bytes get.sh checks), and the
    asset's sha256 must match its one line. Any failure: result `failed`, nothing changed.
 6. Install: `bin/amc` -> `bin/amc.before-<old version>` (copy), the new binary written atomically (root 755); its
    `amc version` must report the requested version, then the new `amc update --prefix <prefix>` runs (backup, plan,

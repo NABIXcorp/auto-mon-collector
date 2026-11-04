@@ -91,7 +91,7 @@ func TestProbeUnitCapabilityOnlyForPing(t *testing.T) {
 		if !ping && !strings.Contains(s, "CapabilityBoundingSet=\n") {
 			t.Errorf("no ping: capabilities must be empty\n%s", s)
 		}
-		if !strings.Contains(s, "--config_file=/opt/monitoring/config/cloudprober/cloudprober.cfg") || !strings.Contains(s, "NoNewPrivileges=yes") ||
+		if !strings.Contains(s, "--config_file=/opt/monitoring/config/prober/prober.cfg") || !strings.Contains(s, "NoNewPrivileges=yes") ||
 			!strings.Contains(s, "User=otelcol-contrib") {
 			t.Errorf("unit:\n%s", s)
 		}
@@ -107,13 +107,13 @@ func TestAgentUnitAndPolkitRule(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{"User=amc-agent", "NoNewPrivileges=yes", "ProtectSystem=strict", "CapabilityBoundingSet=\n",
-		"ReadWritePaths=/opt/monitoring/agent /opt/monitoring/config/cloudprober\n", "ExecStart=/opt/monitoring/bin/amc agent run --prefix /opt/monitoring"} {
+		"ReadWritePaths=/opt/monitoring/agent /opt/monitoring/config/prober\n", "ExecStart=/opt/monitoring/bin/monitoring-agent agent run --prefix /opt/monitoring"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("agent unit lacks %q:\n%s", want, s)
 		}
 	}
 	r := string(AgentPolkit())
-	for _, want := range []string{`subject.user == "amc-agent"`, `action.lookup("unit") == "monitoring-cloudprober.service"`,
+	for _, want := range []string{`subject.user == "amc-agent"`, `action.lookup("unit") == "monitoring-prober.service"`,
 		`action.lookup("verb") == "restart"`, `"org.freedesktop.systemd1.manage-units"`,
 		// v0.16.0: start (only) of the self-update unit
 		"action.lookup(\"unit\") == \"monitoring-update.service\" &&\n        action.lookup(\"verb\") == \"start\")"} {
@@ -134,7 +134,7 @@ func TestUpdateUnit(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{"Type=oneshot\n", "User=root\n", "NoNewPrivileges=yes\n", "PrivateTmp=yes\n", "TimeoutStartSec=15min\n",
-		"ExecStart=/opt/monitoring/bin/amc self-update --prefix /opt/monitoring --request /opt/monitoring/agent/update-request.json\n"} {
+		"ExecStart=/opt/monitoring/bin/monitoring-agent self-update --prefix /opt/monitoring --request /opt/monitoring/agent/update-request.json\n"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("update unit lacks %q:\n%s", want, s)
 		}

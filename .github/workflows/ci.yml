@@ -35,10 +35,10 @@ jobs:
       - name: Build static binaries (linux amd64 + arm64)
         run: |
           for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "dist/amc-linux-$arch" ./cmd/amc
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "dist/monitoring-agent-linux-$arch" ./cmd/monitoring-agent
           done
           file dist/*
-          ./dist/amc-linux-amd64 version
+          ./dist/monitoring-agent-linux-amd64 version
       - name: get.sh trust chain (throwaway key; good / tampered binary / tampered sums / other key)
         run: |
           set -euo pipefail
@@ -48,29 +48,36 @@ jobs:
           openssl ec -in "$k/test.pem" -pubout -out "$k/test.pub" 2> /dev/null
           openssl ecparam -name prime256v1 -genkey -noout -out "$k/other.pem"
           release() { # release DIR SIGNKEY: a local "GitHub release"
-            mkdir -p "$1"; cp dist/amc-linux-amd64 dist/amc-linux-arm64 "$1/"
+            mkdir -p "$1"; cp dist/monitoring-agent-linux-amd64 dist/monitoring-agent-linux-arm64 "$1/"
             scripts/render-get.sh "$k/test.pub" "$1/get.sh"
-            (cd "$1" && sha256sum amc-linux-amd64 amc-linux-arm64 get.sh > SHA256SUMS)
+            (cd "$1" && sha256sum monitoring-agent-linux-amd64 monitoring-agent-linux-arm64 get.sh > SHA256SUMS)
             openssl dgst -sha256 -sign "$2" -out "$1/SHA256SUMS.sig" "$1/SHA256SUMS"
           }
           w=$RUNNER_TEMP/www
           release "$w/good" "$k/test.pem"
-          release "$w/bin" "$k/test.pem";   echo x >> "$w/bin/amc-linux-amd64"         # binary changed after signing
-          release "$w/sums" "$k/test.pem";  echo x >> "$w/sums/amc-linux-amd64"
-          (cd "$w/sums" && sha256sum amc-linux-amd64 amc-linux-arm64 get.sh > SHA256SUMS)      # sums re-made, old signature
+          release "$w/bin" "$k/test.pem";   echo x >> "$w/bin/monitoring-agent-linux-amd64"         # binary changed after signing
+          release "$w/sums" "$k/test.pem";  echo x >> "$w/sums/monitoring-agent-linux-amd64"
+          (cd "$w/sums" && sha256sum monitoring-agent-linux-amd64 monitoring-agent-linux-arm64 get.sh > SHA256SUMS)      # sums re-made, old signature
           release "$w/other" "$k/other.pem"                                                    # signed by somebody else
+          release "$w/old" "$k/test.pem"   # a release before v0.20.0: only amc-linux-<arch> (get.sh falls back to it)
+          (cd "$w/old" && mv monitoring-agent-linux-amd64 amc-linux-amd64 && mv monitoring-agent-linux-arm64 amc-linux-arm64 &&
+            sha256sum amc-linux-amd64 amc-linux-arm64 get.sh > SHA256SUMS)
+          openssl dgst -sha256 -sign "$k/test.pem" -out "$w/old/SHA256SUMS.sig" "$w/old/SHA256SUMS"
           python3 -m http.server 8098 -d "$w" -b 127.0.0.1 > /dev/null 2>&1 &
           sleep 1
           shellcheck --severity=warning "$w/good/get.sh"
           # rc captured explicitly: under set -e a failing $(...) would end the step without any output
-          set +e; out=$(AMC_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/good bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
+          set +e; out=$(MONITORING_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/good bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
           echo "good: rc=$rc $out"
           [ "$rc" -eq 0 ] && grep -q 'signature and sha256 verified' <<< "$out" && grep -q '^auto-mon-collector ' <<< "$out" || die "good release did not run"
+          set +e; out=$(MONITORING_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/old bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
+          echo "old: rc=$rc $out"
+          [ "$rc" -eq 0 ] && grep -q 'downloading amc-linux-amd64' <<< "$out" && grep -q '^auto-mon-collector ' <<< "$out" || die "a release before v0.20.0 did not run"
           for case in bin:"CHECKSUM MISMATCH" sums:"SIGNATURE CHECK FAILED" other:"SIGNATURE CHECK FAILED"; do
-            set +e; out=$(AMC_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/${case%%:*} bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
+            set +e; out=$(MONITORING_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/${case%%:*} bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
             echo "${case%%:*}: rc=$rc $out"
             [ "$rc" -eq 3 ] && grep -q "${case#*:}" <<< "$out" || die "${case%%:*}: tampered release not refused"
-            ! grep -q '^auto-mon-collector ' <<< "$out" || die "${case%%:*}: amc ran although the check failed"
+            ! grep -q '^auto-mon-collector ' <<< "$out" || die "${case%%:*}: the binary ran although the check failed"
           done
       - name: No secrets (gitleaks, full history)
         run: |
@@ -141,8 +148,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Build amc (linux amd64, static)
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/amc-linux-amd64 ./cmd/amc
+      - name: Build monitoring-agent (linux amd64, static)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/monitoring-agent-linux-amd64 ./cmd/monitoring-agent
       - uses: actions/download-artifact@v4
         with:
           name: monitoring-collector
@@ -165,7 +172,7 @@ jobs:
           # v0.19.0: the collector of THIS commit (artifact of the collector job) instead of a release download
           mc=$PWD/mc/monitoring-collector-linux-amd64; chmod 755 "$mc"; "$mc" --version
           printf '#!/bin/sh\ncase "$1" in plan|apply|update) s=$1; shift; exec %s "$s" --collector-file %s "$@";; esac\nexec %s "$@"\n' \
-            "$PWD/dist/amc-linux-amd64" "$mc" "$PWD/dist/amc-linux-amd64" > amcw
+            "$PWD/dist/monitoring-agent-linux-amd64" "$mc" "$PWD/dist/monitoring-agent-linux-amd64" > amcw
           chmod 755 amcw; amc=$PWD/amcw
           # Fake backend: every OTLP/HTTP export is kept per stream (header stream-name) in /tmp/oo/<stream>.bin,
           # gunzipped: protobuf keeps strings as plain bytes, so grep finds (or must not find) a log line.
@@ -259,7 +266,7 @@ jobs:
           echo "::group::install v0.18.0 (old layout)"
           r18=https://github.com/NABIXcorp/auto-mon-collector/releases/download/v0.18.0
           mkdir -p v18 && (cd v18 && curl -fsSLO "$r18/SHA256SUMS" -fsSLO "$r18/SHA256SUMS.sig" -fsSLO "$r18/amc-linux-amd64")
-          openssl dgst -sha256 -verify keys/amc-release.pub -signature v18/SHA256SUMS.sig v18/SHA256SUMS
+          openssl dgst -sha256 -verify keys/release.pub -signature v18/SHA256SUMS.sig v18/SHA256SUMS
           (cd v18 && grep ' amc-linux-amd64$' SHA256SUMS | sha256sum -c -) && chmod 755 v18/amc-linux-amd64
           sudo v18/amc-linux-amd64 apply --host-dir examples/oracle-db --start | tee apply18.txt
           echo "::endgroup::"
@@ -445,11 +452,11 @@ jobs:
           python3 -m http.server 18080 --bind 127.0.0.1 > /dev/null 2>&1 &
           { cat $td/answers.yaml; printf 'probes:\n  interval_s: 10\n  tcp:\n    - {name: ci_tcp, host: 127.0.0.1, port: 18080}\n  http:\n    - {name: ci_http, url: "http://127.0.0.1:18080/"}\n  ping:\n    - {name: ci_ping, host: 127.0.0.1}\n'; } > probes.yaml
           sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr0.txt
-          must 'cloudprober --configtest: OK' pr0.txt
-          must 'NEW    systemd/monitoring-cloudprober.service' pr0.txt
+          must 'monitoring-prober --configtest: OK' pr0.txt
+          must 'NEW    systemd/monitoring-prober.service' pr0.txt
           sudo $amc apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr1.txt
-          must 'monitoring-cloudprober.service active' pr1.txt
-          systemctl show -p User --value monitoring-cloudprober | grep -qx otelcol-contrib || die "cloudprober not run as the collector user"
+          must 'monitoring-prober.service active' pr1.txt
+          systemctl show -p User --value monitoring-prober | grep -qx otelcol-contrib || die "cloudprober not run as the collector user"
           ok=""
           for i in $(seq 1 40); do
             m=$(curl -fsS http://127.0.0.1:9313/metrics || true)
@@ -458,19 +465,19 @@ jobs:
                echo "$m" | grep -qE '^cloudprober_success\{.*target="ci_ping".*\} [1-9]'; then ok=1; break; fi
             sleep 1
           done
-          [ -n "$ok" ] || { echo "$m" | grep '^cloudprober_' ; sudo journalctl -u monitoring-cloudprober -n 20 --no-pager; die "probe results missing"; }
+          [ -n "$ok" ] || { echo "$m" | grep '^cloudprober_' ; sudo journalctl -u monitoring-prober -n 20 --no-pager; die "probe results missing"; }
           ss -ltn | grep -q '127.0.0.1:9313' || die "cloudprober must listen on 127.0.0.1 only"
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8888/metrics | grep -qE 'otelcol_receiver_accepted_metric_points.*receiver="prometheus/cloudprober".* [1-9]' && break; sleep 1; done
           curl -fsS http://127.0.0.1:8888/metrics | grep -qE 'otelcol_receiver_accepted_metric_points.*receiver="prometheus/cloudprober".* [1-9]' || die "the collector does not scrape cloudprober"
           sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr2.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' pr2.txt; then die "plan with probes is not clean after apply"; fi
           sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr3.txt
-          must 'REMOVE config/cloudprober/cloudprober.cfg' pr3.txt
+          must 'REMOVE config/prober/prober.cfg' pr3.txt
           must 'stopped, disabled and unlinked' pr3.txt
-          if systemctl is-active -q monitoring-cloudprober; then die "cloudprober still running without probes"; fi
-          [ ! -e /etc/systemd/system/monitoring-cloudprober.service ] || die "cloudprober unit link left"
+          if systemctl is-active -q monitoring-prober; then die "cloudprober still running without probes"; fi
+          [ ! -e /etc/systemd/system/monitoring-prober.service ] || die "cloudprober unit link left"
           sudo $amc apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr4.txt
-          must 'monitoring-cloudprober.service active' pr4.txt
+          must 'monitoring-prober.service active' pr4.txt
           pkill -f "http.server 18080" || true
           echo "::endgroup::"
           # v0.13.0 end to end: the agent with a fake control plane (signed lists) -> Cloudprober. Enrol, apply a list
@@ -491,10 +498,10 @@ jobs:
           must 'NEW    config/agent-allow.yaml' ag0.txt
           sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag1.txt
           must 'monitoring-agent.service active' ag1.txt
-          must 'monitoring-cloudprober.service active' ag1.txt
+          must 'monitoring-prober.service active' ag1.txt
           id amc-agent > /dev/null || die "user amc-agent missing"
-          sudo test -f /etc/polkit-1/rules.d/50-amc-agent.rules || die "polkit rule missing"
-          [ "$(stat -c '%a %G' /opt/monitoring/config/cloudprober)" = "2775 amc-agent" ] || die "config/cloudprober not group amc-agent setgid"
+          sudo test -f /etc/polkit-1/rules.d/50-monitoring-agent.rules || die "polkit rule missing"
+          [ "$(stat -c '%a %G' /opt/monitoring/config/prober)" = "2775 amc-agent" ] || die "config/prober not group amc-agent setgid"
           systemctl show -p User --value monitoring-agent | grep -qx amc-agent || die "agent not run as amc-agent"
           echo "wrong-token" | sudo $amc agent enrol --token-stdin > ag-bad.txt 2>&1 && die "a wrong token enrolled"
           echo "test-enrol-token-0123456789" | sudo $amc agent enrol --token-stdin | tee ag2.txt
@@ -539,14 +546,14 @@ jobs:
           sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee ag4.txt
           must 'no agent: monitoring-agent.service stopped, disabled and unlinked' ag4.txt
           if systemctl is-active -q monitoring-agent; then die "agent still running"; fi
-          [ ! -e /etc/polkit-1/rules.d/50-amc-agent.rules ] || die "polkit rule left"
+          [ ! -e /etc/polkit-1/rules.d/50-monitoring-agent.rules ] || die "polkit rule left"
           sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag5.txt
           must 'monitoring-agent.service active' ag5.txt
           pkill -f "http.server 18080" || true
           echo "::endgroup::"
           # Uninstall: check mode first (must change nothing), then everything; afterwards nothing of amc is left.
           echo "::group::uninstall"
-          grep -q '"/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log"' /opt/monitoring/amc-state.json || die "ACL not recorded"
+          grep -q '"/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log"' /opt/monitoring/state.json || die "ACL not recorded"
           sudo $amc uninstall | tee un1.txt
           must 'CHECK done' un1.txt
           systemctl is-active monitoring-collector || die "uninstall check mode stopped the collector"
@@ -555,12 +562,12 @@ jobs:
           must 'UNINSTALLED: 0 failure' un2.txt
           if systemctl is-active -q monitoring-collector; then die "collector still running"; fi
           [ ! -e /etc/systemd/system/monitoring-collector.service ] || die "unit link left"
-          [ ! -e /etc/systemd/system/monitoring-cloudprober.service ] || die "cloudprober unit link left"
-          if systemctl is-active -q monitoring-cloudprober; then die "cloudprober still running"; fi
+          [ ! -e /etc/systemd/system/monitoring-prober.service ] || die "cloudprober unit link left"
+          if systemctl is-active -q monitoring-prober; then die "cloudprober still running"; fi
           [ ! -e /opt/monitoring ] || die "/opt/monitoring left"
           if id otelcol-contrib 2>/dev/null; then die "collector user left"; fi
           if id amc-agent 2>/dev/null; then die "agent user left"; fi
-          [ ! -e /etc/polkit-1/rules.d/50-amc-agent.rules ] || die "polkit rule left after uninstall"
+          [ ! -e /etc/polkit-1/rules.d/50-monitoring-agent.rules ] || die "polkit rule left after uninstall"
           [ ! -e /etc/systemd/system/monitoring-agent.service ] || die "agent unit link left"
           for p in "$alert" /u01 /u01/app/oracle/diag/rdbms/orcl/ORCL/trace; do
             if sudo getfacl -p --omit-header "$p" | grep -E '^user:[^:]+:'; then die "ACL entry left on $p"; fi

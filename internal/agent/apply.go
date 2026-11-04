@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	"github.com/NABIXcorp/auto-mon-collector/assets"
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 )
 
 // Runner runs a program and returns its combined output (replaced in tests).
 type Runner func(name string, args ...string) ([]byte, error)
 
-// Applier writes a probe list into <prefix>/config/cloudprober/ (the only files the agent may change).
+// Applier writes a probe list into <prefix>/config/prober/ (the only files the agent may change).
 type Applier struct {
 	Prefix string
 	Run    Runner
@@ -24,9 +24,7 @@ type Applier struct {
 
 func (a *Applier) dir() string { return filepath.Join(a.Prefix, filepath.FromSlash(generate.ProbeDir)) }
 
-var targetFileRE = regexp.MustCompile(`^cloudprober-[a-z0-9_-]{1,40}\.json$`)
-
-// Apply: answers probes + the control plane's list -> Cloudprober files, `cloudprober --configtest` on a staged
+// Apply: answers probes + the control plane's list -> prober files, `monitoring-prober --configtest` on a staged
 // copy first, then the target files, then the config; Cloudprober restarts only when its config changed (target
 // files are re-read by Cloudprober itself). On an error nothing of the installed files has changed, except when the
 // restart fails (then the files are in place and the error says so).
@@ -45,22 +43,22 @@ func (a *Applier) Apply(local, remote generate.Probes) (restarted bool, err erro
 	token := generate.ProbePrefix + "/" + generate.ProbeDir
 	staged := bytes.ReplaceAll(pf.Config, []byte(token), []byte(filepath.ToSlash(stage)))
 	for n, b := range pf.Targets {
-		if !targetFileRE.MatchString(n) {
+		if !generate.ProbeTargetRE.MatchString(n) {
 			return false, fmt.Errorf("target file name %q", n)
 		}
 		if err := os.WriteFile(filepath.Join(stage, n), b, 0o644); err != nil {
 			return false, fmt.Errorf("stage: %w", err)
 		}
 	}
-	cfgStage := filepath.Join(stage, "cloudprober.cfg")
+	cfgStage := filepath.Join(stage, generate.ProbeConfig)
 	if err := os.WriteFile(cfgStage, staged, 0o644); err != nil {
 		return false, fmt.Errorf("stage: %w", err)
 	}
-	if out, err := a.Run(filepath.Join(a.Prefix, "bin", "cloudprober"), "--configtest", "--config_file="+cfgStage); err != nil {
-		return false, reject("cloudprober --configtest failed: %s", lastLine(out))
+	if out, err := a.Run(filepath.Join(a.Prefix, "bin", "monitoring-prober"), "--configtest", "--config_file="+cfgStage); err != nil {
+		return false, reject("monitoring-prober --configtest failed: %s", lastLine(out))
 	}
 	cfg := bytes.ReplaceAll(pf.Config, []byte(generate.ProbePrefix), []byte(filepath.ToSlash(a.Prefix)))
-	old, _ := os.ReadFile(filepath.Join(dir, "cloudprober.cfg"))
+	old, _ := os.ReadFile(filepath.Join(dir, generate.ProbeConfig))
 	for n, b := range pf.Targets {
 		if err := writeAtomic(filepath.Join(dir, n), b, 0o644); err != nil {
 			return false, err
@@ -68,7 +66,7 @@ func (a *Applier) Apply(local, remote generate.Probes) (restarted bool, err erro
 	}
 	entries, _ := os.ReadDir(dir)
 	for _, en := range entries {
-		if _, want := pf.Targets[en.Name()]; !want && targetFileRE.MatchString(en.Name()) {
+		if _, want := pf.Targets[en.Name()]; !want && generate.ProbeTargetRE.MatchString(en.Name()) {
 			if err := os.Remove(filepath.Join(dir, en.Name())); err != nil {
 				return false, err
 			}
@@ -77,12 +75,12 @@ func (a *Applier) Apply(local, remote generate.Probes) (restarted bool, err erro
 	if bytes.Equal(old, cfg) {
 		return false, nil
 	}
-	if err := writeAtomic(filepath.Join(dir, "cloudprober.cfg"), cfg, 0o644); err != nil {
+	if err := writeAtomic(filepath.Join(dir, generate.ProbeConfig), cfg, 0o644); err != nil {
 		return false, err
 	}
-	// allowed by the polkit rule amc installs (this unit, this verb, this user only)
-	if out, err := a.Run("systemctl", "restart", "monitoring-cloudprober.service"); err != nil {
-		return false, fmt.Errorf("files written, but restarting Cloudprober failed (polkit rule missing?): %s", lastLine(out))
+	// allowed by the polkit rule monitoring-agent installs (this unit, this verb, this user only)
+	if out, err := a.Run("systemctl", "restart", assets.ProbeUnit+".service"); err != nil {
+		return false, fmt.Errorf("files written, but restarting monitoring-prober failed (polkit rule missing?): %s", lastLine(out))
 	}
 	return true, nil
 }
@@ -149,3 +147,10 @@ func saveState(prefix string, s State) error {
 	b, _ := json.MarshalIndent(s, "", "  ")
 	return writeAtomic(filepath.Join(prefix, filepath.FromSlash(StateFile)), append(b, '\n'), 0o640)
 }
+
+// VersionKey: this agent's own version in the versions it reports (v0.20.0). The agent also sends the old key
+// LegacyVersionKey ("amc") with the same value until every control plane reads the new one.
+const (
+	VersionKey       = "monitoring-agent"
+	LegacyVersionKey = "amc"
+)

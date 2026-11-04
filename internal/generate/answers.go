@@ -211,7 +211,7 @@ func (a Answers) Marshal() ([]byte, error) {
 		return nil, err
 	}
 	b := buf.Bytes()
-	head := "# amc answers: what a scan cannot know (no secrets). Written by amc; the next run uses them as defaults.\n"
+	head := "# monitoring-agent answers: what a scan cannot know (no secrets). Written by monitoring-agent; the next run uses them as defaults.\n"
 	if string(b) == "{}\n" {
 		b = nil
 	}

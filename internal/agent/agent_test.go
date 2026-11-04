@@ -169,7 +169,7 @@ func (f *fakeRun) run(name string, args ...string) ([]byte, error) {
 func setupPrefix(t *testing.T, cpKey string, url string) string {
 	t.Helper()
 	pre := t.TempDir()
-	for _, d := range []string{"agent", "config/cloudprober", "bin"} {
+	for _, d := range []string{"agent", "config/prober", "bin"} {
 		if err := os.MkdirAll(filepath.Join(pre, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -192,11 +192,11 @@ func TestApplyWritesStagesAndRestartsOnlyOnConfigChange(t *testing.T) {
 	if err != nil || !restarted {
 		t.Fatalf("first apply: %v restarted=%v", err, restarted)
 	}
-	cfg, _ := os.ReadFile(filepath.Join(pre, "config/cloudprober/cloudprober.cfg"))
-	if !strings.Contains(string(cfg), filepath.ToSlash(pre)+"/config/cloudprober/cloudprober-tcp.json") || !strings.Contains(string(cfg), "http_local_web") {
+	cfg, _ := os.ReadFile(filepath.Join(pre, "config/prober/prober.cfg"))
+	if !strings.Contains(string(cfg), filepath.ToSlash(pre)+"/config/prober/targets-tcp.json") || !strings.Contains(string(cfg), "http_local_web") {
 		t.Fatalf("config:\n%s", cfg)
 	}
-	tcp, _ := os.ReadFile(filepath.Join(pre, "config/cloudprober/cloudprober-tcp.json"))
+	tcp, _ := os.ReadFile(filepath.Join(pre, "config/prober/targets-tcp.json"))
 	if !strings.Contains(string(tcp), `"target": "link_a_b"`) {
 		t.Fatalf("targets: %s", tcp)
 	}
@@ -207,13 +207,13 @@ func TestApplyWritesStagesAndRestartsOnlyOnConfigChange(t *testing.T) {
 		t.Fatalf("target-only change: %v restarted=%v (%v)", err, restarted, f.calls)
 	}
 	// configtest fails: nothing installed changes
-	before, _ := os.ReadFile(filepath.Join(pre, "config/cloudprober/cloudprober-tcp.json"))
+	before, _ := os.ReadFile(filepath.Join(pre, "config/prober/targets-tcp.json"))
 	_, err = a.Apply(local, generate.Probes{HTTP: []generate.HTTPProbe{{Name: "fail_me", URL: "https://x.example.com/"}}})
 	var rej *Reject
 	if !errors.As(err, &rej) || !strings.Contains(err.Error(), "configtest") {
 		t.Fatalf("configtest failure: %v", err)
 	}
-	after, _ := os.ReadFile(filepath.Join(pre, "config/cloudprober/cloudprober-tcp.json"))
+	after, _ := os.ReadFile(filepath.Join(pre, "config/prober/targets-tcp.json"))
 	if string(before) != string(after) {
 		t.Fatal("a failed configtest changed the installed files")
 	}
@@ -221,7 +221,7 @@ func TestApplyWritesStagesAndRestartsOnlyOnConfigChange(t *testing.T) {
 	if _, err := a.Apply(local, generate.Probes{HTTP: []generate.HTTPProbe{{Name: "local_web", URL: "https://y.example.com/"}}}); !errors.As(err, &rej) {
 		t.Fatalf("duplicate name: %v", err)
 	}
-	entries, _ := os.ReadDir(filepath.Join(pre, "config/cloudprober"))
+	entries, _ := os.ReadDir(filepath.Join(pre, "config/prober"))
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".") {
 			t.Fatalf("stage left: %s", e.Name())

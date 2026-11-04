@@ -78,9 +78,9 @@ func (f *fakeRunner) Run(name string, args ...string) error {
 func (f *fakeRunner) Output(env []string, name string, args ...string) ([]byte, error) {
 	f.cmds = append(f.cmds, "OUT "+filepath.Base(name)+" "+strings.Join(args, " "))
 	switch {
-	case filepath.Base(name) == "cloudprober" && len(args) == 1 && args[0] == "--version":
+	case (filepath.Base(name) == "cloudprober" || filepath.Base(name) == "monitoring-prober") && len(args) == 1 && args[0] == "--version":
 		return []byte(f.probeVersion + "\n"), nil
-	case filepath.Base(name) == "cloudprober" && len(args) > 0 && args[0] == "--configtest":
+	case (filepath.Base(name) == "cloudprober" || filepath.Base(name) == "monitoring-prober") && len(args) > 0 && args[0] == "--configtest":
 		if f.configtest != nil {
 			return []byte("Config test failed. Err: unknown field: protocol\n"), f.configtest
 		}
@@ -503,7 +503,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 			t.Fatalf("apply: %s", out)
 		}
 	}
-	st := h.read("/opt/monitoring/amc-state.json")
+	st := h.read("/opt/monitoring/state.json")
 	for _, want := range []string{`"user_created": true`, `"/var/log/app/alert.log"`, `"/var/log/app"`, `"tomcat"`,
 		`"monitoring-collector.service"`} {
 		if !strings.Contains(st, want) {
@@ -533,7 +533,7 @@ func TestUninstallRemovesExactlyWhatApplyRecorded(t *testing.T) {
 	if ru.has("userdel") {
 		t.Error("user removed without --purge")
 	}
-	for _, gone := range []string{"opt/monitoring/bin", "opt/monitoring/config", "opt/monitoring/amc-state.json",
+	for _, gone := range []string{"opt/monitoring/bin", "opt/monitoring/config", "opt/monitoring/state.json",
 		"opt/monitoring/inventory.json", // v0.15.0: CI e2e found it left behind (prefix not empty)
 		"etc/systemd/system/monitoring-collector.service"} {
 		if _, err := os.Lstat(filepath.Join(h.root, gone)); err == nil {
@@ -552,7 +552,7 @@ func TestApplyAdoptsACLsFromAnOlderInstaller(t *testing.T) {
 	if res, out := run(t, h, r, true, false, false); res.Failures != 0 {
 		t.Fatalf("%s", out)
 	}
-	st := h.read("/opt/monitoring/amc-state.json")
+	st := h.read("/opt/monitoring/state.json")
 	if !strings.Contains(st, `"selinux_fcontext": []`) || strings.Contains(st, "null") {
 		t.Errorf("empty lists must be [] not null:\n%s", st)
 	}
@@ -670,7 +670,7 @@ func TestCheckCountsChanges(t *testing.T) {
 }
 
 func TestCheckHint(t *testing.T) {
-	for hint, want := range map[string]string{"": "Run `amc apply` to change things.", "-": "warning(s).\n", "Run x.": "warning(s). Run x.\n"} {
+	for hint, want := range map[string]string{"": "Run `monitoring-agent apply` to change things.", "-": "warning(s).\n", "Run x.": "warning(s). Run x.\n"} {
 		var out bytes.Buffer
 		_, err := Run(context.Background(), Options{Root: smokeHost(t).root, SkipRootCheck: true, RootUID: os.Getuid(),
 			Arch: "amd64", Out: &out, Runner: &fakeRunner{readable: true}, CheckHint: hint, Collector: fakeSource{},

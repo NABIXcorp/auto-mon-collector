@@ -7,9 +7,13 @@ import (
 	"strings"
 )
 
-// StateFile (<prefix>/amc-state.json) lists what amc changed OUTSIDE its own directory, so `amc uninstall`
-// removes exactly that and nothing else. No secrets: paths and names only.
-const StateFile = "amc-state.json"
+// StateFile (<prefix>/state.json) lists what monitoring-agent changed OUTSIDE its own directory, so `uninstall`
+// removes exactly that and nothing else. No secrets: paths and names only. Before v0.20.0: amc-state.json (read
+// when state.json is missing, removed after the first write of state.json).
+const (
+	StateFile       = "state.json"
+	LegacyStateFile = "amc-state.json"
+)
 
 type state struct {
 	Version     int      `json:"version"`
@@ -33,12 +37,17 @@ func (e *eng) statePath() string { return e.fs(e.pre(StateFile)) }
 func (e *eng) loadState() (*state, bool) {
 	s := &state{Version: 1, Prefix: e.o.Prefix, User: e.o.User}
 	b, err := os.ReadFile(e.statePath())
+	legacy := false
 	if err != nil {
-		return s, false
+		if b, err = os.ReadFile(e.fs(e.pre(LegacyStateFile))); err != nil {
+			return s, false
+		}
+		legacy = true
 	}
 	if json.Unmarshal(b, s) != nil {
 		return &state{Version: 1, Prefix: e.o.Prefix, User: e.o.User}, false
 	}
+	s.Changed = legacy // written under the new name by the next apply
 	return s, true
 }
 
@@ -78,7 +87,13 @@ func (e *eng) saveState() error {
 	if err != nil {
 		return err
 	}
-	return e.writeFile(e.pre(StateFile), append(b, '\n'), 0o644)
+	if err := e.writeFile(e.pre(StateFile), append(b, '\n'), 0o644); err != nil {
+		return err
+	}
+	if err := os.Remove(e.fs(e.pre(LegacyStateFile))); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // hasUserACL reports whether getfacl shows an entry for the collector user on p (read-only check, used to

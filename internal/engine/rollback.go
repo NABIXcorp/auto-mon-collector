@@ -29,9 +29,9 @@ func (e *eng) rollback(ctx context.Context) {
 		}
 		e.rolledBack = true
 		e.r.ok("first install: units stopped and disabled (no restart loop); files kept for diagnosis")
-		e.r.line("next: journalctl -u %s, fix, then amc apply --start again", names[0])
+		e.r.line("next: journalctl -u %s, fix, then monitoring-agent apply --start again", names[0])
 		return
-	case e.backupDir == "" && !e.binReplaced && !e.probeBinReplaced && len(e.droppedUnits) == 0:
+	case e.backupDir == "" && !e.binReplaced && !e.probeBinReplaced && len(e.droppedUnits) == 0 && !e.agentBinMoved && !e.polkitMoved:
 		e.r.line("nothing to undo: this apply changed no file and no binary (the problem existed before)")
 		return
 	}
@@ -66,12 +66,28 @@ func (e *eng) rollback(ctx context.Context) {
 		e.r.ok("previous collector binary restored")
 	}
 	if e.probeBinReplaced {
-		bin := e.fs(e.pre("bin/cloudprober"))
+		bin := e.fs(e.pre(probeBinRel))
 		if err := os.Rename(bin+".previous", bin); err != nil {
-			e.r.fail("rollback cloudprober binary: %v", err)
+			e.r.fail("rollback prober binary: %v", err)
 			return
 		}
-		e.r.ok("previous cloudprober binary restored")
+		e.r.ok("previous prober binary restored")
+	}
+	if e.agentBinMoved {
+		old := e.fs(e.pre(legacyAgentBinRel))
+		if err := os.Rename(old+".previous", old); err != nil {
+			e.r.fail("rollback %s: %v", legacyAgentBinRel, err)
+		} else {
+			e.r.ok("previous %s restored", legacyAgentBinRel)
+		}
+	}
+	if e.polkitMoved {
+		if err := os.Rename(e.fs(LegacyPolkitRule)+".previous", e.fs(LegacyPolkitRule)); err != nil {
+			e.r.fail("rollback %s: %v", LegacyPolkitRule, err)
+		} else {
+			e.st.add(&e.st.Polkit, LegacyPolkitRule)
+			e.r.ok("previous polkit rule %s restored", LegacyPolkitRule)
+		}
 	}
 	names = e.restoreUnitSet()
 	if err := e.o.Runner.Run("systemctl", "daemon-reload"); err != nil {

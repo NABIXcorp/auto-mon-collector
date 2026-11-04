@@ -52,7 +52,7 @@ func sumsFor(files map[string][]byte) []byte {
 
 func TestEmbeddedReleaseKey(t *testing.T) {
 	if _, err := ParseReleaseKey(keys.ReleasePub); err != nil {
-		t.Fatalf("the embedded keys/amc-release.pub: %v", err)
+		t.Fatalf("the embedded keys/release.pub: %v", err)
 	}
 	if _, err := ParseReleaseKey(releaseKey); err != nil {
 		t.Fatal(err)
