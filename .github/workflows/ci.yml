@@ -467,8 +467,10 @@ jobs:
           done
           [ -n "$ok" ] || { echo "$m" | grep '^cloudprober_' ; sudo journalctl -u monitoring-prober -n 20 --no-pager; die "probe results missing"; }
           ss -ltn | grep -q '127.0.0.1:9313' || die "cloudprober must listen on 127.0.0.1 only"
-          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8888/metrics | grep -qE 'otelcol_receiver_accepted_metric_points.*receiver="prometheus/cloudprober".* [1-9]' && break; sleep 1; done
-          curl -fsS http://127.0.0.1:8888/metrics | grep -qE 'otelcol_receiver_accepted_metric_points.*receiver="prometheus/cloudprober".* [1-9]' || die "the collector does not scrape cloudprober"
+          # read the page first: `curl | grep -q` under pipefail fails at random (grep stops early, curl: "Failed writing body")
+          scraped() { m=$(curl -fsS http://127.0.0.1:8888/metrics) && grep -qE 'otelcol_receiver_accepted_metric_points.*receiver="prometheus/cloudprober".* [1-9]' <<< "$m"; }
+          for i in $(seq 1 40); do scraped && break; sleep 1; done
+          scraped || die "the collector does not scrape cloudprober"
           sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr2.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' pr2.txt; then die "plan with probes is not clean after apply"; fi
           sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr3.txt
