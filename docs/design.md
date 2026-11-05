@@ -455,8 +455,9 @@ the time base of SYSDATE vs END_TIME (verify on the first host).
 marks), against the service itself (DBA_ views are per container), log stream `oracle_capacity`, attribute `kind`:
 `table` (top 50 tables, segments folded into the owning table: data / index / LOB bytes, rows from statistics, plus
 one `(others)` row), `tablespace` (allocated, free inside the files, autoextend max), `partition_waste` (partitioned
-tables with many segments for few rows; partition segments start at 8 MB), `recyclebin`, `file` (size, high-water
-mark, `reclaim_b` = what a RESIZE could give back). Growth = difference between snapshots, computed by the reader.
+tables with many segments for few rows; partition segments start at 8 MB), `recyclebin`, `file` (size, autoextend, max) and `file_hwm` (high-water
+mark, `reclaim_b` = what a RESIZE could give back; own query, 900 s scrape timeout). v0.22.1: tablespace used / free from
+`DBA_TABLESPACE_USAGE_METRICS` (`DBA_FREE_SPACE` and `DBA_EXTENTS` were too slow for the monitoring user on a real PDB). Growth = difference between snapshots, computed by the reader.
 Oracle-maintained schemas are left out. Grants: single DBA_ views (listed in the config comment), no Diagnostics Pack.
 
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the

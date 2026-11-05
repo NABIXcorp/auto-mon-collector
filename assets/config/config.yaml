@@ -494,8 +494,7 @@ receivers:
   # ---- Oracle capacity (v0.22.0, answers services.oracle.capacity): which TABLES take the space, in table terms.
   # Segments fold into the owning table (indexes via DBA_INDEXES, LOB segment + LOB index via DBA_LOBS, partitions by
   # name); Oracle-maintained schemas are left out. One log record per row -> stream oracle_capacity, attribute `kind`
-  # = table | tablespace | partition_waste | recyclebin (every 6 h) and file (once a day: DBA_EXTENTS can take a
-  # minute). Growth = difference between snapshots (read side). Grants: DBA_SEGMENTS, DBA_INDEXES, DBA_LOBS,
+  # = table | tablespace | partition_waste | recyclebin (every 6 h), file + file_hwm (once a day: DBA_EXTENTS is slow). Growth = difference between snapshots (read side). Grants: DBA_SEGMENTS, DBA_INDEXES, DBA_LOBS,
   # DBA_TABLES, DBA_FREE_SPACE, DBA_USERS, DBA_RECYCLEBIN, DBA_PART_TABLES, DBA_TAB_PARTITIONS, DBA_EXTENTS,
   # DBA_TEMP_FILES (+ DBA_TABLESPACES, DBA_DATA_FILES). Bytes are numbers; log attributes arrive as strings.
   receiver_creator/capacity:
@@ -548,22 +547,26 @@ receivers:
                 - body_column: summary
                   attribute_columns: [kind, container, owner, table_name, total_b, data_b, index_b, lob_b,
                                       data_segments, tables, num_rows, last_analyzed]
-            # per tablespace: allocated in files, free INSIDE the files, max (autoextend limit)
+            # per tablespace: allocated in files, used, free INSIDE the files (= allocated - used), max (autoextend
+            # limit). Used comes from DBA_TABLESPACE_USAGE_METRICS: DBA_FREE_SPACE ran > 120 s for the monitoring
+            # user on a real PDB (v0.22.0, cancelled by the timeout), the metrics view answers at once.
             - sql: |
                 SELECT 'tablespace' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container",
-                       d.tablespace_name AS "tablespace", d.alloc_b AS "allocated_b", NVL(f.free_b, 0) AS "free_b",
-                       d.max_b AS "max_b",
+                       d.tablespace_name AS "tablespace", d.alloc_b AS "allocated_b",
+                       NVL(m.used_space, 0) * ts.block_size AS "used_b",
+                       GREATEST(d.alloc_b - NVL(m.used_space, 0) * ts.block_size, 0) AS "free_b", d.max_b AS "max_b",
                        d.tablespace_name || ' allocated ' || TO_CHAR(ROUND(d.alloc_b / 1073741824, 2), 'FM9999990.00')
-                         || ' GB, free inside ' || TO_CHAR(ROUND(NVL(f.free_b, 0) / 1073741824, 2), 'FM9999990.00')
+                         || ' GB, free inside '
+                         || TO_CHAR(ROUND(GREATEST(d.alloc_b - NVL(m.used_space, 0) * ts.block_size, 0) / 1073741824, 2), 'FM9999990.00')
                          || ' GB' AS "summary"
                 FROM (SELECT tablespace_name, SUM(bytes) AS alloc_b,
                              SUM(CASE WHEN autoextensible = 'YES' THEN GREATEST(bytes, maxbytes) ELSE bytes END) AS max_b
                         FROM dba_data_files GROUP BY tablespace_name) d
-                LEFT JOIN (SELECT tablespace_name, SUM(bytes) AS free_b FROM dba_free_space GROUP BY tablespace_name) f
-                       ON f.tablespace_name = d.tablespace_name
+                JOIN dba_tablespaces ts ON ts.tablespace_name = d.tablespace_name
+                LEFT JOIN dba_tablespace_usage_metrics m ON m.tablespace_name = d.tablespace_name
               logs:
                 - body_column: summary
-                  attribute_columns: [kind, container, tablespace, allocated_b, free_b, max_b]
+                  attribute_columns: [kind, container, tablespace, allocated_b, used_b, free_b, max_b]
             # partitioned tables that waste space: many partition segments (8 MB minimum each) for few rows; top 20
             - sql: |
                 SELECT 'partition_waste' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container",
@@ -606,32 +609,41 @@ receivers:
           database: ${env:ORACLE_SERVICE:-none}
           username: ${env:ORACLE_MON_USER:-otel_mon}
           password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          # the whole scrape: DBA_EXTENTS did not finish in 300 s for the monitoring user on a real PDB (v0.22.0)
           collection_interval: 24h
-          timeout: 300s
+          timeout: 900s
           queries:
+            # 1. data + temp files: size, autoextend, max (fast; first, so a slow query 2 cannot take it down)
             - sql: |
                 SELECT 'file' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container", 'data' AS "file_type",
                        f.file_name AS "file", f.tablespace_name AS "tablespace", f.bytes AS "size_b",
+                       f.autoextensible AS "autoextend", f.maxbytes AS "max_b",
+                       f.file_name || ' ' || TO_CHAR(ROUND(f.bytes / 1073741824, 2), 'FM9999990.00') || ' GB' AS "summary"
+                FROM dba_data_files f
+                UNION ALL
+                SELECT 'file', SYS_CONTEXT('USERENV', 'CON_NAME'), 'temp', f.file_name, f.tablespace_name, f.bytes,
+                       f.autoextensible, f.maxbytes,
+                       f.file_name || ' ' || TO_CHAR(ROUND(f.bytes / 1073741824, 2), 'FM9999990.00') || ' GB (temp)'
+                FROM dba_temp_files f
+              logs:
+                - body_column: summary
+                  attribute_columns: [kind, container, file_type, file, tablespace, size_b, autoextend, max_b]
+            # 2. high-water mark per data file: what a RESIZE could give back (reclaim_b). Slow (DBA_EXTENTS).
+            - sql: |
+                SELECT 'file_hwm' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container",
+                       f.file_name AS "file", f.tablespace_name AS "tablespace", f.bytes AS "size_b",
                        NVL(h.hwm_blocks, 1) * ts.block_size AS "hwm_b",
                        GREATEST(f.bytes - NVL(h.hwm_blocks, 1) * ts.block_size, 0) AS "reclaim_b",
-                       f.autoextensible AS "autoextend", f.maxbytes AS "max_b",
-                       f.file_name || ' ' || TO_CHAR(ROUND(f.bytes / 1073741824, 2), 'FM9999990.00')
-                         || ' GB, resize could give back '
+                       f.file_name || ' resize could give back '
                          || TO_CHAR(ROUND(GREATEST(f.bytes - NVL(h.hwm_blocks, 1) * ts.block_size, 0) / 1073741824, 2), 'FM9999990.00')
                          || ' GB' AS "summary"
                 FROM dba_data_files f
                 JOIN dba_tablespaces ts ON ts.tablespace_name = f.tablespace_name
                 LEFT JOIN (SELECT file_id, MAX(block_id + blocks - 1) AS hwm_blocks FROM dba_extents GROUP BY file_id) h
                        ON h.file_id = f.file_id
-                UNION ALL
-                SELECT 'file', SYS_CONTEXT('USERENV', 'CON_NAME'), 'temp', f.file_name, f.tablespace_name, f.bytes,
-                       f.bytes, 0, f.autoextensible, f.maxbytes,
-                       f.file_name || ' ' || TO_CHAR(ROUND(f.bytes / 1073741824, 2), 'FM9999990.00') || ' GB (temp)'
-                FROM dba_temp_files f
               logs:
                 - body_column: summary
-                  attribute_columns: [kind, container, file_type, file, tablespace, size_b, hwm_b, reclaim_b,
-                                      autoextend, max_b]
+                  attribute_columns: [kind, container, file, tablespace, size_b, hwm_b, reclaim_b]
 
 processors:
   resource_detection:
