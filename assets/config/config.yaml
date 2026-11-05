@@ -510,7 +510,7 @@ receivers:
           username: ${env:ORACLE_MON_USER:-otel_mon}
           password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
           collection_interval: 6h
-          timeout: 120s
+          timeout: 900s   # the whole scrape: the table query ran > 120 s on a big non-CDB (v0.22.1)
           queries:
             # top 50 tables (data + indexes + LOBs + partitions) + one "(others)" row with the rest
             - sql: |
