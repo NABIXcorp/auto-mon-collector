@@ -384,3 +384,33 @@ func TestMoveUsersStopsWhenALogIsNotReadable(t *testing.T) {
 		t.Fatalf("an unreadable log must stop the move and keep the old user:\n%s", out)
 	}
 }
+
+// A collector user from before this installer (the collector's own package: home /home/otelcol-contrib, recorded as
+// not created by us): moved like ours, but kept; it only loses the recorded ACL entries and groups (seen on a real host, v0.21.0).
+func TestMoveKeepsAnOlderCollectorUser(t *testing.T) {
+	needSymlinks(t)
+	h := v020Host(t)
+	h.write("/etc/passwd", "root:x:0:0::/root:/bin/bash\notelcol-contrib:x:990:990::/home/otelcol-contrib:/sbin/nologin\n"+
+		"amc-agent:x:989:989::/opt/monitoring/agent:/sbin/nologin\n", 0o644)
+	h.write("/etc/group", "root:x:0:\ntomcat:x:992:otelcol-contrib\nwheel:x:10:otelcol-contrib\notelcol-contrib:x:990:\namc-agent:x:989:\n", 0o644)
+	st := strings.Replace(h.read("/opt/monitoring/state.json"), `"user_created":true`, `"user_created":false`, 1)
+	h.write("/opt/monitoring/state.json", st, 0o644)
+	r := &fakeRunner{readable: true}
+	res, out, chowns := runUsers(t, h, r)
+	if res.Failures != 0 || res.RolledBack {
+		t.Fatalf("move failed:\n%s", out)
+	}
+	newUID, _, _ := (&eng{o: Options{Root: h.root}}).lookupUser("monitoring")
+	if chowns["/opt/monitoring/data/file_storage/queue"] != newUID {
+		t.Errorf("data/ not moved to monitoring: %v", chowns)
+	}
+	if r.has("userdel otelcol-contrib") || !strings.Contains(out, "was not created by this installer: kept") {
+		t.Errorf("an older user must be kept:\n%s", out)
+	}
+	if !r.has("setfacl -x u:otelcol-contrib /var/log/app/alert.log") || !r.has("gpasswd -d otelcol-contrib tomcat") || r.has("gpasswd -d otelcol-contrib wheel") {
+		t.Errorf("only the recorded ACL entries and groups go: %v", r.cmds)
+	}
+	if !r.has("userdel amc-agent") {
+		t.Error("amc-agent (always ours) must still be removed")
+	}
+}

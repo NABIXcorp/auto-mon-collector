@@ -30,13 +30,25 @@ type userMove struct {
 }
 
 // planUserMoves: which old users this run moves. Only the default names move (an operator's own --user stays), and
-// only a user that belongs to this installation (home = <prefix>/data or <prefix>/agent, as the installer creates it).
+// only a user this installation runs: the recorded collector user (state), the owner of <prefix>/data, or the home
+// <prefix>/data | <prefix>/agent the installer gives its users. Removed after the move: only a user the installer
+// created (home <prefix>/data, or recorded as created); an older one (e.g. otelcol-contrib from the collector's own
+// package, home /home/otelcol-contrib) is kept and only loses what the installer gave it (ACL entries, groups).
 func (e *eng) planUserMoves() {
 	e.moves = nil
 	if e.o.User == DefaultUser {
-		if _, _, ok := e.lookupUser(LegacyUser); ok && e.userHome(LegacyUser) == e.pre("data") {
-			e.moves = append(e.moves, &userMove{old: LegacyUser, new: DefaultUser, dirs: []string{"data"},
-				oldCreated: true}) // home = <prefix>/data: the installer created it (the same rule as the adoption in userAndDirs)
+		if uid, _, ok := e.lookupUser(LegacyUser); ok {
+			ours := e.userHome(LegacyUser) == e.pre("data")
+			owns := false
+			if fi, err := os.Stat(e.fs(e.pre("data"))); err == nil {
+				if o, ok := ownerUID(fi); ok && o == uid {
+					owns = true
+				}
+			}
+			if ours || owns || e.st.User == LegacyUser {
+				e.moves = append(e.moves, &userMove{old: LegacyUser, new: DefaultUser, dirs: []string{"data"},
+					oldCreated: ours || (e.st.User == LegacyUser && e.st.UserCreated)})
+			}
 		}
 	}
 	if e.d.Agent != nil {
@@ -46,7 +58,11 @@ func (e *eng) planUserMoves() {
 		}
 	}
 	for _, m := range e.moves {
-		e.r.line("MOVE   user %s -> %s (owner of %v; %s is removed after a successful start)", m.old, m.new, m.dirs, m.old)
+		after := m.old + " is removed after a successful start"
+		if !m.oldCreated {
+			after = m.old + " was not created by this installer: it is kept, only its recorded ACL entries and groups go"
+		}
+		e.r.line("MOVE   user %s -> %s (owner of %v; %s)", m.old, m.new, m.dirs, after)
 	}
 }
 
@@ -158,7 +174,8 @@ func (e *eng) finishUserMoves() {
 	}
 }
 
-// dropUserAccess removes user's entries from every recorded ACL path (deepest first) and from its extra groups.
+// dropUserAccess removes user's entries from every recorded ACL path (deepest first) and from the groups the
+// installer added (state groups_added; other memberships of the user are not ours).
 func (e *eng) dropUserAccess(user string) {
 	paths := append(append([]string{}, e.st.ACLFiles...), e.st.ACLDirs...)
 	sort.Sort(sort.Reverse(sort.StringSlice(paths)))
@@ -167,12 +184,11 @@ func (e *eng) dropUserAccess(user string) {
 			e.r.warn("setfacl -x u:%s %s: %v", user, p, err)
 		}
 	}
-	var groups []string
-	for g := range e.groupMembers(user) {
-		groups = append(groups, g)
-	}
-	sort.Strings(groups)
-	for _, g := range groups {
+	member := e.groupMembers(user)
+	for _, g := range e.st.Groups {
+		if !member[g] {
+			continue
+		}
 		if err := e.o.Runner.Run("gpasswd", "-d", user, g); err != nil {
 			e.r.warn("gpasswd -d %s %s: %v", user, g, err)
 		}
