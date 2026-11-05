@@ -21,6 +21,8 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > v0.9.0: HTTP metrics from the Tomcat access log (requests by status class, response-time histogram, optional
 > logins: `services.tomcat.login_path`), Oracle Data Guard lag (`services.oracle.data_guard`) and RMAN backups
 > (`services.oracle.backups`).
+> v0.22.0: Oracle space per table, free space inside the files, high-water marks, partition waste and recycle bin
+> (`services.oracle.capacity`, log stream `oracle_capacity`).
 > v0.9.1: HTTP metrics renamed `tomcat.access.*` (the app's own OpenTelemetry agent already sends `http.server.*`),
 > processor `delta_to_cumulative` (the old name is deprecated).
 > v0.10.0: `amc update`: a new release on an installed host with one command, nothing to copy (the saved

@@ -450,6 +450,15 @@ ARCHIVELOG, ...), `oracle.backup.failed_24h`. Both run against the CDB root when
 service. Grants: `V_$DATAGUARD_STATS`, `V_$RMAN_BACKUP_JOB_DETAILS`. Not checked against a real database yet:
 the time base of SYSDATE vs END_TIME (verify on the first host).
 
+**Oracle capacity (v0.22.0, answers):** `services.oracle.capacity: true` -> `receiver_creator/capacity` with
+`sql_query/oracle_capacity` (6 h) and `sql_query/oracle_capacity_files` (24 h: `DBA_EXTENTS` for the high-water
+marks), against the service itself (DBA_ views are per container), log stream `oracle_capacity`, attribute `kind`:
+`table` (top 50 tables, segments folded into the owning table: data / index / LOB bytes, rows from statistics, plus
+one `(others)` row), `tablespace` (allocated, free inside the files, autoextend max), `partition_waste` (partitioned
+tables with many segments for few rows; partition segments start at 8 MB), `recyclebin`, `file` (size, high-water
+mark, `reclaim_b` = what a RESIZE could give back). Growth = difference between snapshots, computed by the reader.
+Oracle-maintained schemas are left out. Grants: single DBA_ views (listed in the config comment), no Diagnostics Pack.
+
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
 JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone
 than the host would otherwise put every entry hours off.

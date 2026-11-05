@@ -59,6 +59,10 @@ type Service struct {
 	// oracle (v0.9.0): RMAN backups (V$RMAN_BACKUP_JOB_DETAILS) -> oracle.backup.age (hours since the last
 	// COMPLETED job per input type) + oracle.backup.failed_24h. Grant V_$RMAN_BACKUP_JOB_DETAILS first.
 	Backups bool `yaml:"backups,omitempty"`
+	// oracle (v0.22.0): space per TABLE (segments folded into the owning table), free space inside the files,
+	// high-water marks, partition waste, recycle bin -> log stream oracle_capacity (every 6 h, files daily).
+	// Grant the single DBA_ views first (see the comment of receiver_creator/capacity in config.yaml).
+	Capacity bool `yaml:"capacity,omitempty"`
 }
 
 // loginPathRE: a safe regular expression for an OTTL string (no quotes or backslashes).
@@ -166,8 +170,8 @@ func (a Answers) Validate() error {
 				return fmt.Errorf("services.tomcat.login_path: %v", err)
 			}
 		}
-		if name != "oracle" && (s.DataGuard || s.Backups) {
-			return fmt.Errorf("services.%s: data_guard / backups are Oracle settings", name)
+		if name != "oracle" && (s.DataGuard || s.Backups || s.Capacity) {
+			return fmt.Errorf("services.%s: data_guard / backups / capacity are Oracle settings", name)
 		}
 		if name != "oracle" && s.CDBService != "" {
 			return fmt.Errorf("services.%s: cdb_service is an Oracle setting", name)

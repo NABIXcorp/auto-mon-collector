@@ -105,6 +105,9 @@ func Generate(h Host, a Answers) (Output, error) {
 		if ans.Backups {
 			env = append(env, "ORACLE_BACKUP=on")
 		}
+		if ans.Capacity { // v0.22.0: receiver_creator/capacity, against the service itself (DBA_ views are per container)
+			env = append(env, "ORACLE_CAPACITY=on")
+		}
 		if p := o.Values["ORACLE_ALERT_LOG"]; p != "" {
 			env = append(env, "ORACLE_ALERT_LOG="+p)
 			recv["file_log/oracle_alert"] = oracleAlertLog(p)

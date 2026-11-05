@@ -491,6 +491,148 @@ receivers:
                                       status, sql_id, event, wait_class, wait_s, in_status_s, blocked_by,
                                       is_blocker, logon_time]
 
+  # ---- Oracle capacity (v0.22.0, answers services.oracle.capacity): which TABLES take the space, in table terms.
+  # Segments fold into the owning table (indexes via DBA_INDEXES, LOB segment + LOB index via DBA_LOBS, partitions by
+  # name); Oracle-maintained schemas are left out. One log record per row -> stream oracle_capacity, attribute `kind`
+  # = table | tablespace | partition_waste | recyclebin (every 6 h) and file (once a day: DBA_EXTENTS can take a
+  # minute). Growth = difference between snapshots (read side). Grants: DBA_SEGMENTS, DBA_INDEXES, DBA_LOBS,
+  # DBA_TABLES, DBA_FREE_SPACE, DBA_USERS, DBA_RECYCLEBIN, DBA_PART_TABLES, DBA_TAB_PARTITIONS, DBA_EXTENTS,
+  # DBA_TEMP_FILES (+ DBA_TABLESPACES, DBA_DATA_FILES). Bytes are numbers; log attributes arrive as strings.
+  receiver_creator/capacity:
+    watch_observers: [host_observer]
+    receivers:
+      sql_query/oracle_capacity:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_CAPACITY:-off}" == "on"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_SERVICE:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 6h
+          timeout: 120s
+          queries:
+            # top 50 tables (data + indexes + LOBs + partitions) + one "(others)" row with the rest
+            - sql: |
+                SELECT 'table' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container",
+                       MAX(CASE WHEN a.rn <= 50 THEN a.owner ELSE '(others)' END) AS "owner",
+                       MAX(CASE WHEN a.rn <= 50 THEN a.tname ELSE '(others)' END) AS "table_name",
+                       SUM(a.total_b) AS "total_b", SUM(a.data_b) AS "data_b", SUM(a.index_b) AS "index_b",
+                       SUM(a.lob_b) AS "lob_b", SUM(a.data_segs) AS "data_segments", COUNT(*) AS "tables",
+                       NVL(SUM(CASE WHEN a.rn <= 50 THEN t.num_rows END), -1) AS "num_rows",
+                       NVL(MAX(CASE WHEN a.rn <= 50 THEN TO_CHAR(t.last_analyzed, 'YYYY-MM-DD') END), '-') AS "last_analyzed",
+                       MAX(CASE WHEN a.rn <= 50 THEN a.owner || '.' || a.tname ELSE '(others)' END) || ' '
+                         || TO_CHAR(ROUND(SUM(a.total_b) / 1073741824, 2), 'FM9999990.00') || ' GB' AS "summary"
+                FROM (SELECT x.owner, x.tname, SUM(x.bytes) AS total_b,
+                             NVL(SUM(CASE WHEN x.k = 'D' THEN x.bytes END), 0) AS data_b,
+                             NVL(SUM(CASE WHEN x.k = 'I' THEN x.bytes END), 0) AS index_b,
+                             NVL(SUM(CASE WHEN x.k = 'L' THEN x.bytes END), 0) AS lob_b,
+                             NVL(SUM(CASE WHEN x.k = 'D' THEN 1 END), 0) AS data_segs,
+                             ROW_NUMBER() OVER (ORDER BY SUM(x.bytes) DESC) AS rn
+                      FROM (SELECT s.owner, s.segment_name AS tname, 'D' AS k, s.bytes FROM dba_segments s
+                             WHERE s.segment_type IN ('TABLE', 'TABLE PARTITION', 'TABLE SUBPARTITION')
+                            UNION ALL
+                            SELECT i.table_owner, i.table_name, 'I', s.bytes FROM dba_segments s
+                              JOIN dba_indexes i ON i.owner = s.owner AND i.index_name = s.segment_name
+                             WHERE s.segment_type IN ('INDEX', 'INDEX PARTITION', 'INDEX SUBPARTITION')
+                            UNION ALL
+                            SELECT l.owner, l.table_name, 'L', s.bytes FROM dba_segments s
+                              JOIN dba_lobs l ON l.owner = s.owner AND s.segment_name IN (l.segment_name, l.index_name)
+                             WHERE s.segment_type IN ('LOBSEGMENT', 'LOBINDEX', 'LOB PARTITION', 'LOB SUBPARTITION')) x
+                      WHERE x.owner NOT IN (SELECT username FROM dba_users WHERE oracle_maintained = 'Y')
+                      GROUP BY x.owner, x.tname) a
+                LEFT JOIN dba_tables t ON t.owner = a.owner AND t.table_name = a.tname
+                GROUP BY LEAST(a.rn, 51)
+              logs:
+                - body_column: summary
+                  attribute_columns: [kind, container, owner, table_name, total_b, data_b, index_b, lob_b,
+                                      data_segments, tables, num_rows, last_analyzed]
+            # per tablespace: allocated in files, free INSIDE the files, max (autoextend limit)
+            - sql: |
+                SELECT 'tablespace' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container",
+                       d.tablespace_name AS "tablespace", d.alloc_b AS "allocated_b", NVL(f.free_b, 0) AS "free_b",
+                       d.max_b AS "max_b",
+                       d.tablespace_name || ' allocated ' || TO_CHAR(ROUND(d.alloc_b / 1073741824, 2), 'FM9999990.00')
+                         || ' GB, free inside ' || TO_CHAR(ROUND(NVL(f.free_b, 0) / 1073741824, 2), 'FM9999990.00')
+                         || ' GB' AS "summary"
+                FROM (SELECT tablespace_name, SUM(bytes) AS alloc_b,
+                             SUM(CASE WHEN autoextensible = 'YES' THEN GREATEST(bytes, maxbytes) ELSE bytes END) AS max_b
+                        FROM dba_data_files GROUP BY tablespace_name) d
+                LEFT JOIN (SELECT tablespace_name, SUM(bytes) AS free_b FROM dba_free_space GROUP BY tablespace_name) f
+                       ON f.tablespace_name = d.tablespace_name
+              logs:
+                - body_column: summary
+                  attribute_columns: [kind, container, tablespace, allocated_b, free_b, max_b]
+            # partitioned tables that waste space: many partition segments (8 MB minimum each) for few rows; top 20
+            - sql: |
+                SELECT 'partition_waste' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container",
+                       t.owner AS "owner", t.table_name AS "table_name", p.partitioning_type AS "partitioning",
+                       p.partition_count AS "partitions", NVL(t.num_rows, -1) AS "num_rows", s.bytes AS "size_b",
+                       s.segs AS "segments",
+                       t.owner || '.' || t.table_name || ' ' || ROUND(s.bytes / 1048576) || ' MB in ' || s.segs
+                         || ' partition segments for ' || NVL(TO_CHAR(t.num_rows), '?') || ' rows' AS "summary"
+                FROM dba_tables t
+                JOIN dba_part_tables p ON p.owner = t.owner AND p.table_name = t.table_name
+                JOIN (SELECT owner, segment_name, SUM(bytes) AS bytes, COUNT(*) AS segs FROM dba_segments
+                       WHERE segment_type IN ('TABLE PARTITION', 'TABLE SUBPARTITION') GROUP BY owner, segment_name) s
+                  ON s.owner = t.owner AND s.segment_name = t.table_name
+                WHERE t.owner NOT IN (SELECT username FROM dba_users WHERE oracle_maintained = 'Y') AND s.segs >= 10
+                ORDER BY s.bytes - NVL(t.num_rows, 0) * 200 DESC
+                FETCH FIRST 20 ROWS ONLY
+              logs:
+                - body_column: summary
+                  attribute_columns: [kind, container, owner, table_name, partitioning, partitions, num_rows,
+                                      size_b, segments]
+            # recycle bin: dropped objects that still hold space (per owner + tablespace); no rows = nothing held
+            - sql: |
+                SELECT 'recyclebin' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container",
+                       r.owner AS "owner", r.ts_name AS "tablespace", COUNT(*) AS "objects",
+                       NVL(SUM(r.space * ts.block_size), 0) AS "size_b",
+                       r.owner || ' in ' || r.ts_name || ': ' || COUNT(*) || ' dropped objects, '
+                         || ROUND(NVL(SUM(r.space * ts.block_size), 0) / 1048576) || ' MB' AS "summary"
+                FROM dba_recyclebin r JOIN dba_tablespaces ts ON ts.tablespace_name = r.ts_name
+                GROUP BY r.owner, r.ts_name
+              logs:
+                - body_column: summary
+                  attribute_columns: [kind, container, owner, tablespace, objects, size_b]
+      # data + temp files with the high-water mark: what a RESIZE could give back (reclaim_b). Once a day.
+      sql_query/oracle_capacity_files:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_CAPACITY:-off}" == "on"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_SERVICE:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 24h
+          timeout: 300s
+          queries:
+            - sql: |
+                SELECT 'file' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container", 'data' AS "file_type",
+                       f.file_name AS "file", f.tablespace_name AS "tablespace", f.bytes AS "size_b",
+                       NVL(h.hwm_blocks, 1) * ts.block_size AS "hwm_b",
+                       GREATEST(f.bytes - NVL(h.hwm_blocks, 1) * ts.block_size, 0) AS "reclaim_b",
+                       f.autoextensible AS "autoextend", f.maxbytes AS "max_b",
+                       f.file_name || ' ' || TO_CHAR(ROUND(f.bytes / 1073741824, 2), 'FM9999990.00')
+                         || ' GB, resize could give back '
+                         || TO_CHAR(ROUND(GREATEST(f.bytes - NVL(h.hwm_blocks, 1) * ts.block_size, 0) / 1073741824, 2), 'FM9999990.00')
+                         || ' GB' AS "summary"
+                FROM dba_data_files f
+                JOIN dba_tablespaces ts ON ts.tablespace_name = f.tablespace_name
+                LEFT JOIN (SELECT file_id, MAX(block_id + blocks - 1) AS hwm_blocks FROM dba_extents GROUP BY file_id) h
+                       ON h.file_id = f.file_id
+                UNION ALL
+                SELECT 'file', SYS_CONTEXT('USERENV', 'CON_NAME'), 'temp', f.file_name, f.tablespace_name, f.bytes,
+                       f.bytes, 0, f.autoextensible, f.maxbytes,
+                       f.file_name || ' ' || TO_CHAR(ROUND(f.bytes / 1073741824, 2), 'FM9999990.00') || ' GB (temp)'
+                FROM dba_temp_files f
+              logs:
+                - body_column: summary
+                  attribute_columns: [kind, container, file_type, file, tablespace, size_b, hwm_b, reclaim_b,
+                                      autoextend, max_b]
+
 processors:
   resource_detection:
     # env: OTEL_RESOURCE_ATTRIBUTES from host.env (e.g. project=..., set by amc from answers.yaml); empty = nothing
@@ -582,6 +724,18 @@ exporters:
     retry_on_failure:
       max_elapsed_time: 1h
 
+  otlp_http/openobserve_oracle_capacity:
+    endpoint: ${env:OO_ENDPOINT}
+    compression: gzip
+    headers:
+      Authorization: ${env:OO_AUTH}
+      stream-name: oracle_capacity
+    sending_queue:
+      storage: file_storage
+      queue_size: 1000
+    retry_on_failure:
+      max_elapsed_time: 1h
+
   otlp_http/openobserve_netconn:
     endpoint: ${env:OO_ENDPOINT}
     compression: gzip
@@ -651,6 +805,10 @@ service:
       receivers: [receiver_creator/logs]
       processors: [resource_detection, batch]
       exporters: [otlp_http/openobserve_oracle_sessions]
+    logs/oracle_capacity:
+      receivers: [receiver_creator/capacity]
+      processors: [resource_detection, batch]
+      exporters: [otlp_http/openobserve_oracle_capacity]
     logs/netconn:
       receivers: [netconn]
       processors: [resource_detection, batch]

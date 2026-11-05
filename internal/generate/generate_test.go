@@ -379,6 +379,25 @@ func TestOracleDataGuardAndBackups(t *testing.T) {
 	}
 }
 
+// Capacity (v0.22.0): one switch, off by default, Oracle only.
+func TestOracleCapacity(t *testing.T) {
+	h := Host{Findings: []detect.Finding{oracleFinding()}}
+	out, err := Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "apppdb", User: "C##OTEL_MON", CDBService: "orcl", Capacity: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := string(out.HostEnv); !strings.Contains(e, "ORACLE_CAPACITY=on\n") || !strings.Contains(e, "ORACLE_SERVICE=apppdb\n") {
+		t.Errorf("host.env: %s", e)
+	}
+	out, _ = Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "orcl", User: "otel_mon"}}})
+	if strings.Contains(string(out.HostEnv), "ORACLE_CAPACITY") {
+		t.Errorf("off by default:\n%s", out.HostEnv)
+	}
+	if err := (Answers{Services: map[string]Service{"tomcat": {Capacity: true}}}).Validate(); err == nil {
+		t.Error("capacity on tomcat must fail")
+	}
+}
+
 func TestTCPChecksToOtherHosts(t *testing.T) {
 	var a Answers
 	a.Checks.TCP = []TCPCheck{{Endpoint: "db.example.com:1521", Comment: "Oracle primary"}, {Endpoint: "[2001:db8::7]:443"}}
