@@ -18,7 +18,10 @@ import (
 // Answers is everything a scan cannot know (docs/design.md, section 9). No secrets in here.
 type Answers struct {
 	// Project groups hosts in reports and dashboards (resource attribute "project" on everything the host sends).
-	Project  string             `yaml:"project,omitempty"`
+	Project string `yaml:"project,omitempty"`
+	// HostName (v0.22.4): the host.name this host reports instead of the OS hostname (e.g. a VM called "docker").
+	// Empty = the OS hostname. A DNS-style name; it becomes host_name in the backend: keep it stable.
+	HostName string             `yaml:"host_name,omitempty"`
 	Services map[string]Service `yaml:"services,omitempty"`
 	Checks   struct {
 		HTTP []HTTPCheck `yaml:"http,omitempty"`
@@ -93,6 +96,9 @@ type TCPCheck struct {
 var tcpEndpointRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9.-]{0,252}|\[[0-9A-Fa-f:.]{2,45}\]):([0-9]{1,5})$`)
 
 // projectRE: empty (no project) or a plain name. No "," or "=": they separate OTEL_RESOURCE_ATTRIBUTES pairs.
+// hostNameRE: lower-case DNS labels joined by dots (no "," or "=": they separate OTEL_RESOURCE_ATTRIBUTES pairs).
+var hostNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
 var projectRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9 ._-]{0,63})?$`)
 
 // LoadAnswers reads an answers file (unknown keys are an error: a typo must not be ignored silently).
@@ -112,6 +118,9 @@ func LoadAnswers(path string) (Answers, error) {
 
 // Validate rejects unknown services, non-http(s) URLs and URLs with credentials.
 func (a Answers) Validate() error {
+	if a.HostName != "" && (len(a.HostName) > 253 || !hostNameRE.MatchString(a.HostName)) {
+		return fmt.Errorf("host_name: %q: a DNS-style name (a-z 0-9 - and dots, labels 1-63 characters)", a.HostName)
+	}
 	if !projectRE.MatchString(a.Project) {
 		return fmt.Errorf("project: %q: use 1-64 characters A-Z a-z 0-9 space . _ - (it becomes a resource attribute)", a.Project)
 	}

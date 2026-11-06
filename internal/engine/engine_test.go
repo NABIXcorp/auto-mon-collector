@@ -296,6 +296,32 @@ func TestApplyStartAndIdempotent(t *testing.T) {
 	}
 }
 
+// A prefix that already exists with mode 700 (made by hand for the secrets) is opened to 755 on apply: the collector
+// user could not reach its binary (203/EXEC, 2026-11-06).
+func TestApplyOpensAClosedPrefix(t *testing.T) {
+	needSymlinks(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("unix modes")
+	}
+	h := newHost(t)
+	h.write("/opt/monitoring/secrets/collector.env",
+		"OO_ENDPOINT='https://backend.example.com'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n", 0o600)
+	pre := filepath.Join(h.root, "opt/monitoring")
+	if err := os.Chmod(pre, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, out := run(t, h, &fakeRunner{readable: true}, false, false, true)
+	if !strings.Contains(out, "would: chmod 755 /opt/monitoring ") {
+		t.Errorf("check mode must show the chmod:\n%s", out)
+	}
+	if res, out := run(t, h, &fakeRunner{readable: true}, true, true, true); res.Failures != 0 {
+		t.Fatalf("apply failed:\n%s", out)
+	}
+	if fi, err := os.Stat(pre); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("prefix mode = %v, %v", fi.Mode().Perm(), err)
+	}
+}
+
 func TestBackupAndStaleSiteRemoved(t *testing.T) {
 	needSymlinks(t)
 	h := newHost(t)

@@ -380,6 +380,14 @@ listener stays the only `127.0.0.1:` endpoint: consumers that mean "the listener
 into the resource attribute `project` on every metric, log and span of the host. Asked interactively since v0.3.0
 (default = the saved answer). The base config also collects `system.uptime` (host_metrics `system` scraper).
 
+`host_name:` (optional, since v0.22.4): the `host.name` the host reports instead of the OS hostname (a VM named
+`docker`, `localhost` ...): lower-case DNS labels joined by dots. It goes into the same `OTEL_RESOURCE_ATTRIBUTES`
+(`project=...,host.name=...`); the `env` detector runs before `system` and the first detector wins a key, so it
+replaces the OS name. Changing it starts a new series in the backend (old data keeps the old name).
+
+v0.22.4: an EXISTING prefix / bin / config directory without r-x for others gets it added (`chmod`): a prefix made
+700 by hand before the first install made the collector fail with 203/EXEC.
+
 `services.tomcat.access_log` / `services.tomcat.logs` (optional, since v0.3.0): absolute file globs (`*` = any date)
 when the scan cannot find the files or finds the wrong ones; `-` = none. Empty = what the scan found. The
 interactive run saves them only when they differ from the scan, so a later scan still follows moved files.

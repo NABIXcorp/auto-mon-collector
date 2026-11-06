@@ -248,8 +248,17 @@ func Generate(h Host, a Answers) (Output, error) {
 		recv["netconn"] = "  netconn:\n    ports: [" + strings.ReplaceAll(joinInts(uniqSorted(netconn)), " ", ", ") + "]\n"
 	}
 	// ---- project: read by the resource_detection "env" detector (values are URL-decoded there: "+" = space)
+	// host_name (v0.22.4): the "env" detector runs before "system" and the FIRST detector wins a conflicting key, so
+	// host.name from here replaces the OS hostname.
+	var attrs []string
 	if a.Project != "" {
-		env = append(env, "OTEL_RESOURCE_ATTRIBUTES=project="+url.QueryEscape(a.Project))
+		attrs = append(attrs, "project="+url.QueryEscape(a.Project))
+	}
+	if a.HostName != "" {
+		attrs = append(attrs, "host.name="+a.HostName)
+	}
+	if len(attrs) > 0 {
+		env = append(env, "OTEL_RESOURCE_ATTRIBUTES="+strings.Join(attrs, ","))
 	}
 
 	// ---- write
