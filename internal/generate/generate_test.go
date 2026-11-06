@@ -284,11 +284,11 @@ func TestProject(t *testing.T) {
 // host_name joins the project in OTEL_RESOURCE_ATTRIBUTES (env detector first = it wins over the OS hostname).
 func TestHostName(t *testing.T) {
 	h := Host{Findings: []detect.Finding{oracleFinding()}}
-	out, err := Generate(h, Answers{Project: "Dev servers", HostName: "oo-host"})
+	out, err := Generate(h, Answers{Project: "Dev servers", HostName: "app-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "\nOTEL_RESOURCE_ATTRIBUTES=project=Dev+servers,host.name=oo-host\n"; !strings.Contains(string(out.HostEnv), want) {
+	if want := "\nOTEL_RESOURCE_ATTRIBUTES=project=Dev+servers,host.name=app-1\n"; !strings.Contains(string(out.HostEnv), want) {
 		t.Errorf("host.env lacks %q:\n%s", want, out.HostEnv)
 	}
 	out, _ = Generate(h, Answers{HostName: "web-1.example.org"})
