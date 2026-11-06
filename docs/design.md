@@ -355,6 +355,9 @@ disables and unlinks its unit and removes its files (the binary stays until `amc
   `cloudprober_ssl_earliest_cert_expiry_sec / 86400`.
 - v0.13.0: Cloudprober's files live in `config/cloudprober/` (own directory: the agent may replace exactly these files);
   v0.12.0 files directly in `config/` are removed on the next apply (`REMOVE config/cloudprober.cfg`).
+- v0.22.3: every http probe has a status validator (`http_validator { success_status_codes: "200-399" }`): before it,
+  Cloudprober counted ANY HTTP answer as success (a 404 / 502 was "up"; tested on v0.14.6). A 4xx / 5xx answer now
+  counts as a failure (`cloudprober_validation_failure`); CI e2e checks it with a 404 probe.
 - v0.14.0: optional `path: private | public | other` per tcp / http / ping probe (answers or the agent's list) = which
   address of a peer is checked (a mesh "strand": the same peer over its private and its public address). It becomes
   the metrics label `path` (tcp: file-target label + `additional_label`; http / ping: a fixed `additional_label`);

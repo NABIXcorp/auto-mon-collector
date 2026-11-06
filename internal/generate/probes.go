@@ -278,6 +278,9 @@ func probeFiles(p Probes) *ProbeFiles {
 		}
 		fmt.Fprintf(&b, " labels { key: \"target\" value: %q } } }\n", h.Name)
 		fmt.Fprintf(&b, "  http_probe {\n    protocol: %s\n    port: %s\n    relative_url: %q\n  }\n", strings.ToUpper(u.Scheme), port, rel)
+		// Without a validator Cloudprober counts ANY HTTP answer as success (a 404 / 502 = "up": tested on v0.14.6).
+		// Success = 2xx / 3xx; anything else is a failure (cloudprober_validation_failure counts it).
+		b.WriteString("  validator {\n    name: \"status_2xx_3xx\"\n    http_validator { success_status_codes: \"200-399\" }\n  }\n")
 		var fixed [][2]string
 		if h.Path != "" {
 			fixed = [][2]string{{"path", h.Path}}

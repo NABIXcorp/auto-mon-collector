@@ -464,7 +464,7 @@ jobs:
           # on 127.0.0.1:9313 -> scraped by the live collector. Then probes removed: unit stopped, unlinked, files gone.
           echo "::group::probes (Cloudprober)"
           python3 -m http.server 18080 --bind 127.0.0.1 > /dev/null 2>&1 &
-          { cat $td/answers.yaml; printf 'probes:\n  interval_s: 10\n  tcp:\n    - {name: ci_tcp, host: 127.0.0.1, port: 18080}\n  http:\n    - {name: ci_http, url: "http://127.0.0.1:18080/"}\n  ping:\n    - {name: ci_ping, host: 127.0.0.1}\n'; } > probes.yaml
+          { cat $td/answers.yaml; printf 'probes:\n  interval_s: 10\n  tcp:\n    - {name: ci_tcp, host: 127.0.0.1, port: 18080}\n  http:\n    - {name: ci_http, url: "http://127.0.0.1:18080/"}\n    - {name: ci_http404, url: "http://127.0.0.1:18080/no-such-file"}\n  ping:\n    - {name: ci_ping, host: 127.0.0.1}\n'; } > probes.yaml
           sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr0.txt
           must 'monitoring-prober --configtest: OK' pr0.txt
           must 'NEW    systemd/monitoring-prober.service' pr0.txt
@@ -480,6 +480,10 @@ jobs:
             sleep 1
           done
           [ -n "$ok" ] || { echo "$m" | grep '^cloudprober_' ; sudo journalctl -u monitoring-prober -n 20 --no-pager; die "probe results missing"; }
+          # status validator: a 404 answer is a failure (total grows, success stays 0)
+          for i in $(seq 1 20); do m=$(curl -fsS http://127.0.0.1:9313/metrics || true); grep -qE '^cloudprober_total\{.*target="ci_http404".*\} [1-9]' <<< "$m" && break; sleep 1; done
+          grep -qE '^cloudprober_total\{.*target="ci_http404".*\} [1-9]' <<< "$m" || die "ci_http404 never ran"
+          if grep -qE '^cloudprober_success\{.*target="ci_http404".*\} [1-9]' <<< "$m"; then die "HTTP 404 counted as success (status validator missing)"; fi
           ss -ltn | grep -q '127.0.0.1:9313' || die "cloudprober must listen on 127.0.0.1 only"
           # read the page first: `curl | grep -q` under pipefail fails at random (grep stops early, curl: "Failed writing body")
           scraped() { m=$(curl -fsS http://127.0.0.1:8888/metrics) && grep -qE 'otelcol_receiver_accepted_metric_points.*receiver="prometheus/cloudprober".* [1-9]' <<< "$m"; }
