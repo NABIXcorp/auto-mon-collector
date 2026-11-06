@@ -281,6 +281,27 @@ func TestProject(t *testing.T) {
 	}
 }
 
+// host_name joins the project in OTEL_RESOURCE_ATTRIBUTES (env detector first = it wins over the OS hostname).
+func TestHostName(t *testing.T) {
+	h := Host{Findings: []detect.Finding{oracleFinding()}}
+	out, err := Generate(h, Answers{Project: "Dev servers", HostName: "oo-host"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "\nOTEL_RESOURCE_ATTRIBUTES=project=Dev+servers,host.name=oo-host\n"; !strings.Contains(string(out.HostEnv), want) {
+		t.Errorf("host.env lacks %q:\n%s", want, out.HostEnv)
+	}
+	out, _ = Generate(h, Answers{HostName: "web-1.example.org"})
+	if want := "\nOTEL_RESOURCE_ATTRIBUTES=host.name=web-1.example.org\n"; !strings.Contains(string(out.HostEnv), want) {
+		t.Errorf("host.env lacks %q:\n%s", want, out.HostEnv)
+	}
+	for _, bad := range []string{"Docker", "a,b", "a=b", "-a", "a..b", "a b", strings.Repeat("a", 64)} {
+		if err := (Answers{HostName: bad}).Validate(); err == nil {
+			t.Errorf("host_name %q must fail", bad)
+		}
+	}
+}
+
 func TestLoadAnswers(t *testing.T) {
 	dir := t.TempDir()
 	write := func(s string) string {

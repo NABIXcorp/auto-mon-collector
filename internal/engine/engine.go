@@ -576,6 +576,7 @@ func (e *eng) userAndDirs(context.Context, string) bool {
 	uid, gid, haveUser := e.lookupUser(e.o.User)
 	for _, d := range []string{"", "bin", "config", "config/site.d", "systemd", "backup"} {
 		e.dir(e.pre(d), 0o755, 0, 0)
+		e.traversable(e.pre(d))
 	}
 	for _, d := range []string{"data", "data/file_storage"} {
 		if !haveUser && e.o.Apply {
@@ -588,6 +589,20 @@ func (e *eng) userAndDirs(context.Context, string) bool {
 	e.agentUserAndDirs()
 	e.moveOwners()
 	return true
+}
+
+// traversable (v0.22.4): an EXISTING directory on the collector's path (prefix, bin, config ...) must be readable and
+// searchable by others, or the units fail with 203/EXEC "Permission denied" (seen 2026-11-06: a prefix made 700 by
+// hand before the first install). Only r-x for group / others is added; owner and other bits stay.
+func (e *eng) traversable(p string) {
+	fi, err := os.Stat(e.fs(p))
+	if err != nil || !fi.IsDir() || fi.Mode().Perm()&0o005 == 0o005 {
+		return
+	}
+	mode := fi.Mode().Perm() | 0o055
+	e.do(fmt.Sprintf("chmod %o %s (the collector user must reach its binary and config)", mode, p), func() error {
+		return os.Chmod(e.fs(p), mode)
+	})
 }
 
 func (e *eng) dir(p string, mode os.FileMode, uid, gid int) {
