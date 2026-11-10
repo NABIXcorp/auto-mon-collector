@@ -58,7 +58,8 @@ Flags (plan / apply / generate):
   --detect-json FILE  use a saved "monitoring-agent detect --json" instead of scanning (offline / review)
   --site-dir DIR      operator overlay *.yaml, installed as config/site.d/ (plan / apply)
   --agent-allow FILE  project allowlist template for the agent, installed as config/agent-allow.yaml
-                      (plan / apply; without it an installed template is removed; update keeps it)
+                      (plan / apply; without it the installed template is kept, "--agent-allow none"
+                      removes it; update keeps it)
   --host-dir DIR      instead of --answers: a prepared host part (host.yaml, host.env, site.d/)
   --prefix DIR        install root (default /opt/monitoring)
   --user NAME         collector user (default monitoring; otelcol-contrib before v0.21.0, moved by an apply)
@@ -189,7 +190,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	case *answers != "":
 		var a generate.Answers
 		if a, err = generate.LoadAnswers(*answers); err == nil {
-			d, err = desiredFrom(stdout, a, *detectFile, *siteDir, inputs{prefix: *prefix, allow: *allowFile})
+			d, err = desiredFrom(stdout, a, *detectFile, *siteDir, inputs{prefix: *prefix, allow: allowFor(stdout, *allowFile, *prefix, a)})
 		}
 	default: // no answers file: ask on the terminal (previous answers are the defaults)
 		tty, terr := openPrompter()
@@ -383,6 +384,24 @@ type inputs struct {
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// allowFor (v0.22.5): the allowlist template of a plan / apply. Without --agent-allow the INSTALLED template stays (an
+// apply that forgot the flag removed it and the agent dropped every probe outside the host extras); "none" removes it.
+func allowFor(w io.Writer, flag, prefix string, a generate.Answers) string {
+	switch {
+	case flag == "none":
+		return ""
+	case flag != "":
+		return flag
+	case a.Agent == nil:
+		return ""
+	}
+	if t := filepath.Join(prefix, filepath.FromSlash(generate.AllowFile)); fileExists(t) {
+		fmt.Fprintf(w, "  ok    agent allowlist template: the installed %s is kept (--agent-allow FILE changes it, --agent-allow none removes it)\n", generate.AllowFile)
+		return t
+	}
+	return ""
+}
 
 // desiredFrom generates the host part from answers and builds what the engine installs, incl. answers.yaml.
 func desiredFrom(w io.Writer, a generate.Answers, detectPath, siteDir string, in inputs) (engine.Desired, error) {
