@@ -26,6 +26,9 @@ type Agent struct {
 	// Update (v0.16.0): may the control plane ask this host to update amc to a signed release (amc self-update)?
 	// Read ONLY from answers.yaml (root): the project template cannot switch it on for a whole fleet.
 	Update AgentUpdate `yaml:"update,omitempty"`
+	// Site (v0.23.0): may the control plane send collector overlays (processors only, see CheckSite)? Read ONLY
+	// from answers.yaml (root), like Update.
+	Site AgentSite `yaml:"site,omitempty"`
 }
 
 // AgentUpdate is the host owner's policy for remote amc updates (docs/design.md, section 17). Default: off.

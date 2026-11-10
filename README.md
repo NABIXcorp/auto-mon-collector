@@ -43,6 +43,11 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > key embedded in amc (the same check as `get.sh`), keeps `bin/amc.before-<version>`, then runs the new `amc update`;
 > the old binary goes back when the new one fails. `apply` / `update` / `self-update` never run at the same time
 > (`<prefix>/.amc.lock`). See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
+> v0.23.0: collector overlays from the control plane, OFF by default (`answers.yaml agent.site.allow`). Only a fixed
+> catalog: processors `filter` / `transform` / `tail_sampling` and the processor lists of pipelines (no receivers,
+> exporters, extensions, no `${...}`), checked by the agent and again by root; installed as `config/site.d/cp-*.yaml`
+> through `monitoring-agent update` (plan, smoke run, apply, automatic rollback). `plan` / `apply` keep these files.
+> See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and

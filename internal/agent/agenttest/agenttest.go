@@ -67,10 +67,23 @@ func (s *Server) Publish(host string, rev int64, p generate.Probes, expires int6
 
 // PublishUpdate (v0.16.0) signs a newer document for host that also asks for an amc update.
 func (s *Server) PublishUpdate(host string, p generate.Probes, version, id string) int64 {
-	return s.publish(host, 0, p, 0, false, false, map[string]any{"version": version, "id": id})
+	return s.publish(host, 0, p, 0, false, false, map[string]any{"update": map[string]any{"version": version, "id": id}})
 }
 
-func (s *Server) publish(host string, rev int64, p generate.Probes, expires int64, tamper, otherKey bool, update map[string]any) int64 {
+// PublishSite (v0.23.0) signs a newer document for host that also carries an overlay set (and, update != nil, an
+// update request too).
+func (s *Server) PublishSite(host string, p generate.Probes, siteRev int64, files map[string]string, update map[string]any) int64 {
+	if files == nil {
+		files = map[string]string{}
+	}
+	extra := map[string]any{"site": map[string]any{"revision": siteRev, "files": files}}
+	if update != nil {
+		extra["update"] = update
+	}
+	return s.publish(host, 0, p, 0, false, false, extra)
+}
+
+func (s *Server) publish(host string, rev int64, p generate.Probes, expires int64, tamper, otherKey bool, extra map[string]any) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.force[host] = rev != 0 && rev <= s.revs[host] // an explicit old revision = a replay: served anyway
@@ -83,8 +96,8 @@ func (s *Server) publish(host string, rev int64, p generate.Probes, expires int6
 		expires = now + 3600
 	}
 	doc := map[string]any{"host": host, "revision": rev, "issued_at": now, "expires_at": expires, "probes": p}
-	if update != nil {
-		doc["update"] = update
+	for k, v := range extra {
+		doc[k] = v
 	}
 	b, _ := json.Marshal(doc)
 	c, _ := agent.CanonicalJSON(b)
