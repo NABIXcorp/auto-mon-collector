@@ -616,8 +616,9 @@ agent:
 ```
 
 Project template: `plan` / `apply --agent-allow FILE` (same keys as `allow`, unknown keys are errors) installs it as
-`config/agent-allow.yaml` (root 644); `update` keeps the installed one; without the flag plan / apply remove it (like
-`--site-dir`). Effective list = template + host extras: lists joined, a number set on the host replaces the
+`config/agent-allow.yaml` (root 644); `update` keeps the installed one, and since v0.22.5 so do plan / apply without
+the flag (before, they removed it and the agent dropped every probe outside the host extras); `--agent-allow none`
+removes it. Effective list = template + host extras: lists joined, a number set on the host replaces the
 template's, ping allowed when either allows it. `plan` prints it (`agent allowlist: ...`).
 
 **Install** (`apply` with an `agent:` section): user `amc-agent` (system, no shell, no groups), `<prefix>/agent/`

@@ -562,6 +562,10 @@ jobs:
           sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag3.txt
           must 'agent: applied revision 1 kept' ag3.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' ag3.txt; then die "plan after an agent change is not clean"; fi
+          # v0.22.5: a plan WITHOUT --agent-allow keeps the installed template (before: REMOVE it, the probes dropped)
+          sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee ag3b.txt
+          must 'is kept' ag3b.txt
+          if grep -E '^  (CHANGE|NEW|REMOVE) ' ag3b.txt; then die "plan without --agent-allow is not clean"; fi
           # agent removed from the answers: unit + polkit rule gone, Cloudprober stays only with own probes (none: removed)
           sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee ag4.txt
           must 'no agent: monitoring-agent.service stopped, disabled and unlinked' ag4.txt
