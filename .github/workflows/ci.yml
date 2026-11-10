@@ -511,7 +511,7 @@ jobs:
           python3 -m http.server 18080 --bind 127.0.0.1 > /dev/null 2>&1 &
           sleep 1
           printf 'domains: ["localhost"]\nnetworks: ["127.0.0.0/8"]\nports: [18080]\nmin_interval_s: 10\n' > allow.yaml
-          { cat $td/answers.yaml; printf 'agent:\n  url: http://127.0.0.1:18091/agent/\n  control_plane_key: "%s"\n' "$(cat cp.pub)"; } > agent.yaml
+          { cat $td/answers.yaml; printf 'agent:\n  url: http://127.0.0.1:18091/agent/\n  control_plane_key: "%s"\n  site:\n    allow: true\n' "$(cat cp.pub)"; } > agent.yaml
           sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag0.txt
           must 'agent allowlist: domains localhost; networks 127.0.0.0/8; ports 18080' ag0.txt
           must 'NEW    systemd/monitoring-agent.service' ag0.txt
@@ -551,6 +551,29 @@ jobs:
           publish "{\"host\":\"$host\",\"revision\":1,$P}"
           waitn 4; last | grep -q 'rejected.*not newer' || die "old revision not rejected: $(last)"
           sudo grep -q '"revision": 1' /opt/monitoring/agent/state.json || die "a rejected list changed the agent state"
+          # v0.23.0: overlays from the control plane (agent.site.allow): a set in the catalog -> root (polkit start of
+          # monitoring-update) -> plan + smoke run + apply; a set outside the catalog refused; an empty set removes
+          # the control plane's overlays; the host owner's own site.d files stay.
+          siteres() { curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; r=[s["site"] for s in json.load(sys.stdin) if s.get("site")]; print(*((r[-1]["revision"], r[-1]["result"], r[-1].get("detail","")) if r else ("none",)))'; }
+          waitsite() { for i in $(seq 1 180); do siteres | grep -q "^$1 $2" && return 0; sleep 1; done; siteres; sudo journalctl -u monitoring-update -n 40 --no-pager; die "overlays $1: no result $2"; }
+          publish "{\"host\":\"$host\",$P,\"site\":{\"revision\":1,\"files\":{\"cp-ci.yaml\":\"processors:\\n  filter/ci:\\n    error_mode: ignore\\n\"}}}"
+          waitsite 1 ok
+          sudo test -f /opt/monitoring/config/site.d/cp-ci.yaml || die "overlay cp-ci.yaml not installed"
+          sudo test -f /opt/monitoring/config/site.d/10-ci.yaml || die "the host's own overlay was removed"
+          systemctl is-active -q monitoring-collector || die "collector not active after the overlay"
+          publish "{\"host\":\"$host\",$P,\"site\":{\"revision\":2,\"files\":{\"cp-ci.yaml\":\"exporters:\\n  debug: {}\\n\"}}}"
+          waitsite 2 refused
+          sudo test -f /opt/monitoring/config/site.d/cp-ci.yaml || die "a refused set changed site.d"
+          # a manual plan with the host owner's --site-dir keeps the control plane's overlay (no REMOVE)
+          sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag-site.txt
+          must "the control plane's overlays are kept: cp-ci.yaml" ag-site.txt
+          if grep -E '^  REMOVE .*cp-ci' ag-site.txt; then die "a manual plan removes the control plane's overlay"; fi
+          publish "{\"host\":\"$host\",$P,\"site\":{\"revision\":3,\"files\":{}}}"
+          waitsite 3 ok
+          sudo test -f /opt/monitoring/config/site.d/cp-ci.yaml && die "an empty set did not remove cp-ci.yaml"
+          sudo test -f /opt/monitoring/config/site.d/10-ci.yaml || die "the host's own overlay was removed"
+          # root's job ran `update` with a real scan of this runner: back to the example's scan for the plan checks below
+          sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke > ag-site2.txt || { cat ag-site2.txt; die "re-apply after the overlays failed"; }
           # control plane gone: the agent keeps running, the probes keep running
           pkill -f "fakecp -listen" || true
           before=$(curl -fsS http://127.0.0.1:9313/metrics | grep -E '^cloudprober_total\{.*target="link_ci_tcp"' | awk '{print $2}')
@@ -560,7 +583,7 @@ jobs:
           [ "${after%.*}" -gt "${before%.*}" ] || die "probes stopped without the control plane ($before -> $after)"
           # amc plan now includes the agent's applied list: nothing to change
           sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag3.txt
-          must 'agent: applied revision 1 kept' ag3.txt
+          grep -Eq 'agent: applied revision [0-9]+ kept' ag3.txt || die "agent revision not kept in ag3.txt"
           if grep -E '^  (CHANGE|NEW|REMOVE) ' ag3.txt; then die "plan after an agent change is not clean"; fi
           # v0.22.5: a plan WITHOUT --agent-allow keeps the installed template (before: REMOVE it, the probes dropped)
           sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee ag3b.txt

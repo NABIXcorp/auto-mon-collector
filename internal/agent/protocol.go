@@ -17,6 +17,10 @@
 //   - v0.16.0: the document may carry "update":{"version":"vX.Y.Z","id":"..."} (remote amc update, signed like the
 //     rest); the status may carry "update":{"id","result","detail","from","to"} and the inventory "update_allowed".
 //     An agent before v0.16.0 rejects a document with "update" (unknown field): send it only to v0.16.0+ agents.
+//   - v0.23.0: the document may carry "site":{"revision":N,"files":{"cp-<name>.yaml":"<yaml>"}} (the control plane's
+//     complete collector overlay set, inside generate.CheckSite); the status may carry "site":{"revision","result",
+//     "detail"} and the inventory "site_allowed". Send it only to agents that report site_allowed (v0.23.0+), and
+//     never together with a new update request (the update goes first, the set waits for a later document).
 package agent
 
 import (
@@ -126,6 +130,7 @@ type Doc struct {
 	Expires  int64           `json:"expires_at"`
 	Probes   generate.Probes `json:"probes"`
 	Update   *UpdateRequest  `json:"update,omitempty"` // v0.16.0: remote amc update (nil = none)
+	Site     *SiteRequest    `json:"site,omitempty"`   // v0.23.0: the control plane's collector overlays (nil = none)
 	Sig      string          `json:"sig"`
 }
 
@@ -134,6 +139,14 @@ type Doc struct {
 type UpdateRequest struct {
 	Version string `json:"version"` // release tag, e.g. v0.16.0
 	ID      string `json:"id"`      // chosen by the control plane, reported back with the result
+}
+
+// SiteRequest (v0.23.0): the control plane's complete overlay set for this host (file name -> YAML; names start
+// with generate.SitePrefix, contents inside generate.CheckSite). An empty set removes the control plane's overlays.
+// Revision counts the set (a new set = a higher revision); it is reported back with root's result.
+type SiteRequest struct {
+	Revision int64             `json:"revision"`
+	Files    map[string]string `json:"files"`
 }
 
 // updateIDRE: an update id (it goes into files and status lines, never into a path).

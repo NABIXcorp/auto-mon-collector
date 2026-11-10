@@ -124,6 +124,9 @@ type State struct {
 	// v0.16.0: the last update request handled (never handled twice) and the last root result reported
 	UpdateID       string `json:"update_id,omitempty"`
 	UpdateReported string `json:"update_reported,omitempty"`
+	// v0.23.0: the last overlay set handed to root and the last root result reported (site revisions)
+	SiteRevision int64 `json:"site_revision,omitempty"`
+	SiteReported int64 `json:"site_reported,omitempty"`
 }
 
 // StateFile below the prefix.

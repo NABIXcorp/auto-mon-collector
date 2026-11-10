@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -190,7 +191,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	case *answers != "":
 		var a generate.Answers
 		if a, err = generate.LoadAnswers(*answers); err == nil {
-			d, err = desiredFrom(stdout, a, *detectFile, *siteDir, inputs{prefix: *prefix, allow: allowFor(stdout, *allowFile, *prefix, a)})
+			d, err = desiredFrom(stdout, a, *detectFile, *siteDir, inputs{prefix: *prefix, allow: allowFor(stdout, *allowFile, *prefix, a), keepCP: true})
 		}
 	default: // no answers file: ask on the terminal (previous answers are the defaults)
 		tty, terr := openPrompter()
@@ -200,7 +201,7 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		}
 		defer tty.Close()
 		p = tty
-		d, secrets, err = interview(stdout, p, *prefix, *detectFile, *siteDir, inputs{prefix: *prefix, allow: *allowFile})
+		d, secrets, err = interview(stdout, p, *prefix, *detectFile, *siteDir, inputs{prefix: *prefix, allow: *allowFile, keepCP: true})
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
@@ -267,6 +268,9 @@ func update(args []string, stdout, stderr io.Writer) int {
 	collectorFile := fs.String("collector-file", "", "")
 	noSmoke := fs.Bool("no-smoke", false, "")
 	noRollback := fs.Bool("no-rollback", false, "")
+	// v0.23.0: the new site.d to use instead of the installed one (root's overlay job stages it; not for people:
+	// to change site.d by hand use plan / apply --site-dir)
+	siteFrom := fs.String("site-dir", "", "")
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -292,7 +296,12 @@ func update(args []string, stdout, stderr io.Writer) int {
 	}
 	defer lk.Release()
 	siteDir := filepath.Join(*prefix, "config", "site.d")
-	fmt.Fprintf(stdout, "update: answers from %s, site overlay from %s (kept as installed)\n", saved, siteDir)
+	if *siteFrom != "" {
+		siteDir = *siteFrom
+		fmt.Fprintf(stdout, "update: answers from %s, site overlay from %s (the new set)\n", saved, siteDir)
+	} else {
+		fmt.Fprintf(stdout, "update: answers from %s, site overlay from %s (kept as installed)\n", saved, siteDir)
+	}
 	in := inputs{prefix: *prefix}
 	if t := filepath.Join(*prefix, filepath.FromSlash(generate.AllowFile)); fileExists(t) {
 		in.allow = t // the installed agent allowlist template stays
@@ -381,6 +390,9 @@ func scan(detectPath string) (generate.Host, error) {
 type inputs struct {
 	prefix string
 	allow  string // --agent-allow FILE ("" = none)
+	// keepCP (v0.23.0, plan / apply): the installed control-plane overlays (config/site.d/cp-*) stay; the host
+	// owner's --site-dir may not contain cp-* files. `update` (and root's overlay job) uses the given set as is.
+	keepCP bool
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
@@ -464,6 +476,11 @@ func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string, in 
 	site, err := hostdir.LoadSite(siteDir)
 	if err != nil {
 		return engine.Desired{}, err
+	}
+	if in.keepCP {
+		if site, err = keepControlPlaneSite(w, site, in.prefix); err != nil {
+			return engine.Desired{}, err
+		}
 	}
 	d, err := hostdir.Build(g.HostYAML, g.HostEnv, site, "generated")
 	if err != nil {
@@ -648,4 +665,35 @@ func uninstall(args []string, stdout, stderr io.Writer) int {
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// keepControlPlaneSite (v0.23.0): the overlays the control plane installed (config/site.d/<generate.SitePrefix>*)
+// belong to it: a plan / apply with the host owner's --site-dir keeps them (it does not own them); the host owner's
+// directory may not bring files with that prefix.
+func keepControlPlaneSite(w io.Writer, site map[string][]byte, prefix string) (map[string][]byte, error) {
+	for n := range site {
+		if strings.HasPrefix(n, generate.SitePrefix) {
+			return nil, fmt.Errorf("--site-dir: %s: names starting with %q belong to the control plane's overlays", n, generate.SitePrefix)
+		}
+	}
+	installed, err := hostdir.LoadSite(filepath.Join(prefix, "config", "site.d"))
+	if err != nil {
+		return nil, err
+	}
+	var kept []string
+	for n, b := range installed {
+		if !strings.HasPrefix(n, generate.SitePrefix) {
+			continue
+		}
+		if site == nil {
+			site = map[string][]byte{}
+		}
+		site[n] = b
+		kept = append(kept, n)
+	}
+	if len(kept) > 0 {
+		sort.Strings(kept)
+		fmt.Fprintf(w, "site.d: the control plane's overlays are kept: %s\n", strings.Join(kept, ", "))
+	}
+	return site, nil
 }

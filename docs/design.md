@@ -719,3 +719,26 @@ Threat notes: a compromised amc-agent can start the unit and write any request, 
 by the pinned control-plane key, for this host, not replayed, inside the owner's policy, and installs only a release
 signed by the release key. A compromised control plane can at most trigger an update to a real signed release (no
 downgrade unless the owner allows it). `uninstall` removes the unit link, `self-update.json` and `.amc.lock`.
+
+### Collector overlays from the control plane (v0.23.0, OFF by default)
+
+Why: a collector change on a host (drop noisy spans, mask an attribute) meant copying a site overlay and running
+`plan` / `apply --site-dir` as root on every host. Why so narrow: a control plane that may send ANY collector
+configuration can read any file (a `file_log` include), run commands or send all data elsewhere (an exporter). So:
+
+- **Catalog** (`generate.CheckSite`, checked by the agent AND again by root): top level only `processors` (types
+  `filter`, `transform`, `tail_sampling`) and `service.pipelines.<name>.processors` (a list of names). No receivers,
+  exporters, extensions, connectors, `service.telemetry`; no `$` except `$$` (no `${env:..}` / `${file:..}`); no YAML
+  anchors, aliases, merge keys or tags; one document per file. Names `cp-<a-z 0-9 _ . ->.yaml`, at most 16 files,
+  64 KiB each, 128 KiB in all. Note: a pipeline's processor list may also leave out a base processor.
+- **Host switch** `answers.yaml agent.site.allow: true` (root only, like `agent.update`); the inventory reports
+  `site_allowed`.
+- **Flow:** the signed document carries `site {revision, files}` = the control plane's COMPLETE set (empty = remove
+  its overlays). The agent hands a new set revision to root with the same request file and unit as an update (one
+  job at a time: a new update goes first). Root: the request again (signature, host, revision above the last one in
+  `self-update.json`, which now also keeps `site_revision`), the switch, the catalog, the lock; then a staging
+  directory = the host owner's installed site.d files (without `cp-`) + the new set, and `monitoring-agent update
+  --site-dir <staging>`: plan (validate + smoke run) -> apply -> start -> automatic rollback. Result in
+  `agent/site-result.json` (root 644: ok | failed | rolled_back | refused), reported once as status `site`.
+- **Ownership:** `config/site.d/cp-*` belong to the control plane. `plan` / `apply` (with or without `--site-dir`)
+  keep them and refuse `cp-*` files in the owner's `--site-dir`; the owner's own files are never touched by a set.

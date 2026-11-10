@@ -119,6 +119,15 @@ type Status struct {
 	Detail   string            `json:"detail,omitempty"`
 	Versions map[string]string `json:"versions,omitempty"`
 	Update   *UpdateStatus     `json:"update,omitempty"` // v0.16.0: about an update request (see UpdateStatus)
+	Site     *SiteStatus       `json:"site,omitempty"`   // v0.23.0: about an overlay set (see SiteStatus)
+}
+
+// SiteStatus (v0.23.0) reports an overlay set like UpdateStatus: "started" / "refused" / "failed" from the agent,
+// then root's result once (ok | failed | rolled_back | refused).
+type SiteStatus struct {
+	Revision int64  `json:"revision"`
+	Result   string `json:"result"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 // UpdateStatus (v0.16.0) reports an update request: the agent's own answer ("started" = handed to root, "refused" =
@@ -142,6 +151,8 @@ type Inventory struct {
 	Error    string            `json:"inventory_error,omitempty"` // why Services is null
 	// UpdateAllowed (v0.16.0): answers.yaml agent.update.allow, so the control plane can grey out "Update"
 	UpdateAllowed bool `json:"update_allowed"`
+	// SiteAllowed (v0.23.0): answers.yaml agent.site.allow (the control plane sends overlays only then)
+	SiteAllowed bool `json:"site_allowed"`
 }
 
 // RefusedError: the control plane answered 4xx (not 401 / 429), e.g. 404 = an older control plane without

@@ -157,10 +157,10 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		seen = max(seen, st.Revision)
 		cl := &Client{Base: local.Agent.URL, Host: cfg.Host, Key: key, HTTP: cfg.HTTP, Now: cfg.Now}
-		if !reportUpdateResult(ctx, cfg, cl, &st) {
+		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) {
 			return nil
 		}
-		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow); sum != sentInv {
+		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -223,10 +223,15 @@ func Run(ctx context.Context, cfg Config) error {
 				// v0.16.0: an update request is handled once per id (a later revision may repeat it until the
 				// control plane has the result). The id is saved BEFORE the root unit starts.
 				var upd *UpdateStatus
+				var site *SiteStatus
 				start := false
 				if u := doc.Update; u != nil && u.ID != st.UpdateID {
 					us, ok := prepareUpdate(cfg.Prefix, local.Agent.Update, cfg.Versions[VersionKey], u, raw)
 					upd, start, next.UpdateID = &us, ok, u.ID
+				} else if s := doc.Site; s != nil && s.Revision != st.SiteRevision {
+					// v0.23.0: one root job per document: an overlay set waits while an update is handed over
+					ss, ok := prepareSite(cfg.Prefix, local.Agent.Site, s, raw)
+					site, start, next.SiteRevision = &ss, ok, s.Revision
 				}
 				if err := saveState(cfg.Prefix, next); err != nil {
 					status.Result, status.Detail = "error", "applied, but "+StateFile+": "+err.Error()
@@ -237,9 +242,17 @@ func Run(ctx context.Context, cfg Config) error {
 				if restarted {
 					status.Detail += ", Cloudprober restarted"
 				}
-				if start {
+				if start && upd != nil {
 					us := startUpdate(cfg.Run, *upd)
 					upd = &us
+				}
+				if start && site != nil {
+					ss := startSite(cfg.Run, *site)
+					site = &ss
+				}
+				if site != nil {
+					status.Site = site
+					lg.Printf("agent: overlays revision %d: %s: %s", site.Revision, site.Result, site.Detail)
 				}
 				if upd != nil {
 					status.Update = upd
@@ -301,8 +314,8 @@ func reportUpdateResult(ctx context.Context, cfg Config, cl *Client, st *State) 
 const maxInventory = 48 << 10
 
 // inventoryBody builds the inventory request and its hash.
-func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed bool) ([]byte, string) {
-	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed}
+func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool) ([]byte, string) {
+	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed}
 	b, err := os.ReadFile(filepath.Join(prefix, generate.InventoryFile))
 	switch {
 	case os.IsNotExist(err):

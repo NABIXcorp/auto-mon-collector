@@ -1,7 +1,7 @@
 // Command fakecp runs the fake control plane for the CI end-to-end test (never released). It listens on 127.0.0.1,
 // writes its public key to -key-out and takes test commands on /_test/*:
 //
-//	POST /_test/publish  {"host","revision","probes",...,"tamper","other_key","expires_at"}  -> {"revision"}
+//	POST /_test/publish  {"host","revision","probes",...,"tamper","other_key","expires_at","site"}  -> {"revision"}
 //	GET  /_test/status   reported statuses (JSON list)
 //	GET  /_test/enrolled?host=H   200 when enrolled
 package main
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/NABIXcorp/auto-mon-collector/internal/agent"
 	"github.com/NABIXcorp/auto-mon-collector/internal/agent/agenttest"
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 )
@@ -37,12 +38,19 @@ func main() {
 			Expires  int64           `json:"expires_at"`
 			Tamper   bool            `json:"tamper"`
 			OtherKey bool            `json:"other_key"`
+			// v0.23.0: an overlay set (the revision is then the next one)
+			Site *agent.SiteRequest `json:"site"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		rev := s.Publish(in.Host, in.Revision, in.Probes, in.Expires, in.Tamper, in.OtherKey)
+		var rev int64
+		if in.Site != nil {
+			rev = s.PublishSite(in.Host, in.Probes, in.Site.Revision, in.Site.Files, nil)
+		} else {
+			rev = s.Publish(in.Host, in.Revision, in.Probes, in.Expires, in.Tamper, in.OtherKey)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]int64{"revision": rev})
 	})
 	mux.HandleFunc("GET /_test/status", func(w http.ResponseWriter, r *http.Request) {

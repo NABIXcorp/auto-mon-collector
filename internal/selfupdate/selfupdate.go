@@ -100,7 +100,12 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 		res.Result, res.Detail = result, fmt.Sprintf(format, a...)
 		return res
 	}
-	doc, pol, err := o.verifyRequest(&res)
+	// v0.23.0: the same request file may carry the control plane's overlay set instead (site.go)
+	if req, err := o.loadRequest(); err == nil && siteJob(req) {
+		sr := o.runSite(ctx, req)
+		return agent.UpdateResult{Result: sr.Result, Detail: sr.Detail, At: sr.At}
+	}
+	doc, pol, last, err := o.verifyRequest(&res)
 	if errors.Is(err, errHandled) {
 		keepResult = true
 	}
@@ -121,7 +126,7 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	}
 	defer lk.Release()
 	// from here on the request counts as handled: it never runs a second time
-	rec := record{ID: res.ID, Revision: doc.Revision, At: o.Now().Unix()}
+	rec := record{ID: res.ID, Revision: doc.Revision, SiteRevision: last.SiteRevision, At: o.Now().Unix()}
 	if err := writeRoot(filepath.Join(o.Prefix, RecordFile), marshal(rec), 0o644); err != nil {
 		return set("failed", "nothing changed: write %s: %v", RecordFile, err)
 	}
@@ -227,60 +232,80 @@ var errHandled = errors.New("handled already")
 type record struct {
 	ID       string `json:"id"`
 	Revision int64  `json:"revision"`
-	At       int64  `json:"at"`
+	// v0.23.0: the last overlay set root handled
+	SiteRevision int64 `json:"site_revision,omitempty"`
+	At           int64 `json:"at"`
 }
 
-// verifyRequest: the root-owned answers (agent section, pinned key, policy), then the request file: signature,
-// host, revision (above the last one root handled), expiry, an update with a valid id and version.
-func (o *Options) verifyRequest(res *agent.UpdateResult) (agent.Doc, generate.AgentUpdate, error) {
-	var none generate.AgentUpdate
+// request is a verified request: the signed document, the root-owned answers and root's record of the last one.
+type request struct {
+	doc     agent.Doc
+	answers generate.Answers
+	last    record
+}
+
+// loadRequest: the root-owned answers (agent section, pinned key), then the request file: signature, host,
+// revision (above the last one root handled), expiry.
+func (o *Options) loadRequest() (request, error) {
+	var r request
 	ap := filepath.Join(o.Prefix, "answers.yaml")
 	if err := rootOwned(ap, o.RootUID); err != nil {
-		return agent.Doc{}, none, err
+		return r, err
 	}
 	a, err := generate.LoadAnswers(ap)
 	if err != nil {
-		return agent.Doc{}, none, err
+		return r, err
 	}
 	if a.Agent == nil {
-		return agent.Doc{}, none, errors.New("answers.yaml has no agent section")
+		return r, errors.New("answers.yaml has no agent section")
 	}
+	r.answers = a
 	cpKey, err := generate.ParseKey(a.Agent.ControlPlaneKey)
 	if err != nil {
-		return agent.Doc{}, none, err
+		return r, err
 	}
 	raw, err := readRequest(o.Request)
 	if err != nil {
-		return agent.Doc{}, none, fmt.Errorf("request: %w", err)
+		return r, fmt.Errorf("request: %w", err)
 	}
-	var last record
 	if b, err := os.ReadFile(filepath.Join(o.Prefix, RecordFile)); err == nil {
-		if err := unmarshal(b, &last); err != nil {
-			return agent.Doc{}, none, fmt.Errorf("%s: %v (remove it to reset)", RecordFile, err)
+		if err := unmarshal(b, &r.last); err != nil {
+			return r, fmt.Errorf("%s: %v (remove it to reset)", RecordFile, err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return agent.Doc{}, none, err
+		return r, err
 	}
-	doc, err := agent.VerifySigned(raw, cpKey, o.Host, last.Revision, o.Now())
+	r.doc, err = agent.VerifySigned(raw, cpKey, o.Host, r.last.Revision, o.Now())
 	if err != nil {
-		return doc, none, fmt.Errorf("request: %v", err)
+		return r, fmt.Errorf("request: %v", err)
 	}
+	return r, nil
+}
+
+// verifyRequest: loadRequest, then an update with a valid id and version, not handled before.
+func (o *Options) verifyRequest(res *agent.UpdateResult) (agent.Doc, generate.AgentUpdate, record, error) {
+	var none generate.AgentUpdate
+	req, err := o.loadRequest()
+	if err != nil {
+		return req.doc, none, req.last, err
+	}
+	doc, last := req.doc, req.last
 	u := doc.Update
 	if u == nil {
-		return doc, none, errors.New("request: the signed document asks for no update")
+		return doc, none, last, errors.New("request: the signed document asks for no update (and no new overlay set)")
 	}
 	if !agent.ValidUpdateID(u.ID) {
-		return doc, none, errors.New("request: update id malformed")
+		return doc, none, last, errors.New("request: update id malformed")
 	}
 	res.ID, res.Revision = u.ID, doc.Revision
 	if _, err := version.Parse(u.Version); err != nil {
-		return doc, none, fmt.Errorf("request: %v", err)
+		return doc, none, last, fmt.Errorf("request: %v", err)
 	}
 	res.To = u.Version
 	if u.ID == last.ID {
-		return doc, none, fmt.Errorf("request %s: %w", u.ID, errHandled)
+		return doc, none, last, fmt.Errorf("request %s: %w", u.ID, errHandled)
 	}
-	return doc, a.Agent.Update, nil
+	return doc, req.answers.Agent.Update, last, nil
 }
 
 // download fetches SHA256SUMS, its signature and asset of release v, and verifies them with the embedded key.
