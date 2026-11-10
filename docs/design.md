@@ -737,7 +737,7 @@ configuration can read any file (a `file_log` include), run commands or send all
   its overlays). The agent hands a new set revision to root with the same request file and unit as an update (one
   job at a time: a new update goes first). Root: the request again (signature, host, revision above the last one in
   `self-update.json`, which now also keeps `site_revision`), the switch, the catalog, the lock; then a staging
-  directory = the host owner's installed site.d files (without `cp-`) + the new set, and `monitoring-agent update
+  directory = the host owner's installed site.d files (without `cp-`) + the new set, and `monitoring-agent update --no-fetch
   --site-dir <staging>`: plan (validate + smoke run) -> apply -> start -> automatic rollback. Result in
   `agent/site-result.json` (root 644: ok | failed | rolled_back | refused), reported once as status `site`.
 - **Ownership:** `config/site.d/cp-*` belong to the control plane. `plan` / `apply` (with or without `--site-dir`)

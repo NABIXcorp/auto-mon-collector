@@ -74,7 +74,9 @@ func (o *Options) runSite(ctx context.Context, r request) (res agent.SiteResult)
 	fmt.Fprintf(o.Out, "self-update: overlays %d accepted: %d from the control plane, %d of the host kept (%s)\n",
 		s.Revision, len(s.Files), len(own), strings.Join(own, ", "))
 	binPath := filepath.Join(o.Prefix, "bin", "monitoring-agent")
-	out, err := o.Run(lk.File(), binPath, "update", "--prefix", o.Prefix, "--site-dir", stage)
+	// --no-fetch: an overlay set changes the configuration only; the installed collector and prober stay (a new
+	// release comes as an update)
+	out, err := o.Run(lk.File(), binPath, "update", "--prefix", o.Prefix, "--site-dir", stage, "--no-fetch")
 	o.Out.Write(out)
 	switch {
 	case err == nil:

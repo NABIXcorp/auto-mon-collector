@@ -28,7 +28,7 @@ func (e *env) siteRun(out string, update error) (agent.UpdateResult, []string) {
 		Now: func() time.Time { return time.Unix(testNow, 0) }, Out: &e.out,
 		Run: func(lock *os.File, name string, args ...string) ([]byte, error) {
 			e.calls = append(e.calls, filepath.Base(name)+" "+strings.Join(args, " "))
-			if len(args) == 5 && args[0] == "update" && args[3] == "--site-dir" {
+			if len(args) == 6 && args[0] == "update" && args[3] == "--site-dir" && args[5] == "--no-fetch" {
 				e.lockSeen = lock != nil
 				ents, _ := os.ReadDir(args[4])
 				for _, x := range ents {
