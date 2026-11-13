@@ -60,7 +60,7 @@ func TestInventory(t *testing.T) {
 			t.Errorf("inventory contains %q:\n%s", leak, b)
 		}
 	}
-	// the same host gives the same bytes (an unchanged host shows no diff, amc update does not rewrite it)
+	// the same host gives the same bytes (an unchanged host shows no diff, update does not rewrite it)
 	if !bytes.Equal(b, Inventory(inventoryHost(), []string{"oracle"})) {
 		t.Error("not deterministic")
 	}

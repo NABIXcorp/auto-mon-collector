@@ -4,7 +4,7 @@ package engine
 
 import "os"
 
-// ownerUID: amc only runs on Linux; on other systems (developer machines running the tests) every file
+// ownerUID: monitoring-agent only runs on Linux; on other systems (developer machines running the tests) every file
 // counts as owned by root.
 func ownerUID(os.FileInfo) (int, bool) { return 0, true }
 

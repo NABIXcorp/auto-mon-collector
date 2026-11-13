@@ -22,7 +22,7 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 )
 
-// KeyFile (below the prefix): the host's Ed25519 private key (seed, base64), amc-agent 600.
+// KeyFile (below the prefix): the host's Ed25519 private key (seed, base64), monitoring-agent 600.
 const KeyFile = "agent/key"
 
 // Config of one agent process.

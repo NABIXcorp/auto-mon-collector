@@ -10,27 +10,24 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/assets"
 )
 
-// The agent (v0.13.0): installed only when Desired.Agent is set. Its parts: user amc-agent (system, no shell; renamed
-// in a later release), <prefix>/agent/ (key + state, 700), bin/monitoring-agent (a copy of this binary; v0.20.0, the
-// old name bin/amc stays as a symlink to it), unit monitoring-agent, config/agent-allow.yaml (the project's
+// The agent (v0.13.0): installed only when Desired.Agent is set. Its parts: user monitoring-agent (system, no shell),
+// <prefix>/agent/ (key + state, 700), bin/monitoring-agent (a copy of this binary), unit monitoring-agent, config/agent-allow.yaml (the project's
 // allowlist template, optional), the polkit rule that lets it restart monitoring-prober, and write access to
 // config/prober/ (group of the agent user, setgid) - nothing else. v0.16.0: the root oneshot unit monitoring-update
 // (`monitoring-agent self-update`), linked but never enabled; the polkit rule lets the agent START it (a remote
 // update, re-verified by root).
 
-// AgentUser runs the agent (v0.21.0; before: LegacyAgentUser amc-agent, moved by an apply, see users.go).
+// AgentUser runs the agent (v0.21.0).
 const AgentUser = "monitoring-agent"
 
-// PolkitRule: the only file the agent part writes outside the prefix (v0.20.0 name; LegacyPolkitRule before).
-const (
-	PolkitRule       = "/etc/polkit-1/rules.d/50-monitoring-agent.rules"
-	LegacyPolkitRule = "/etc/polkit-1/rules.d/50-amc-agent.rules"
-)
+// PolkitRule: the only file the agent part writes outside the prefix (v0.20.0).
+const PolkitRule = "/etc/polkit-1/rules.d/50-monitoring-agent.rules"
 
-// agentBinRel is the agent binary below the prefix; legacyAgentBinRel (bin/amc, before v0.20.0) points to it.
+// agentBinRel is the agent binary below the prefix. oldAgentLink: the symlink to it that v0.20.0 .. v0.23.x kept under
+// the product's old name; an apply removes it.
 const (
-	agentBinRel       = "bin/monitoring-agent"
-	legacyAgentBinRel = "bin/amc"
+	agentBinRel  = "bin/monitoring-agent"
+	oldAgentLink = "bin/amc"
 )
 
 // Agent is what the agent part needs.
@@ -94,10 +91,10 @@ func modeBits(m os.FileMode) uint32 {
 	return b
 }
 
-// agentBinary: step 4c, bin/monitoring-agent = a copy of this binary (the agent unit runs it); bin/amc (the name
-// before v0.20.0) becomes a symlink to it (an old regular bin/amc is kept as bin/amc.previous for a rollback).
+// agentBinary: step 4c, bin/monitoring-agent = a copy of this binary (the agent unit runs it).
 func (e *eng) agentBinary() {
 	if e.d.Agent == nil {
+		e.dropOldAgentLink()
 		return
 	}
 	e.r.step("4c. agent: binary + polkit rule")
@@ -113,39 +110,7 @@ func (e *eng) agentBinary() {
 		e.r.changes++
 		e.do("install "+bin+" (copy of this binary, mode 755, root)", func() error { return e.writeFile(bin, want, 0o755) })
 	}
-	old := e.pre(legacyAgentBinRel)
-	if t, err := os.Readlink(e.fs(old)); err == nil && t == path.Base(agentBinRel) {
-		e.r.ok("%s -> %s", old, path.Base(agentBinRel))
-	} else {
-		e.r.changes++
-		e.do("link "+old+" -> "+path.Base(agentBinRel)+" (the name before v0.20.0)", func() error {
-			if fi, err := os.Lstat(e.fs(old)); err == nil && fi.Mode().IsRegular() {
-				if err := os.Rename(e.fs(old), e.fs(old+".previous")); err != nil {
-					return err
-				}
-				e.agentBinMoved = true
-			}
-			tmp := e.fs(old) + ".link"
-			os.Remove(tmp)
-			if err := os.Symlink(path.Base(agentBinRel), tmp); err != nil {
-				return err
-			}
-			return os.Rename(tmp, e.fs(old))
-		})
-	}
-	if _, err := os.Lstat(e.fs(LegacyPolkitRule)); err == nil {
-		e.r.changes++
-		// kept as *.previous (polkit reads only *.rules) for a rollback, which links the old units again
-		if e.do("remove "+LegacyPolkitRule+" (replaced by "+path.Base(PolkitRule)+")", func() error {
-			if err := os.Rename(e.fs(LegacyPolkitRule), e.fs(LegacyPolkitRule)+".previous"); err != nil {
-				return err
-			}
-			e.polkitMoved = true
-			return nil
-		}) && e.o.Apply {
-			e.st.remove(&e.st.Polkit, LegacyPolkitRule)
-		}
-	}
+	e.dropOldAgentLink()
 	if _, err := os.Stat(e.fs(path.Dir(PolkitRule))); err != nil {
 		e.r.warn("polkit not installed (%s missing): the agent cannot restart monitoring-prober; probe lists that change "+
 			"its config wait for the next `monitoring-agent apply` (install polkit / polkitd)", path.Dir(PolkitRule))
@@ -159,13 +124,24 @@ func (e *eng) agentBinary() {
 		return
 	}
 	if herr == nil {
-		e.prevPolkit = have // e.g. the rule for amc-agent (v0.20.0): a rollback writes it back
+		e.prevPolkit = have // the rule before this run: a rollback writes it back
 	}
 	e.r.changes++
 	if e.do("write "+PolkitRule+" (the agent may restart monitoring-prober and start monitoring-update, nothing else)",
 		func() error { return e.writeFile(PolkitRule, rule, 0o644) }) && e.o.Apply {
 		e.st.add(&e.st.Polkit, PolkitRule)
 	}
+}
+
+// dropOldAgentLink removes the symlink bin/amc (the old product name, kept by v0.20.0 .. v0.23.x). Only a symlink:
+// a regular file there is not ours to judge.
+func (e *eng) dropOldAgentLink() {
+	old := e.pre(oldAgentLink)
+	if fi, err := os.Lstat(e.fs(old)); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return
+	}
+	e.r.changes++
+	e.do("remove old link "+old, func() error { return os.Remove(e.fs(old)) })
 }
 
 // agentFiles: the agent's files below the prefix (step 5 diff).

@@ -42,8 +42,7 @@ func agentCmd(args []string, stdout, stderr io.Writer) int {
 	switch sub {
 	case "run":
 		_ = agent.Run(ctx, agent.Config{Prefix: *prefix, Run: runOutput,
-			Versions: map[string]string{agent.VersionKey: version.Version, agent.LegacyVersionKey: version.Version,
-				"monitoring-prober": cloudprober.Version, "cloudprober": cloudprober.Version}}) // old keys: control planes before v0.20.0
+			Versions: map[string]string{agent.VersionKey: version.Version, "monitoring-prober": cloudprober.Version}})
 		return exitOK
 	case "enrol", "enroll":
 		if !*tokenStdin {

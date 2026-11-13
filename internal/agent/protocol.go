@@ -1,20 +1,20 @@
-// Package agent is `amc agent` (v0.13.0): it fetches a signed list of probes from a control plane and applies it
+// Package agent is `monitoring-agent agent` (v0.13.0): it fetches a signed list of probes from a control plane and applies it
 // to the local Cloudprober. Remote = data only: the agent never runs commands or writes paths it gets from the
 // control plane. It checks every list with the control-plane key pinned in the answers (never one sent by the
-// server), the host's allowlist and the amc probe rules, then `cloudprober --configtest`. See docs/design.md,
+// server), the host's allowlist and the monitoring-agent probe rules, then `cloudprober --configtest`. See docs/design.md,
 // section 17.
 //
 // Wire format (the control plane must match it exactly):
 //   - keys: Ed25519, "ed25519:" + standard base64 (with padding) of the 32-byte public key.
 //   - POST <url>v1/enrol {"host","token","public_key"}: no signature (one-time token).
-//   - every other request has the headers X-Amc-Host, X-Amc-Time (unix seconds), X-Amc-Nonce (16-64 chars
-//     [A-Za-z0-9_-]) and X-Amc-Signature: standard base64 Ed25519 (host key) over
+//   - every other request has the headers X-Mon-Host, X-Mon-Time (unix seconds), X-Mon-Nonce (16-64 chars
+//     [A-Za-z0-9_-]) and X-Mon-Signature: standard base64 Ed25519 (host key) over
 //     METHOD "\n" REQUEST-URI "\n" time "\n" nonce "\n" hex(sha256(body)), REQUEST-URI = path + "?" + query.
 //   - GET <url>v1/desired?have=N: 200 = a newer signed document, 204 = nothing newer (long poll, <= 60 s).
 //   - POST <url>v1/status {"revision","result":"applied|rejected|error","detail","versions"}.
 //   - document {"host","revision","issued_at","expires_at","probes":{...},"sig"}, times in unix seconds; sig =
 //     standard base64 Ed25519 (control-plane key) over the canonical JSON of the document without "sig".
-//   - v0.16.0: the document may carry "update":{"version":"vX.Y.Z","id":"..."} (remote amc update, signed like the
+//   - v0.16.0: the document may carry "update":{"version":"vX.Y.Z","id":"..."} (remote monitoring-agent update, signed like the
 //     rest); the status may carry "update":{"id","result","detail","from","to"} and the inventory "update_allowed".
 //     An agent before v0.16.0 rejects a document with "update" (unknown field): send it only to v0.16.0+ agents.
 //   - v0.23.0: the document may carry "site":{"revision":N,"files":{"cp-<name>.yaml":"<yaml>"}} (the control plane's
@@ -129,13 +129,13 @@ type Doc struct {
 	Issued   int64           `json:"issued_at"`
 	Expires  int64           `json:"expires_at"`
 	Probes   generate.Probes `json:"probes"`
-	Update   *UpdateRequest  `json:"update,omitempty"` // v0.16.0: remote amc update (nil = none)
+	Update   *UpdateRequest  `json:"update,omitempty"` // v0.16.0: remote monitoring-agent update (nil = none)
 	Site     *SiteRequest    `json:"site,omitempty"`   // v0.23.0: the control plane's collector overlays (nil = none)
 	Sig      string          `json:"sig"`
 }
 
-// UpdateRequest (v0.16.0): "update amc to this signed release". The only argument is the version: the download
-// URL, the release key and the commands are compiled into amc (internal/selfupdate), never sent.
+// UpdateRequest (v0.16.0): "update monitoring-agent to this signed release". The only argument is the version: the download
+// URL, the release key and the commands are compiled into monitoring-agent (internal/selfupdate), never sent.
 type UpdateRequest struct {
 	Version string `json:"version"` // release tag, e.g. v0.16.0
 	ID      string `json:"id"`      // chosen by the control plane, reported back with the result
@@ -178,7 +178,7 @@ func Verify(raw []byte, cpKey ed25519.PublicKey, host string, applied int64, now
 }
 
 // VerifySigned checks what every document needs, whatever it asks for: signature (pinned key), host, revision >
-// applied, not expired. `amc self-update` (root) uses it to re-verify an update request the agent saved.
+// applied, not expired. `monitoring-agent self-update` (root) uses it to re-verify an update request the agent saved.
 func VerifySigned(raw []byte, cpKey ed25519.PublicKey, host string, applied int64, now time.Time) (Doc, error) {
 	var d Doc
 	dec := json.NewDecoder(bytes.NewReader(raw))

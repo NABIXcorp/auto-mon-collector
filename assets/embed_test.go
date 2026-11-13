@@ -42,7 +42,7 @@ func TestUnitRender(t *testing.T) {
 	}
 }
 
-// v0.19.0: the journal fragment amc installs is exactly the one collector/test/journal checks with golden files
+// v0.19.0: the journal fragment monitoring-agent installs is exactly the one collector/test/journal checks with golden files
 // (fixed filters, MESSAGE only, unknown SSH user names masked).
 func TestJournalConfigIsTheTestedOne(t *testing.T) {
 	tested, err := os.ReadFile("../collector/config/journal.yaml")

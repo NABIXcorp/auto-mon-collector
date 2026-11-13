@@ -22,7 +22,7 @@ func (Runner) Run(name string, args ...string) error {
 	return exec.Command(name, args...).Run()
 }
 
-// Output executes name and returns stdout + stderr. env == nil inherits amc's environment.
+// Output executes name and returns stdout + stderr. env == nil inherits the installer's environment.
 func (Runner) Output(env []string, name string, args ...string) ([]byte, error) {
 	c := exec.Command(name, args...)
 	if env != nil {
@@ -39,7 +39,7 @@ func (Runner) LookPath(name string) bool {
 
 // Timed runs a long-running program for at most d and returns its output. It stops early when stop(line)
 // is true for an output line. Stopping = SIGTERM, then SIGKILL after 10 s (a collector that hangs in its
-// shutdown must not hang amc). The error is nil when amc stopped the program (time limit, early stop,
+// shutdown must not hang monitoring-agent). The error is nil when monitoring-agent stopped the program (time limit, early stop,
 // cancel) and non-nil when it could not start or exited by itself.
 func (Runner) Timed(ctx context.Context, env []string, d time.Duration, stop func(string) bool,
 	name string, args ...string) ([]byte, error) {

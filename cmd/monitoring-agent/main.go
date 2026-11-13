@@ -1,4 +1,4 @@
-// Command monitoring-agent (amc before v0.20.0; repository auto-mon-collector) scans a Linux host, proposes what to monitor, generates the configuration
+// Command monitoring-agent (repository auto-mon-collector) scans a Linux host, proposes what to monitor, generates the configuration
 // for monitoring-collector (our OpenTelemetry Collector build, same signed release) and installs it on request.
 // See docs/design.md.
 package main
@@ -29,9 +29,11 @@ import (
 )
 
 const usage = `monitoring-agent: host discovery installer and agent for monitoring-collector (OpenTelemetry)
-(called amc before v0.20.0: that name still works)
 
 Usage:
+  monitoring-agent install --console URL --token-stdin [--yes] [--host NAME]
+        a new host in one step: the console's settings for it (one-time token from the console), plan,
+        apply + start after "yes", then enrol the agent
   monitoring-agent plan  --answers FILE [flags]
         detect + generate + diff + validate + smoke run; changes nothing
   monitoring-agent apply --answers FILE [--start] [flags]
@@ -133,6 +135,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return planApply(cmd == "apply", args, stdout, stderr)
 	case "update":
 		return update(args, stdout, stderr)
+	case "install":
+		return installCmd(args, stdout, stderr)
 	case "uninstall":
 		return uninstall(args, stdout, stderr)
 	case "detect":

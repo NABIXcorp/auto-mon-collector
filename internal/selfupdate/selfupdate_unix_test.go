@@ -33,8 +33,8 @@ func TestSelfUpdateRequestLinkRefused(t *testing.T) {
 			if res := e.run(); res.Result != "refused" || !strings.Contains(res.Detail, "request:") {
 				t.Fatalf("%+v", res)
 			}
-			if e.read("bin/amc") != oldBin {
-				t.Error("bin/amc changed")
+			if e.read("bin/monitoring-agent") != oldBin {
+				t.Error("bin/monitoring-agent changed")
 			}
 		})
 	}
@@ -51,10 +51,10 @@ func TestSelfUpdateAnswersMustBeRootOnly(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateWaitsForNoOtherAmc(t *testing.T) {
+func TestSelfUpdateWaitsForNoOtherRun(t *testing.T) {
 	e := newEnv(t, "  update:\n    allow: true\n")
 	e.request(nil, nil)
-	l, err := lockfile.Acquire(e.prefix) // an `amc apply` is running
+	l, err := lockfile.Acquire(e.prefix) // a `monitoring-agent apply` is running
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +63,8 @@ func TestSelfUpdateWaitsForNoOtherAmc(t *testing.T) {
 	if res.Result != "refused" || !strings.Contains(res.Detail, "another monitoring-agent") {
 		t.Fatalf("%+v", res)
 	}
-	if e.read("bin/amc") != oldBin || e.requests.Load() != 0 {
-		t.Error("something changed while another amc held the lock")
+	if e.read("bin/monitoring-agent") != oldBin || e.requests.Load() != 0 {
+		t.Error("something changed while another run held the lock")
 	}
 	if r := e.result(); r.ID != "u-0123456789" || r.Result != "refused" {
 		t.Errorf("result file: %+v", r)
@@ -73,6 +73,6 @@ func TestSelfUpdateWaitsForNoOtherAmc(t *testing.T) {
 		t.Error("a request refused for the lock counts as handled (it could never be retried)")
 	}
 	if res := e.run(); res.Result != "ok" {
-		t.Errorf("after the other amc finished: %+v", res)
+		t.Errorf("after the other run finished: %+v", res)
 	}
 }

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# get.sh: download, VERIFY and start monitoring-agent (called amc before v0.20.0; repository auto-mon-collector).
+# get.sh: download, VERIFY and start monitoring-agent (repository auto-mon-collector).
 #
 #   curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh | sudo bash
 #   ... | sudo bash -s -- plan --answers answers.yaml        (arguments go to monitoring-agent; default: interactive plan)
 #   ... | sudo bash -s -- update                             (installed host: new release, nothing to copy)
-#   MONITORING_VERSION=v0.20.0 ... (pin a release instead of latest; AMC_VERSION works too)
+#   MONITORING_VERSION=v0.21.0 ... (pin a release instead of latest; v0.21.0 or newer)
+#   MONITORING_RELEASE_BASE=https://console.example/agent/dl/ MONITORING_VERSION=v0.24.0 ... (v0.24.0: a mirror of
+#     the signed release files, tried first; GitHub when it fails. Same signature check.)
 #
 # Trust: SHA256SUMS is signed (ECDSA P-256, openssl). The public key is embedded below. The binary runs only
 # if the signature AND its sha256 match. Without openssl this script stops: it never skips the check.
@@ -14,7 +16,7 @@ set -euo pipefail
 main() {
   local repo="https://github.com/NABIXcorp/auto-mon-collector/releases"
   local base="$repo/latest/download"
-  local version="${MONITORING_VERSION:-${AMC_VERSION:-}}"
+  local version="${MONITORING_VERSION:-}"
   if [ -n "$version" ]; then base="$repo/download/$version"; fi
   base="${MONITORING_BASE_URL_FOR_TESTS:-$base}"
 
@@ -40,17 +42,39 @@ main() {
 @PUBKEY@
 PUBKEY
 
-  $get "$tmp/SHA256SUMS" "$base/SHA256SUMS"
-  $get "$tmp/SHA256SUMS.sig" "$base/SHA256SUMS.sig"
+  local github=$base mirror="${MONITORING_RELEASE_BASE:-}"
+  if [ -n "$mirror" ]; then
+    case "$mirror" in
+      https://*/) ;;
+      *) echo "monitoring-agent: MONITORING_RELEASE_BASE must be an https URL ending in /" >&2; exit 1 ;;
+    esac
+    [ -n "$version" ] || { echo "monitoring-agent: MONITORING_RELEASE_BASE needs MONITORING_VERSION" >&2; exit 1; }
+    if $get "$tmp/SHA256SUMS" "$mirror$version/SHA256SUMS" 2> /dev/null &&
+      $get "$tmp/SHA256SUMS.sig" "$mirror$version/SHA256SUMS.sig" 2> /dev/null; then
+      base="$mirror$version"
+    else
+      echo "monitoring-agent: release mirror not reachable, using GitHub" >&2
+    fi
+  fi
+  if [ "$base" = "$github" ]; then
+    $get "$tmp/SHA256SUMS" "$base/SHA256SUMS"
+    $get "$tmp/SHA256SUMS.sig" "$base/SHA256SUMS.sig"
+  fi
   if ! openssl dgst -sha256 -verify "$tmp/release.pub" -signature "$tmp/SHA256SUMS.sig" "$tmp/SHA256SUMS" > /dev/null 2>&1; then
     echo "monitoring-agent: SIGNATURE CHECK FAILED: SHA256SUMS is not signed by the release key. Nothing was run." >&2
     exit 3
   fi
-  # v0.20.0+: monitoring-agent-linux-<arch>; a pinned older release has only amc-linux-<arch>
   local asset="monitoring-agent-linux-$arch"
-  grep -qE "^[0-9a-f]{64} [ *]$asset$" "$tmp/SHA256SUMS" || asset="amc-linux-$arch"
+  if ! grep -qE "^[0-9a-f]{64} [ *]$asset$" "$tmp/SHA256SUMS"; then
+    echo "monitoring-agent: this release lists no $asset (too old or another architecture). Nothing was run." >&2
+    exit 3
+  fi
   echo "monitoring-agent: downloading $asset from $base" >&2
-  $get "$tmp/$asset" "$base/$asset"
+  if ! $get "$tmp/$asset" "$base/$asset"; then
+    [ "$base" != "$github" ] || exit 1
+    echo "monitoring-agent: mirror download failed, using GitHub" >&2   # same signed list: the sha256 check stays valid
+    $get "$tmp/$asset" "$github/$asset"
+  fi
   if ! (cd "$tmp" && grep -E "^[0-9a-f]{64} [ *]$asset$" SHA256SUMS | sha256sum -c --quiet - > /dev/null 2>&1); then
     echo "monitoring-agent: CHECKSUM MISMATCH for $asset. Nothing was run." >&2
     exit 3

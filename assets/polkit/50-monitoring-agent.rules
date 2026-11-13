@@ -1,6 +1,5 @@
-// /etc/polkit-1/rules.d/50-monitoring-agent.rules  (installed and removed by monitoring-agent; before v0.20.0
-// 50-amc-agent.rules; do not edit)
-// The agent (user monitoring-agent; amc-agent before v0.21.0) may RESTART the monitoring-prober unit and (v0.16.0) START the self-update unit.
+// /etc/polkit-1/rules.d/50-monitoring-agent.rules  (installed and removed by monitoring-agent; do not edit)
+// The agent (user monitoring-agent) may RESTART the monitoring-prober unit and (v0.16.0) START the self-update unit.
 // Nothing else: no other unit, no other verb. The self-update unit re-verifies every request as root.
 polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&

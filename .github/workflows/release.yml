@@ -1,7 +1,8 @@
-# Release: push a tag v*  ->  all CI checks  ->  static monitoring-agent binaries (+ the same as amc-linux-*) + monitoring-collector (OCB, amd64 + arm64) + get.sh +
+# Release: push a tag v*  ->  all CI checks  ->  static monitoring-agent binaries + monitoring-collector (OCB, amd64 + arm64) + get.sh +
 # SHA256SUMS + signature.
 #   git tag -a v0.1.0 -m "..." && git push origin v0.1.0
-# The tag must be on main. SHA256SUMS is signed with the key in the secret AMC_SIGNING_KEY (ECDSA P-256 PEM) and
+# The tag must be on main. SHA256SUMS is signed with the key in the secret AMC_SIGNING_KEY (ECDSA P-256 PEM; the secret
+# keeps the product's old name: renaming it needs the repository owner) and
 # checked against keys/release.pub BEFORE anything is published: a wrong or swapped secret = no release.
 name: release
 on:
@@ -39,11 +40,9 @@ jobs:
           mkdir -p dist
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "$ld" -o "dist/monitoring-agent-linux-$arch" ./cmd/monitoring-agent
-            # the same binary under the name before v0.20.0: an older `amc self-update` / get.sh looks for amc-linux-<arch>
-            cp "dist/monitoring-agent-linux-$arch" "dist/amc-linux-$arch"
           done
           scripts/render-get.sh keys/release.pub dist/get.sh
-          (cd dist && sha256sum monitoring-agent-linux-amd64 monitoring-agent-linux-arm64 amc-linux-amd64 amc-linux-arm64 get.sh > SHA256SUMS && cat SHA256SUMS)
+          (cd dist && sha256sum monitoring-agent-linux-amd64 monitoring-agent-linux-arm64 get.sh > SHA256SUMS && cat SHA256SUMS)
           ./dist/monitoring-agent-linux-amd64 version
       - uses: actions/setup-go@v6   # the collector needs the newer Go of its own modules (same as the CI job)
         with:
@@ -54,7 +53,7 @@ jobs:
           set -euo pipefail
           v=$(awk '/^  version:/ {print $2}' collector/builder-config.yaml)
           go install "go.opentelemetry.io/collector/cmd/builder@v$v"
-          for arch in amd64 arm64; do   # amc v0.19.0+ installs it on every host: both architectures amc supports
+          for arch in amd64 arm64; do   # v0.19.0+ installs it on every host: both architectures we support
             (cd collector && CGO_ENABLED=0 GOOS=linux GOARCH=$arch builder --config builder-config.yaml)
             cp collector/_build/monitoring-collector "dist/monitoring-collector-linux-$arch"
           done
@@ -64,13 +63,13 @@ jobs:
           (cd dist && sha256sum monitoring-collector-linux-amd64 monitoring-collector-linux-arm64 >> SHA256SUMS && cat SHA256SUMS)
       - name: Sign SHA256SUMS and verify against the committed public key
         env:
-          AMC_SIGNING_KEY: ${{ secrets.AMC_SIGNING_KEY }}
+          SIGNING_KEY: ${{ secrets.AMC_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          [ -n "$AMC_SIGNING_KEY" ] || { echo "::error::secret AMC_SIGNING_KEY is not set"; exit 1; }
+          [ -n "$SIGNING_KEY" ] || { echo "::error::the release signing secret is not set"; exit 1; }
           umask 077
           key=$(mktemp); trap 'rm -f "$key"' EXIT
-          printf '%s\n' "$AMC_SIGNING_KEY" > "$key"
+          printf '%s\n' "$SIGNING_KEY" > "$key"
           openssl dgst -sha256 -sign "$key" -out dist/SHA256SUMS.sig dist/SHA256SUMS
           openssl dgst -sha256 -verify keys/release.pub -signature dist/SHA256SUMS.sig dist/SHA256SUMS
       - name: Publish
@@ -78,7 +77,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/monitoring-agent-linux-amd64 dist/monitoring-agent-linux-arm64 \
-            dist/amc-linux-amd64 dist/amc-linux-arm64 \
             dist/monitoring-collector-linux-amd64 dist/monitoring-collector-linux-arm64 \
             dist/get.sh dist/SHA256SUMS dist/SHA256SUMS.sig \
             --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

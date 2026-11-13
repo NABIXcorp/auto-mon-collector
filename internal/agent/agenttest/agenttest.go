@@ -26,8 +26,10 @@ const Token = "test-enrol-token-0123456789"
 type Server struct {
 	Priv ed25519.PrivateKey
 	Poll time.Duration // long poll (default 2 s)
-	// NoInventory: answer /v1/inventory with 404 (a control plane older than amc v0.15.0)
+	// NoInventory: answer /v1/inventory with 404 (a control plane older than v0.15.0)
 	NoInventory bool
+	// v0.24.0 bootstrap: what /agent/v1/bootstrap hands out (OTLP = the fake backend, Allow = a YAML template)
+	OTLP, Allow string
 
 	mu       sync.Mutex
 	hosts    map[string]ed25519.PublicKey
@@ -65,7 +67,7 @@ func (s *Server) Publish(host string, rev int64, p generate.Probes, expires int6
 	return s.publish(host, rev, p, expires, tamper, otherKey, nil)
 }
 
-// PublishUpdate (v0.16.0) signs a newer document for host that also asks for an amc update.
+// PublishUpdate (v0.16.0) signs a newer document for host that also asks for a monitoring-agent update.
 func (s *Server) PublishUpdate(host string, p generate.Probes, version, id string) int64 {
 	return s.publish(host, 0, p, 0, false, false, map[string]any{"update": map[string]any{"version": version, "id": id}})
 }
@@ -139,6 +141,23 @@ func (s *Server) Enrolled(host string) bool {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/agent/v1/bootstrap": // checks the token, does not use it up (the enrolment does)
+		var in struct {
+			Host  string `json:"host"`
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Token != Token || in.Host == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "token not valid for this host"})
+			return
+		}
+		otlp := s.OTLP
+		if otlp == "" {
+			otlp = "http://127.0.0.1:4320"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"project": "CI", "host_name": in.Host,
+			"agent": map[string]any{"control_plane_key": s.PublicKey(), "site_allow": true}, "use_mirror": true, // url: the console
+			"allow": s.Allow, "otlp": map[string]string{"endpoint": otlp, "authorization": "Bearer smo_test"}})
 	case "/agent/v1/enrol":
 		var in struct {
 			Host      string `json:"host"`
@@ -227,8 +246,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) verify(r *http.Request) (string, []byte, bool) {
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 64<<10))
-	host, ts, nonce := r.Header.Get("X-Amc-Host"), r.Header.Get("X-Amc-Time"), r.Header.Get("X-Amc-Nonce")
-	sig, err := base64.StdEncoding.DecodeString(r.Header.Get("X-Amc-Signature"))
+	host, ts, nonce := r.Header.Get("X-Mon-Host"), r.Header.Get("X-Mon-Time"), r.Header.Get("X-Mon-Nonce")
+	sig, err := base64.StdEncoding.DecodeString(r.Header.Get("X-Mon-Signature"))
 	t, terr := strconv.ParseInt(ts, 10, 64)
 	s.mu.Lock()
 	k := s.hosts[host]

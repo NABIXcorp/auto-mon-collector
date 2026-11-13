@@ -29,7 +29,9 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/cloudprober"
 	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 	"github.com/NABIXcorp/auto-mon-collector/internal/envfile"
+	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 	"github.com/NABIXcorp/auto-mon-collector/internal/version"
+	"gopkg.in/yaml.v3"
 )
 
 // Runner runs system tools. Run = exit status only; Output = combined output (read-only tools, validate);
@@ -50,7 +52,7 @@ type Options struct {
 
 	Apply bool // change the system (otherwise check mode)
 	Start bool // with Apply: (re)start the units and check them
-	Fetch bool // download the collector of this amc release if missing / different (sha256)
+	Fetch bool // download the collector of this release if missing / different (sha256)
 	Smoke bool // after validate: run the new config for SmokeTime against a local sink
 	// Rollback: with Start, if a unit is not active afterwards, go back to the state before this apply
 	// (backup + previous collector binary); a first install is stopped + disabled instead.
@@ -67,7 +69,7 @@ type Options struct {
 	Runner        Runner
 	Now           func() time.Time
 	Chown         func(path string, uid, gid int) error
-	// Collector: where the collector's sha256 and binary come from (default: the signed release of this amc,
+	// Collector: where the collector's sha256 and binary come from (default: the signed release of this installer,
 	// collector.Release{Version: version.Version}; tests fake it)
 	Collector collector.Source
 	// CollectorFile: install this local file as the collector instead of downloading (CI, hosts without internet).
@@ -137,17 +139,15 @@ type eng struct {
 	firstInstall     bool        // there was no config.yaml before
 	backupDir        string      // backup of the files before this apply ("" = files unchanged)
 	binReplaced      bool        // the previous binary is in bin/monitoring-collector.previous
-	agentBinMoved    bool        // the old regular bin/amc is in bin/amc.previous (bin/amc is now a symlink)
-	moves            []*userMove // v0.21.0: old users this run replaces (otelcol-contrib -> monitoring, amc-agent -> monitoring-agent)
+	moves            []*userMove // v0.21.0: old users this run replaces (otelcol-contrib -> monitoring)
 	prevPolkit       []byte      // the polkit rule before this run rewrote it (rollback)
-	polkitMoved      bool        // the old polkit rule 50-amc-agent.rules is in 50-amc-agent.rules.previous
 	droppedUnits     []string    // legacy units (before v0.19.0) this apply stopped, disabled and unlinked
 	addedUnits       []string    // units this apply linked for the first time (a rollback unlinks them again)
 	probeBin         string      // Cloudprober binary usable for --configtest ("" = none)
 	probeBinReplaced bool        // the previous prober is in bin/monitoring-prober.previous
 	rolledBack       bool
 
-	st    *state // what amc changed outside <prefix> (amc-state.json), for uninstall
+	st    *state // what the installer changed outside <prefix> (state.json), for uninstall
 	files []file
 
 	changedFiles []string // check / apply: files that differ from the installed ones (NEW / CHANGE / REMOVE)
@@ -329,7 +329,7 @@ func (e *eng) userHome(name string) string {
 	return ""
 }
 
-// persistState records amc-state.json in apply mode (no-op when nothing new was recorded).
+// persistState records state.json in apply mode (no-op when nothing new was recorded).
 func (e *eng) persistState() {
 	if !e.o.Apply {
 		return
@@ -533,7 +533,6 @@ const inventoryFile = "inventory.json"
 const (
 	selfUpdateRecord = "self-update.json"
 	lockFile         = ".monitoring.lock"
-	legacyLockFile   = ".amc.lock" // before v0.20.0
 )
 
 // onlyNoRestartFiles: the changed files are all ones no unit reads (see Result.NoRestart).
@@ -694,7 +693,7 @@ func (e *eng) checkSecrets(context.Context, string) bool {
 
 // ---- 4. collector binary --------------------------------------------------------------------------------
 
-// collectorBinary: bin/monitoring-collector must be the one the signed release of this amc lists (sha256; the
+// collectorBinary: bin/monitoring-collector must be the one the signed release of this installer lists (sha256; the
 // version it prints is the OpenTelemetry core and stays the same when only our receivers change).
 func (e *eng) collectorBinary(ctx context.Context, tmp string) bool {
 	e.r.step("4. collector binary %s (core %s, %s)", collector.Name, collector.CoreVersion, e.o.Arch)
@@ -715,6 +714,12 @@ func (e *eng) collectorBinary(ctx context.Context, tmp string) bool {
 		}
 		src = f
 	} else {
+		if m := releaseMirror(e.d.Answers); m != "" {
+			if r, ok := e.o.Collector.(*collector.Release); ok && r.Mirror == "" {
+				r.Mirror, r.Log = m, e.o.Out
+				e.r.ok("release mirror %s (GitHub when it fails)", m)
+			}
+		}
 		want, err := e.o.Collector.Sum(ctx, e.o.Arch)
 		switch {
 		case err != nil && !e.o.Fetch && haveErr == nil:
@@ -1296,4 +1301,15 @@ func (e *eng) journalErrors(unit string) {
 		e.r.warn("%d error/warn line(s) in the last minute:", len(bad))
 		e.r.indent(e.mask(strings.Join(bad[max(0, len(bad)-10):], "\n")), 10)
 	}
+}
+
+// releaseMirror: answers release_mirror (v0.24.0) when it is valid, else "" (Validate refuses a bad one earlier).
+func releaseMirror(answers []byte) string {
+	var a struct {
+		M string `yaml:"release_mirror"`
+	}
+	if yaml.Unmarshal(answers, &a) != nil || generate.ValidMirror(a.M) != nil {
+		return ""
+	}
+	return a.M
 }

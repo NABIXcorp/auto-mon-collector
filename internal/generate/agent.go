@@ -16,14 +16,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Agent (v0.13.0): `amc agent` fetches a signed list of probes from a control plane and applies it to Cloudprober
+// Agent (v0.13.0): `monitoring-agent agent` fetches a signed list of probes from a control plane and applies it to Cloudprober
 // (docs/design.md, section 17). Only data comes from the control plane: no commands, no paths. The host owner
 // decides here what may be probed at all (Allow); a probe outside it is rejected by the agent.
 type Agent struct {
 	URL             string `yaml:"url"`               // control plane base, e.g. https://agent.example.com/agent/
 	ControlPlaneKey string `yaml:"control_plane_key"` // "ed25519:<base64>": the ONLY key that may sign probe lists
 	Allow           Allow  `yaml:"allow,omitempty"`   // host extras, added to the project template (--agent-allow)
-	// Update (v0.16.0): may the control plane ask this host to update amc to a signed release (amc self-update)?
+	// Update (v0.16.0): may the control plane ask this host to update monitoring-agent to a signed release (monitoring-agent self-update)?
 	// Read ONLY from answers.yaml (root): the project template cannot switch it on for a whole fleet.
 	Update AgentUpdate `yaml:"update,omitempty"`
 	// Site (v0.23.0): may the control plane send collector overlays (processors only, see CheckSite)? Read ONLY
@@ -31,7 +31,7 @@ type Agent struct {
 	Site AgentSite `yaml:"site,omitempty"`
 }
 
-// AgentUpdate is the host owner's policy for remote amc updates (docs/design.md, section 17). Default: off.
+// AgentUpdate is the host owner's policy for remote monitoring-agent updates (docs/design.md, section 17). Default: off.
 type AgentUpdate struct {
 	Allow     bool   `yaml:"allow,omitempty"`     // false (default) = every update request is refused
 	Downgrade bool   `yaml:"downgrade,omitempty"` // false (default) = only a newer release than the running one
@@ -62,7 +62,7 @@ func (u AgentUpdate) validate() error {
 	return err
 }
 
-// Check is the host owner's policy for an update from the running amc to target: allowed at all, and (unless
+// Check is the host owner's policy for an update from the running monitoring-agent to target: allowed at all, and (unless
 // downgrade) only to a newer release. running must be a release tag too, unless downgrades are allowed.
 func (u AgentUpdate) Check(running, target string) error {
 	if !u.Allow {
@@ -77,7 +77,7 @@ func (u AgentUpdate) Check(running, target string) error {
 	}
 	from, err := version.Parse(running)
 	if err != nil {
-		return fmt.Errorf("running amc %q is not a release: cannot tell newer from older (agent.update.downgrade)", running)
+		return fmt.Errorf("running monitoring-agent %q is not a release: cannot tell newer from older (agent.update.downgrade)", running)
 	}
 	if version.Compare(to, from) <= 0 {
 		return fmt.Errorf("%s is not newer than the running %s (agent.update.downgrade is off)", target, running)

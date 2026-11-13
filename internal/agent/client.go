@@ -61,10 +61,10 @@ func (c *Client) do(ctx context.Context, method, rel string, body []byte, sign b
 		ts := strconv.FormatInt(c.now().Unix(), 10)
 		nonce := Nonce()
 		sig := ed25519.Sign(c.Key, SignString(method, u.RequestURI(), ts, nonce, body))
-		req.Header.Set("X-Amc-Host", c.Host)
-		req.Header.Set("X-Amc-Time", ts)
-		req.Header.Set("X-Amc-Nonce", nonce)
-		req.Header.Set("X-Amc-Signature", base64.StdEncoding.EncodeToString(sig))
+		req.Header.Set("X-Mon-Host", c.Host)
+		req.Header.Set("X-Mon-Time", ts)
+		req.Header.Set("X-Mon-Nonce", nonce)
+		req.Header.Set("X-Mon-Signature", base64.StdEncoding.EncodeToString(sig))
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -143,7 +143,7 @@ type UpdateStatus struct {
 }
 
 // Inventory (v0.15.0) is sent at start and whenever it changes: the agent's versions, the revision it runs and the
-// host's services (<prefix>/inventory.json, written by amc apply / update as root).
+// host's services (<prefix>/inventory.json, written by monitoring-agent apply / update as root).
 type Inventory struct {
 	Versions map[string]string `json:"versions,omitempty"`
 	Revision int64             `json:"revision"`

@@ -1,6 +1,6 @@
-// Package collector gets the collector amc installs: monitoring-collector, our own OpenTelemetry Collector build
-// (collector/ in this repository, phases D1-D3). It comes from the SAME signed release as amc: SHA256SUMS is checked
-// against the release key embedded in amc before the large download, the binary against its line in SHA256SUMS
+// Package collector gets the collector monitoring-agent installs: monitoring-collector, our own OpenTelemetry Collector build
+// (collector/ in this repository, phases D1-D3). It comes from the SAME signed release as monitoring-agent: SHA256SUMS is checked
+// against the release key embedded in monitoring-agent before the large download, the binary against its line in SHA256SUMS
 // while it is written. Nothing else is trusted (no URL, no checksum from answers or from the network).
 package collector
 
@@ -63,13 +63,16 @@ const (
 
 var tagRE = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 
-// Release is the collector of amc release Version (e.g. v0.19.0). Base, Key and HTTP are for tests.
+// Release is the collector of monitoring-agent release Version (e.g. v0.19.0). Base, Key and HTTP are for tests.
 type Release struct {
 	Version string
 	Base    string // default releaseBase
-	Key     []byte // default keys.ReleasePub
-	HTTP    *http.Client
-	// Dir: keep the download here and reuse it while its sha256 matches (`amc update` plans and then applies:
+	// Mirror (v0.24.0, answers release_mirror): tried first; any error -> Base. Same signature check.
+	Mirror string
+	Log    io.Writer // where a mirror fallback is reported (nil = nowhere)
+	Key    []byte    // default keys.ReleasePub
+	HTTP   *http.Client
+	// Dir: keep the download here and reuse it while its sha256 matches (`monitoring-agent update` plans and then applies:
 	// one download, not two). "" = into the directory Fetch is given. The caller removes Dir.
 	Dir string
 
@@ -145,7 +148,20 @@ func (r *Release) Fetch(ctx context.Context, arch string, want [32]byte, dir str
 }
 
 func (r *Release) open(ctx context.Context, name string, limit int64) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.Base+r.Version+"/"+name, nil)
+	if r.Mirror != "" {
+		resp, err := r.openAt(ctx, r.Mirror, name, limit)
+		if err == nil {
+			return resp, nil
+		}
+		if r.Log != nil {
+			fmt.Fprintf(r.Log, "release mirror: %v; using %s\n", err, r.Base)
+		}
+	}
+	return r.openAt(ctx, r.Base, name, limit)
+}
+
+func (r *Release) openAt(ctx context.Context, base, name string, limit int64) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+r.Version+"/"+name, nil)
 	if err != nil {
 		return nil, err
 	}

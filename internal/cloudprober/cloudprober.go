@@ -1,4 +1,4 @@
-// Package cloudprober pins the Cloudprober release amc installs for the probes (v0.12.0) and downloads it the
+// Package cloudprober pins the Cloudprober release monitoring-agent installs for the probes (v0.12.0) and downloads it the
 // same safe way as the collector: the tarball is checked against the pinned SHA-256 before anything is
 // unpacked, and only the cloudprober binary is taken out of it.
 package cloudprober
@@ -21,7 +21,7 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 )
 
-// Version is the pinned Cloudprober release (github.com/cloudprober/cloudprober, Apache-2.0). Change = new amc release.
+// Version is the pinned Cloudprober release (github.com/cloudprober/cloudprober, Apache-2.0). Change = new monitoring-agent release.
 const Version = "0.14.6"
 
 // Checksums from the GitHub release API ("digest" of each asset), checked 2026-10-21.

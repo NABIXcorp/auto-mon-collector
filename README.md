@@ -7,6 +7,18 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 
 > **Status: v0.21.1, early.** Detection, generator, interactive questions and the install engine are tested on
 > real hosts. Releases are signed; the one-liner below works. Design: [docs/design.md](docs/design.md).
+> Next release (after v0.23.1): the old product name is gone. Minimum for `update`: a host on v0.21.0 or newer
+> (users `monitoring` / `monitoring-agent`, `state.json`, `.monitoring.lock`). `apply` / `update` remove the old
+> symlink `bin/amc` and leftovers of the old name; release assets are only `monitoring-agent-linux-*`; get.sh reads only
+> `MONITORING_VERSION`; the agent's signed requests carry `X-Mon-Host` / `-Time` / `-Nonce` / `-Signature` (same
+> signed string) and report only the version keys `monitoring-agent` / `monitoring-prober`. The control plane must
+> accept the new headers before this release goes to a host.
+> Also next: `monitoring-agent install --console URL --token-stdin [--yes] [--host NAME]` = a new host in one step
+> (the control plane's `v1/bootstrap` gives project, host name, agent block, allowlist template, an OTLP gateway
+> endpoint + this host's own gateway token and a release mirror; then plan, "Apply?", apply + start, enrol with the
+> same one-time token). `release_mirror:` in answers.yaml (https, ends in `/`): the collector and self-update try that
+> mirror of the signed release files first, GitHub when it fails (same signature check); get.sh:
+> `MONITORING_RELEASE_BASE` (with `MONITORING_VERSION`).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
 > paths can be answered (`services.tomcat.access_log` / `logs`); the project is asked interactively.
@@ -25,7 +37,7 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > (`services.oracle.capacity`, log stream `oracle_capacity`).
 > v0.9.1: HTTP metrics renamed `tomcat.access.*` (the app's own OpenTelemetry agent already sends `http.server.*`),
 > processor `delta_to_cumulative` (the old name is deprecated).
-> v0.10.0: `amc update`: a new release on an installed host with one command, nothing to copy (the saved
+> v0.10.0: `monitoring-agent update`: a new release on an installed host with one command, nothing to copy (the saved
 > `answers.yaml` + the installed `site.d`); an up-to-date host is not restarted.
 > v0.10.1: `update` does not restart the collector when only the installer version changed (identical
 > configuration); the connection-count helper sets its file mode itself (a default ACL could make it world-writable).
@@ -35,14 +47,14 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > (pinned v0.14.6, sha256-checked, unit `monitoring-cloudprober`, only installed when there are probes; CAP_NET_RAW only for
 > ping), scraped by the local collector: `cloudprober_total` / `_success` / `_latency` (µs) / `_resp_code` /
 > `_ssl_earliest_cert_expiry_sec`, labels `probe`, `dst`, `target`. See [docs/design.md](docs/design.md#9-answers-file-no-secrets).
-> v0.16.0: remote amc update through the agent, OFF by default. The control plane may ask a host to update
-> amc to a signed release (`update {version, id}` in the signed document); the agent only starts the root oneshot unit
-> `monitoring-update` (polkit: start that unit only), which runs `amc self-update`: it re-verifies the request as root
+> v0.16.0: remote update through the agent, OFF by default. The control plane may ask a host to update
+> monitoring-agent to a signed release (`update {version, id}` in the signed document); the agent only starts the root oneshot unit
+> `monitoring-update` (polkit: start that unit only), which runs `monitoring-agent self-update`: it re-verifies the request as root
 > with the key pinned in `answers.yaml`, applies the host owner's policy (`agent.update: {allow, downgrade, window}`, read
 > from `answers.yaml` only), downloads the release from this repository only, checks `SHA256SUMS.sig` with the release
-> key embedded in amc (the same check as `get.sh`), keeps `bin/amc.before-<version>`, then runs the new `amc update`;
+> key embedded in monitoring-agent (the same check as `get.sh`), keeps `bin/monitoring-agent.before-<version>`, then runs the new `update`;
 > the old binary goes back when the new one fails. `apply` / `update` / `self-update` never run at the same time
-> (`<prefix>/.amc.lock`). See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
+> (`<prefix>/.monitoring.lock`). See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
 > v0.23.0: collector overlays from the control plane, OFF by default (`answers.yaml agent.site.allow`). Only a fixed
 > catalog: processors `filter` / `transform` / `tail_sampling` and the processor lists of pipelines (no receivers,
 > exporters, extensions, no `${...}`), checked by the agent and again by root; installed as `config/site.d/cp-*.yaml`
@@ -51,19 +63,19 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and
-> `monitoring-agent` (was `amc-agent`). `apply --start` / `update` create them, give them the same groups and log ACLs
+> `monitoring-agent`. `apply --start` / `update` create them, give them the same groups and log ACLs
 > (checked with a real read), move the owners of `data/` and `agent/`, then, only after the units run, remove the old
 > users (their ACL entries and group memberships first). A failed start puts the old users and owners back. The
-> leftovers of older layouts (bin/otelcol-contrib, bin/cloudprober, bin/amc.previous, the old helper data) are removed
+> leftovers of older layouts (bin/otelcol-contrib, bin/cloudprober, the old helper data) are removed
 > after a successful start.
 > v0.20.0: one naming standard, everything that runs is `monitoring-*`: the installer / agent binary is
-> `monitoring-agent` (was `amc`; `bin/amc` stays as a symlink, the command still works under the old name),
+> `monitoring-agent`,
 > the prober `monitoring-prober` (Cloudprober: unit, `bin/monitoring-prober`, `config/prober/prober.cfg` +
-> `targets-*.json`), `state.json` (was `amc-state.json`), `.monitoring.lock`, polkit `50-monitoring-agent.rules`,
-> release assets `monitoring-agent-linux-*` (also still as `amc-linux-*` for older hosts), `keys/release.pub`,
-> `MONITORING_VERSION` for get.sh (`AMC_VERSION` still works). An update switches a host and keeps the old
+> `targets-*.json`), `state.json`, `.monitoring.lock`, polkit `50-monitoring-agent.rules`,
+> release assets `monitoring-agent-linux-*`, `keys/release.pub`,
+> `MONITORING_VERSION` for get.sh. An update switches a host and keeps the old
 > names for a rollback. Metric and stream names do not change. The Unix users followed in v0.21.0.
-> v0.19.0: amc installs `monitoring-collector` (same signed release, checked with the release key in amc; "up to date" =
+> v0.19.0: the installer sets up `monitoring-collector` (same signed release, checked with the release key in it; "up to date" =
 > sha256, not the version) instead of `otelcol-contrib` + the helper units netconn / procs / kmsg / sshd: built-in
 > receivers `netconn` and `procs`, kernel warnings + SSH logins from the journal (`config/journal.yaml`: fixed filters,
 > only the message leaves the receiver, unknown SSH user names masked before the disk queue, also names with spaces
@@ -76,10 +88,10 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > v0.14.0: probes may carry `path: private | public | other` (label `path` in the metrics: mesh per address); ping =
 > one probe per target (a ping of an unresolvable name lost its `target` label); the agent retries once quickly after
 > the first 401; backup / rollback keep owner, setgid and file modes (agent directory after a rollback).
-> v0.13.0: `amc agent`: a control plane changes a host's PROBES online (signed lists, long poll, outbound only, no open
-> port). Data only (no commands, no paths), user `amc-agent` without root (polkit: may restart Cloudprober only),
+> v0.13.0: `monitoring-agent agent`: a control plane changes a host's PROBES online (signed lists, long poll, outbound only, no open
+> port). Data only (no commands, no paths), its own user without root (polkit: may restart Cloudprober only),
 > allowlist owned by the host (`agent.allow` + project template `--agent-allow FILE`), `cloudprober --configtest` before
-> every change. Enrol once: `sudo amc agent enrol --token-stdin`. Cloudprober files moved to `config/cloudprober/`.
+> every change. Enrol once: `sudo monitoring-agent agent enrol --token-stdin`. Cloudprober files moved to `config/cloudprober/`.
 > See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
 
 ## What it does
@@ -119,7 +131,7 @@ monitoring-agent checks the signature and the sha256 itself before it installs i
 
 ```bash
 curl -fsSLO https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh
-less get.sh && sudo bash get.sh            # AMC_VERSION=v0.2.0 pins a release
+less get.sh && sudo bash get.sh            # MONITORING_VERSION=v0.23.1 pins a release
 ```
 
 ## Principles

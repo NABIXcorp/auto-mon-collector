@@ -59,10 +59,6 @@ jobs:
           release "$w/sums" "$k/test.pem";  echo x >> "$w/sums/monitoring-agent-linux-amd64"
           (cd "$w/sums" && sha256sum monitoring-agent-linux-amd64 monitoring-agent-linux-arm64 get.sh > SHA256SUMS)      # sums re-made, old signature
           release "$w/other" "$k/other.pem"                                                    # signed by somebody else
-          release "$w/old" "$k/test.pem"   # a release before v0.20.0: only amc-linux-<arch> (get.sh falls back to it)
-          (cd "$w/old" && mv monitoring-agent-linux-amd64 amc-linux-amd64 && mv monitoring-agent-linux-arm64 amc-linux-arm64 &&
-            sha256sum amc-linux-amd64 amc-linux-arm64 get.sh > SHA256SUMS)
-          openssl dgst -sha256 -sign "$k/test.pem" -out "$w/old/SHA256SUMS.sig" "$w/old/SHA256SUMS"
           python3 -m http.server 8098 -d "$w" -b 127.0.0.1 > /dev/null 2>&1 &
           sleep 1
           shellcheck --severity=warning "$w/good/get.sh"
@@ -70,9 +66,6 @@ jobs:
           set +e; out=$(MONITORING_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/good bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
           echo "good: rc=$rc $out"
           [ "$rc" -eq 0 ] && grep -q 'signature and sha256 verified' <<< "$out" && grep -q '^auto-mon-collector ' <<< "$out" || die "good release did not run"
-          set +e; out=$(MONITORING_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/old bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
-          echo "old: rc=$rc $out"
-          [ "$rc" -eq 0 ] && grep -q 'downloading amc-linux-amd64' <<< "$out" && grep -q '^auto-mon-collector ' <<< "$out" || die "a release before v0.20.0 did not run"
           for case in bin:"CHECKSUM MISMATCH" sums:"SIGNATURE CHECK FAILED" other:"SIGNATURE CHECK FAILED"; do
             set +e; out=$(MONITORING_BASE_URL_FOR_TESTS=http://127.0.0.1:8098/${case%%:*} bash "$w/good/get.sh" version 2>&1); rc=$?; set -e
             echo "${case%%:*}: rc=$rc $out"
@@ -159,7 +152,7 @@ jobs:
           sudo apt-get install -y -qq acl > /dev/null
           alert=/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log
           sudo install -d -m 750 "$(dirname "$alert")" && echo "2026-10-05T10:00:00.000000+00:00" | sudo tee "$alert" > /dev/null
-          sudo chmod 640 "$alert"                         # root only: amc must grant the collector an ACL
+          sudo chmod 640 "$alert"                         # root only: the installer must grant the collector an ACL
           sudo install -d -m 700 /opt/monitoring/secrets
           printf "OO_ENDPOINT='http://127.0.0.1:4320'\nOO_AUTH='Basic fake'\nORACLE_MON_PASSWORD='123456'\n" \
             | sudo tee /opt/monitoring/secrets/collector.env > /dev/null
@@ -172,8 +165,8 @@ jobs:
           # v0.19.0: the collector of THIS commit (artifact of the collector job) instead of a release download
           mc=$PWD/mc/monitoring-collector-linux-amd64; chmod 755 "$mc"; "$mc" --version
           printf '#!/bin/sh\ncase "$1" in plan|apply|update) s=$1; shift; exec %s "$s" --collector-file %s "$@";; esac\nexec %s "$@"\n' \
-            "$PWD/dist/monitoring-agent-linux-amd64" "$mc" "$PWD/dist/monitoring-agent-linux-amd64" > amcw
-          chmod 755 amcw; amc=$PWD/amcw
+            "$PWD/dist/monitoring-agent-linux-amd64" "$mc" "$PWD/dist/monitoring-agent-linux-amd64" > maw
+          chmod 755 maw; ma=$PWD/maw
           # Fake backend: every OTLP/HTTP export is kept per stream (header stream-name) in /tmp/oo/<stream>.bin,
           # gunzipped: protobuf keeps strings as plain bytes, so grep finds (or must not find) a log line.
           mkdir -p /tmp/oo
@@ -206,7 +199,7 @@ jobs:
           PY
           sleep 2
           echo "::group::plan (check mode)"
-          sudo $amc plan --host-dir examples/oracle-db | tee plan1.txt   # pipefail: amc's exit code counts
+          sudo $ma plan --host-dir examples/oracle-db | tee plan1.txt   # pipefail: the installer's exit code counts
           echo "::endgroup::"
           must 'validate: VALID' plan1.txt
           must 'no load / start errors' plan1.txt
@@ -216,13 +209,13 @@ jobs:
           # A GENERATED host part (detect.json + answers: Oracle + Tomcat + HTTP checks) must pass the real
           # collector too: validate + smoke run with every receiver block the generator writes.
           echo "::group::plan with a generated host part"
-          sudo $amc plan --answers examples/app-host/answers.yaml --detect-json examples/app-host/detect.json | tee plan-gen.txt
+          sudo $ma plan --answers examples/app-host/answers.yaml --detect-json examples/app-host/detect.json | tee plan-gen.txt
           echo "::endgroup::"
           must 'monitoring: oracle, tomcat' plan-gen.txt
           must 'validate: VALID' plan-gen.txt
           must 'no load / start errors' plan-gen.txt
           # v0.4.0: the CDB root block is switched on in this example (so the smoke run above built it too)
-          $amc generate --answers examples/app-host/answers.yaml --detect-json examples/app-host/detect.json --out gen-app > /dev/null
+          $ma generate --answers examples/app-host/answers.yaml --detect-json examples/app-host/detect.json --out gen-app > /dev/null
           must 'ORACLE_CDB_SERVICE=orcl' gen-app/host.env
           # v0.11.0: checks.tcp joins the listener check in one tcp_check receiver (the smoke run above started it)
           must 'endpoint: 192.0.2.10:1521' gen-app/host.yaml
@@ -232,16 +225,16 @@ jobs:
           sed -e 's/C##OTEL_MON/otel_mon/' -e 's/^\( *\)cdb_service:.*/\1non_cdb: true/' examples/app-host/answers.yaml > noncdb.yaml
           must 'non_cdb: true' noncdb.yaml
           echo "::group::plan with a non-CDB database"
-          sudo $amc plan --answers noncdb.yaml --detect-json examples/app-host/detect.json | tee plan-noncdb.txt
+          sudo $ma plan --answers noncdb.yaml --detect-json examples/app-host/detect.json | tee plan-noncdb.txt
           echo "::endgroup::"
           must 'validate: VALID' plan-noncdb.txt
           must 'no load / start errors' plan-noncdb.txt
-          $amc generate --answers noncdb.yaml --detect-json examples/app-host/detect.json --out gen-noncdb > /dev/null
+          $ma generate --answers noncdb.yaml --detect-json examples/app-host/detect.json --out gen-noncdb > /dev/null
           must 'ORACLE_NONCDB=on' gen-noncdb/host.env
           if grep -q 'ORACLE_CDB_SERVICE' gen-noncdb/host.env; then die "non-CDB: no CDB root checks expected"; fi
           # Tomcat started by systemd (v0.3.0): daily JULI files + renamed access log, two includes in one receiver.
           echo "::group::plan with a systemd Tomcat (daily log files)"
-          sudo $amc plan --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json | tee plan-juli.txt
+          sudo $ma plan --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json | tee plan-juli.txt
           echo "::endgroup::"
           must 'validate: VALID' plan-juli.txt
           must 'no load / start errors' plan-juli.txt
@@ -250,7 +243,7 @@ jobs:
           # project and the service list, a PDB name, Enter for user + non-CDB + HTTP checks + 2 Tomcat log paths,
           # then "n" for "Apply now?".
           echo "::group::interactive plan (pseudo-terminal)"
-          printf '\n\napppdb\n\n\n\n\n\nn\n' | sudo script -qec "$amc plan --detect-json examples/app-host/detect.json" /dev/null | tee interactive.txt
+          printf '\n\napppdb\n\n\n\n\n\nn\n' | sudo script -qec "$ma plan --detect-json examples/app-host/detect.json" /dev/null | tee interactive.txt
           echo "::endgroup::"
           must 'Project \[-\]' interactive.txt
           must 'Tomcat access log \[/opt/tomcat/logs/localhost_access_log' interactive.txt
@@ -261,64 +254,35 @@ jobs:
           must 'Apply now?' interactive.txt
           if grep -q '^DONE:' interactive.txt; then die "answered n to Apply now, but it applied"; fi
           [ ! -e /opt/monitoring/answers.yaml ] || die "plan wrote answers.yaml"
-          # v0.19.0: a host on the OLD layout first (the released v0.18.0: otelcol-contrib + 4 helper units), then the
-          # switch. The signed v0.18.0 amc is checked like get.sh does (signature + sha256) before it runs.
-          echo "::group::install v0.18.0 (old layout)"
-          r18=https://github.com/NABIXcorp/auto-mon-collector/releases/download/v0.18.0
-          mkdir -p v18 && (cd v18 && curl -fsSLO "$r18/SHA256SUMS" -fsSLO "$r18/SHA256SUMS.sig" -fsSLO "$r18/amc-linux-amd64")
-          openssl dgst -sha256 -verify keys/release.pub -signature v18/SHA256SUMS.sig v18/SHA256SUMS
-          (cd v18 && grep ' amc-linux-amd64$' SHA256SUMS | sha256sum -c -) && chmod 755 v18/amc-linux-amd64
-          sudo v18/amc-linux-amd64 apply --host-dir examples/oracle-db --start | tee apply18.txt
+          # upgrade: a host installed by the signed v0.21.0 (the oldest layout this release still supports: users
+          # monitoring / monitoring-agent, state.json, .monitoring.lock), checked like get.sh does (signature + sha256)
+          echo "::group::install v0.21.0"
+          r21=https://github.com/NABIXcorp/auto-mon-collector/releases/download/v0.21.0
+          mkdir -p v21 && (cd v21 && curl -fsSLO "$r21/SHA256SUMS" -fsSLO "$r21/SHA256SUMS.sig" -fsSLO "$r21/monitoring-agent-linux-amd64")
+          openssl dgst -sha256 -verify keys/release.pub -signature v21/SHA256SUMS.sig v21/SHA256SUMS
+          (cd v21 && grep ' monitoring-agent-linux-amd64$' SHA256SUMS | sha256sum -c -) && chmod 755 v21/monitoring-agent-linux-amd64
+          sudo v21/monitoring-agent-linux-amd64 apply --host-dir examples/oracle-db --start | tee apply21.txt
           echo "::endgroup::"
-          systemctl is-active monitoring-otelcol monitoring-netconn monitoring-kmsg monitoring-procs monitoring-sshd \
-            || die "v0.18.0 units not active"
-          # a switch that cannot start (OTLP port 1521 is held by the fake listener; validate binds nothing, no smoke
-          # run) must bring the OLD units back, never leave the host without monitoring
-          echo "::group::switch that fails (must roll back to v0.18.0)"
-          cp -r examples/oracle-db broken-sw && mkdir -p broken-sw/site.d
-          printf 'receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 127.0.0.1:1521\n' > broken-sw/site.d/99-broken.yaml
-          set +e; sudo $amc apply --host-dir broken-sw --start --no-smoke | tee sw0.txt; rc=${PIPESTATUS[0]}; set -e
+          systemctl is-active monitoring-collector || die "v0.21.0: monitoring-collector not active"
+          # the symlink bin/amc (the product's old name) that v0.20.0 .. v0.23.x kept: this release removes it
+          sudo ln -s monitoring-agent /opt/monitoring/bin/amc
+          echo "::group::apply --start (upgrade from v0.21.0)"
+          sudo $ma apply --host-dir examples/oracle-db --start | tee apply.txt
           echo "::endgroup::"
-          [ "$rc" -eq 1 ] || die "a rolled-back switch must exit 1 (got $rc)"
-          must 'units of the previous state linked again' sw0.txt
-          must 'rolled back: the previous state runs again' sw0.txt
-          systemctl is-active monitoring-otelcol monitoring-netconn monitoring-kmsg monitoring-procs monitoring-sshd \
-            || die "old units not running after the failed switch"
-          [ ! -e /etc/systemd/system/monitoring-collector.service ] || die "new unit left linked after the rollback"
-          sudo test -x /opt/monitoring/netconn/otel-sshd.sh || die "helper scripts not restored"
-          # v0.21.0: the failed switch also moved the users back: old user, old owner, no new user
-          id otelcol-contrib > /dev/null || die "old user otelcol-contrib gone after the rollback"
-          if id monitoring 2>/dev/null; then die "new user monitoring left after the rollback"; fi
-          [ "$(sudo stat -c '%U' /opt/monitoring/data/file_storage)" = otelcol-contrib ] || die "data/ not owned by otelcol-contrib again"
-          systemctl show -p User --value monitoring-otelcol | grep -qx otelcol-contrib || die "old unit not run as otelcol-contrib"
-          echo "::group::apply --start (the switch)"
-          sudo $amc apply --host-dir examples/oracle-db --start | tee apply.txt
-          echo "::endgroup::"
-          must 'STOP   monitoring-otelcol.service (replaced by monitoring-collector' apply.txt
+          must 'remove old link /opt/monitoring/bin/amc' apply.txt
+          [ ! -L /opt/monitoring/bin/amc ] || die "old link bin/amc left"
           must 'monitoring-collector.service active' apply.txt
           systemctl is-active monitoring-collector || die "monitoring-collector not active"
-          for u in monitoring-otelcol monitoring-netconn monitoring-kmsg monitoring-procs monitoring-sshd; do
-            if systemctl is-active -q $u; then die "$u still running"; fi
-            [ ! -e /etc/systemd/system/$u.service ] || die "$u still linked"
-          done
-          [ ! -e /opt/monitoring/netconn/otel-sshd.sh ] || die "helper scripts left"
-          # v0.21.0: the switch moved the users: monitoring runs the collector, owns data/, reads the alert log;
-          # otelcol-contrib is gone (with its ACL entries); the old binaries are removed after the successful start
-          must 'MOVE   user otelcol-contrib -> monitoring' apply.txt
-          must 'old user otelcol-contrib removed' apply.txt
-          if id otelcol-contrib 2>/dev/null; then die "old user otelcol-contrib left"; fi
           systemctl show -p User --value monitoring-collector | grep -qx monitoring || die "collector not run as monitoring"
           [ -z "$(sudo find /opt/monitoring/data -not -user monitoring -print -quit)" ] || die "files in data/ not owned by monitoring"
-          if sudo getfacl -p --omit-header "$alert" | grep -q '^user:[0-9]'; then die "a numeric ACL entry (old user) left on the alert log"; fi
-          [ ! -e /opt/monitoring/bin/otelcol-contrib ] || die "old binary bin/otelcol-contrib left after the successful switch"
           # least privilege (accepted 2026-11-03): ONLY the collector process has the journal group
           jg=$(getent group systemd-journal | cut -d: -f3)
           pid=$(systemctl show -p MainPID --value monitoring-collector)
           grep -q "^Groups:.*\b$jg\b" /proc/$pid/status || die "collector lacks the journal group"
           # v0.19.0 end to end, records at the fake backend: kernel line, CPU burner, connection counts, sshd lines
           sleep 3
-          # (journald takes "amc-ci:" as the program name and strips it from MESSAGE)
-          echo "<3>amc-ci: Out of memory: Killed process 4242 (ci-test)" | sudo tee /dev/kmsg > /dev/null
+          # (journald takes "mon-ci:" as the program name and strips it from MESSAGE)
+          echo "<3>mon-ci: Out of memory: Killed process 4242 (ci-test)" | sudo tee /dev/kmsg > /dev/null
           sudo logger -t sshd "Accepted publickey for ciuser from 192.0.2.10 port 4242 ssh2"
           sudo logger -t sshd "Invalid user Sup3rS3cretPw from 192.0.2.11 port 4243"
           sudo logger -t sshd "Failed password for invalid user Sup3rS3cretPw from 192.0.2.11 port 4243 ssh2"
@@ -327,8 +291,8 @@ jobs:
           sudo logger -t sshd "Server listening on 0.0.0.0 port 22."
           sudo logger -t sudo "ciuser : COMMAND=/usr/bin/echo SudoSecret123"
           # the procs receiver samples every 60 s over 15 s: burn longer than one interval + window. A copy of bash
-          # named amcburn: the receiver reports the command name (comm), never arguments
-          cp /bin/bash /tmp/amcburn && timeout 100 /tmp/amcburn -c 'while :; do :; done' &
+          # named monburn: the receiver reports the command name (comm), never arguments
+          cp /bin/bash /tmp/monburn && timeout 100 /tmp/monburn -c 'while :; do :; done' &
           for i in $(seq 1 30); do grep -qs 'Killed process 4242 (ci-test)' /tmp/oo/kernel.bin && grep -qs 'invalid user \*\*\* 192.0.2.11' /tmp/oo/ssh.bin && break; sleep 1; done
           grep -qs 'Killed process 4242 (ci-test)' /tmp/oo/kernel.bin || { sudo journalctl -u monitoring-collector -n 30 --no-pager; die "kernel line not exported"; }
           grep -qs 'Accepted publickey for ciuser from 192.0.2.10' /tmp/oo/ssh.bin || { sudo journalctl -u monitoring-collector -n 30 --no-pager; die "accepted login not exported"; }
@@ -338,17 +302,17 @@ jobs:
           # still arrive (a long-running follower missed lines in CI on 2026-10-08 with the old helpers)
           sudo journalctl --rotate; sleep 2
           sudo logger -t sshd "Accepted publickey for rotprobe from 192.0.2.98 port 1 ssh2"
-          echo "<3>amcrot: kernel line after rotation" | sudo tee /dev/kmsg > /dev/null
+          echo "<3>monrot: kernel line after rotation" | sudo tee /dev/kmsg > /dev/null
           for i in $(seq 1 25); do grep -qs rotprobe /tmp/oo/ssh.bin && grep -qs "kernel line after rotation" /tmp/oo/kernel.bin && break; sleep 1; done
           grep -qs rotprobe /tmp/oo/ssh.bin || die "sshd line after a journal rotation not exported"
           grep -qs "kernel line after rotation" /tmp/oo/kernel.bin || die "kernel line after a journal rotation not exported"
-          for i in $(seq 1 100); do grep -qs amcburn /tmp/oo/processes.bin && break; sleep 1; done
-          grep -qs amcburn /tmp/oo/processes.bin || die "CPU burner not in the exported top processes"
+          for i in $(seq 1 100); do grep -qs monburn /tmp/oo/processes.bin && break; sleep 1; done
+          grep -qs monburn /tmp/oo/processes.bin || die "CPU burner not in the exported top processes"
           [ -s /tmp/oo/netconn.bin ] || die "no connection counts exported"
           ls -l /tmp/oo
           # detect on the real /proc: the live collector's OTLP port must be seen, the JSON must parse
-          sudo $amc detect
-          sudo $amc detect --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert 4317 in d["listening_ports"], d' \
+          sudo $ma detect
+          sudo $ma detect --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert 4317 in d["listening_ports"], d' \
             || die "detect did not see the collector port 4317"
           # a real read, not `test -r`: since the Ubuntu 26.04 runner `test -r` failed although the ACL grants r
           # (2026-11-02, also on the last green commit); the two diagnostic lines show what `test` is
@@ -357,7 +321,7 @@ jobs:
           sudo runuser -u monitoring -- head -c 1 "$alert" > /dev/null || die "alert log not readable for the collector"
           if id -nG monitoring | grep -qwE 'root|sudo|adm'; then die "collector user in an admin group"; fi
           echo "::group::plan again (must be unchanged)"
-          sudo $amc plan --host-dir examples/oracle-db | tee plan2.txt
+          sudo $ma plan --host-dir examples/oracle-db | tee plan2.txt
           echo "::endgroup::"
           if grep -E '^  (CHANGE|NEW|REMOVE) ' plan2.txt; then die "second plan is not clean"; fi
           must 'CHECK done: 0 failures' plan2.txt
@@ -365,24 +329,24 @@ jobs:
           must 'no load / start errors' plan2.txt
           systemctl is-active monitoring-collector || die "the smoke run disturbed the live collector"
           # Broken update: OTLP on 1521 (held by the fake listener). validate passes (it binds nothing), the
-          # smoke run is skipped -> the collector really fails to start -> amc must roll back.
+          # smoke run is skipped -> the collector really fails to start -> it must roll back.
           echo "::group::broken update (must roll back)"
           cp -r examples/oracle-db broken && mkdir -p broken/site.d
           printf 'receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 127.0.0.1:1521\n' > broken/site.d/99-broken.yaml
-          set +e; sudo $amc apply --host-dir broken --start --no-smoke | tee broken.txt; rc=${PIPESTATUS[0]}; set -e
+          set +e; sudo $ma apply --host-dir broken --start --no-smoke | tee broken.txt; rc=${PIPESTATUS[0]}; set -e
           echo "::endgroup::"
           [ "$rc" -eq 1 ] || die "a rolled-back apply must exit 1 (got $rc)"
           must 'ROLLED BACK' broken.txt
           must 'rolled back: the previous state runs again' broken.txt
           systemctl is-active monitoring-collector || die "previous state not running after the rollback"
           [ ! -e /opt/monitoring/config/site.d/99-broken.yaml ] || die "the broken file survived the rollback"
-          sudo $amc plan --host-dir examples/oracle-db --no-smoke | tee plan3.txt
+          sudo $ma plan --host-dir examples/oracle-db --no-smoke | tee plan3.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' plan3.txt; then die "after the rollback the host is not back to the good state"; fi
           # v0.9.0 end to end: access log lines -> signal_to_metrics -> delta_to_cumulative -> metrics OUT of the real
           # collector (OTLP JSON to the fake backend, stream http_e2e). The live collector is stopped meanwhile (same ports);
           # the test collector keeps its queue in /tmp (no root-owned files in the live data dir).
           echo "::group::HTTP metrics from the access log"
-          $amc generate --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json --out gen-http > /dev/null
+          $ma generate --answers examples/tomcat-systemd/answers.yaml --detect-json examples/tomcat-systemd/detect.json --out gen-http > /dev/null
           must 'signal_to_metrics/http' gen-http/host.yaml
           sudo install -d /opt/tomcat10/logs /tmp/http-e2e/fs
           acc=/opt/tomcat10/logs/access_log.$(date +%F).log
@@ -426,49 +390,49 @@ jobs:
           sudo systemctl start monitoring-collector
           for i in $(seq 1 20); do systemctl is-active -q monitoring-collector && break; sleep 1; done
           systemctl is-active monitoring-collector || die "live collector did not come back after the HTTP metrics test"
-          # v0.10.0 end to end: amc update = a new release on an installed host without copying files (saved
+          # v0.10.0 end to end: update = a new release on an installed host without copying files (saved
           # answers.yaml + the installed site.d). An up-to-date host must NOT be restarted (same MainPID).
-          echo "::group::amc update"
-          set +e; sudo $amc update --no-smoke > upd0.txt 2>&1; rc=$?; set -e; cat upd0.txt
+          echo "::group::update"
+          set +e; sudo $ma update --no-smoke > upd0.txt 2>&1; rc=$?; set -e; cat upd0.txt
           { [ "$rc" -eq 2 ] && grep -q 'answers.yaml is missing' upd0.txt; } || die "update without saved answers must stop (exit 2, got $rc)"
           td=examples/tomcat-systemd
           mkdir -p site-upd && printf 'processors:\n  batch/ci_update: {}\n' > site-upd/10-ci.yaml
-          sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start | tee upd1.txt
+          sudo $ma apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start | tee upd1.txt
           must 'monitoring-collector.service active' upd1.txt
           { sudo test -s /opt/monitoring/answers.yaml && sudo test -s /opt/monitoring/config/site.d/10-ci.yaml; } || die "answers / site.d not installed"
           pid=$(systemctl show -p MainPID --value monitoring-collector)
-          sudo $amc update --detect-json $td/detect.json | tee upd2.txt
+          sudo $ma update --detect-json $td/detect.json | tee upd2.txt
           must 'up to date: nothing to change, nothing restarted' upd2.txt
           [ "$(systemctl show -p MainPID --value monitoring-collector)" = "$pid" ] || die "an up-to-date update restarted the collector"
           sudo test -s /opt/monitoring/config/site.d/10-ci.yaml || die "update removed the installed site.d"
           # a changed saved answer (stands for a release with a changed template): --plan changes nothing, then apply
           sudo sed -i 's/^project: Shop online$/project: Shop update/' /opt/monitoring/answers.yaml
-          sudo $amc update --plan --detect-json $td/detect.json | tee upd3.txt
+          sudo $ma update --plan --detect-json $td/detect.json | tee upd3.txt
           must 'change(s) planned' upd3.txt
           [ "$(systemctl show -p MainPID --value monitoring-collector)" = "$pid" ] || die "update --plan restarted the collector"
-          sudo $amc update --detect-json $td/detect.json | tee upd4.txt
+          sudo $ma update --detect-json $td/detect.json | tee upd4.txt
           must 'DONE: 0 failure' upd4.txt
           sudo grep -q 'project=Shop+update' /opt/monitoring/config/host.env || die "update did not apply the saved answers"
           sudo test -s /opt/monitoring/config/site.d/10-ci.yaml || die "update removed the installed site.d"
           systemctl is-active monitoring-collector || die "collector not active after the update"
           # v0.10.1: a new installer with an identical configuration (only VERSION differs): written, NOT restarted
-          sudo sed -i 's/^installer=.*/installer=amc older/' /opt/monitoring/VERSION
+          sudo sed -i 's/^installer=.*/installer=older/' /opt/monitoring/VERSION
           pid=$(systemctl show -p MainPID --value monitoring-collector)
-          sudo $amc update --detect-json $td/detect.json | tee upd5.txt
+          sudo $ma update --detect-json $td/detect.json | tee upd5.txt
           must 'collector NOT restarted' upd5.txt
           [ "$(systemctl show -p MainPID --value monitoring-collector)" = "$pid" ] || die "a VERSION-only update restarted the collector"
-          if sudo grep -q 'installer=amc older' /opt/monitoring/VERSION; then die "VERSION not written"; fi
-          if grep -q 'Run `amc apply`' upd2.txt upd3.txt upd5.txt; then die "update printed the engine's amc apply hint"; fi
+          if sudo grep -q 'installer=older' /opt/monitoring/VERSION; then die "VERSION not written"; fi
+          if grep -q 'Run `monitoring-agent apply`' upd2.txt upd3.txt upd5.txt; then die "update printed the engine's apply hint"; fi
           echo "::endgroup::"
           # v0.12.0 end to end: probes -> Cloudprober unit (pinned download, --configtest, CAP_NET_RAW for ping) -> metrics
           # on 127.0.0.1:9313 -> scraped by the live collector. Then probes removed: unit stopped, unlinked, files gone.
           echo "::group::probes (Cloudprober)"
           python3 -m http.server 18080 --bind 127.0.0.1 > /dev/null 2>&1 &
           { cat $td/answers.yaml; printf 'probes:\n  interval_s: 10\n  tcp:\n    - {name: ci_tcp, host: 127.0.0.1, port: 18080}\n  http:\n    - {name: ci_http, url: "http://127.0.0.1:18080/"}\n    - {name: ci_http404, url: "http://127.0.0.1:18080/no-such-file"}\n  ping:\n    - {name: ci_ping, host: 127.0.0.1}\n'; } > probes.yaml
-          sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr0.txt
+          sudo $ma plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr0.txt
           must 'monitoring-prober --configtest: OK' pr0.txt
           must 'NEW    systemd/monitoring-prober.service' pr0.txt
-          sudo $amc apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr1.txt
+          sudo $ma apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr1.txt
           must 'monitoring-prober.service active' pr1.txt
           systemctl show -p User --value monitoring-prober | grep -qx monitoring || die "prober not run as the collector user"
           ok=""
@@ -489,14 +453,14 @@ jobs:
           scraped() { m=$(curl -fsS http://127.0.0.1:8888/metrics) && grep -qE 'otelcol_receiver_accepted_metric_points.*receiver="prometheus/cloudprober".* [1-9]' <<< "$m"; }
           for i in $(seq 1 40); do scraped && break; sleep 1; done
           scraped || die "the collector does not scrape cloudprober"
-          sudo $amc plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr2.txt
+          sudo $ma plan --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee pr2.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' pr2.txt; then die "plan with probes is not clean after apply"; fi
-          sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr3.txt
+          sudo $ma apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr3.txt
           must 'REMOVE config/prober/prober.cfg' pr3.txt
           must 'stopped, disabled and unlinked' pr3.txt
           if systemctl is-active -q monitoring-prober; then die "cloudprober still running without probes"; fi
           [ ! -e /etc/systemd/system/monitoring-prober.service ] || die "cloudprober unit link left"
-          sudo $amc apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr4.txt
+          sudo $ma apply --answers probes.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee pr4.txt
           must 'monitoring-prober.service active' pr4.txt
           pkill -f "http.server 18080" || true
           echo "::endgroup::"
@@ -512,19 +476,19 @@ jobs:
           sleep 1
           printf 'domains: ["localhost"]\nnetworks: ["127.0.0.0/8"]\nports: [18080]\nmin_interval_s: 10\n' > allow.yaml
           { cat $td/answers.yaml; printf 'agent:\n  url: http://127.0.0.1:18091/agent/\n  control_plane_key: "%s"\n  site:\n    allow: true\n' "$(cat cp.pub)"; } > agent.yaml
-          sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag0.txt
+          sudo $ma plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag0.txt
           must 'agent allowlist: domains localhost; networks 127.0.0.0/8; ports 18080' ag0.txt
           must 'NEW    systemd/monitoring-agent.service' ag0.txt
           must 'NEW    config/agent-allow.yaml' ag0.txt
-          sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag1.txt
+          sudo $ma apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag1.txt
           must 'monitoring-agent.service active' ag1.txt
           must 'monitoring-prober.service active' ag1.txt
           id monitoring-agent > /dev/null || die "user monitoring-agent missing"
           sudo test -f /etc/polkit-1/rules.d/50-monitoring-agent.rules || die "polkit rule missing"
           [ "$(stat -c '%a %G' /opt/monitoring/config/prober)" = "2775 monitoring-agent" ] || die "config/prober not group monitoring-agent setgid"
           systemctl show -p User --value monitoring-agent | grep -qx monitoring-agent || die "agent not run as monitoring-agent"
-          echo "wrong-token" | sudo $amc agent enrol --token-stdin > ag-bad.txt 2>&1 && die "a wrong token enrolled"
-          echo "test-enrol-token-0123456789" | sudo $amc agent enrol --token-stdin | tee ag2.txt
+          echo "wrong-token" | sudo $ma agent enrol --token-stdin > ag-bad.txt 2>&1 && die "a wrong token enrolled"
+          echo "test-enrol-token-0123456789" | sudo $ma agent enrol --token-stdin | tee ag2.txt
           must 'enrolled as' ag2.txt
           [ "$(sudo stat -c '%a %U' /opt/monitoring/agent/key)" = "600 monitoring-agent" ] || die "agent key not monitoring-agent 600"
           host=$(hostname)
@@ -565,7 +529,7 @@ jobs:
           waitsite 2 refused
           sudo test -f /opt/monitoring/config/site.d/cp-ci.yaml || die "a refused set changed site.d"
           # a manual plan with the host owner's --site-dir keeps the control plane's overlay (no REMOVE)
-          sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag-site.txt
+          sudo $ma plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag-site.txt
           must "the control plane's overlays are kept: cp-ci.yaml" ag-site.txt
           if grep -E '^  REMOVE .*cp-ci' ag-site.txt; then die "a manual plan removes the control plane's overlay"; fi
           publish "{\"host\":\"$host\",$P,\"site\":{\"revision\":3,\"files\":{}}}"
@@ -573,7 +537,7 @@ jobs:
           sudo test -f /opt/monitoring/config/site.d/cp-ci.yaml && die "an empty set did not remove cp-ci.yaml"
           sudo test -f /opt/monitoring/config/site.d/10-ci.yaml || die "the host's own overlay was removed"
           # root's job ran `update` with a real scan of this runner: back to the example's scan for the plan checks below
-          sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke > ag-site2.txt || { cat ag-site2.txt; die "re-apply after the overlays failed"; }
+          sudo $ma apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke > ag-site2.txt || { cat ag-site2.txt; die "re-apply after the overlays failed"; }
           # control plane gone: the agent keeps running, the probes keep running
           pkill -f "fakecp -listen" || true
           before=$(curl -fsS http://127.0.0.1:9313/metrics | grep -E '^cloudprober_total\{.*target="link_ci_tcp"' | awk '{print $2}')
@@ -581,30 +545,30 @@ jobs:
           systemctl is-active -q monitoring-agent || die "agent died without the control plane"
           after=$(curl -fsS http://127.0.0.1:9313/metrics | grep -E '^cloudprober_total\{.*target="link_ci_tcp"' | awk '{print $2}')
           [ "${after%.*}" -gt "${before%.*}" ] || die "probes stopped without the control plane ($before -> $after)"
-          # amc plan now includes the agent's applied list: nothing to change
-          sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag3.txt
+          # plan now includes the agent's applied list: nothing to change
+          sudo $ma plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag3.txt
           grep -Eq 'agent: applied revision [0-9]+ kept' ag3.txt || die "agent revision not kept in ag3.txt"
           if grep -E '^  (CHANGE|NEW|REMOVE) ' ag3.txt; then die "plan after an agent change is not clean"; fi
           # v0.22.5: a plan WITHOUT --agent-allow keeps the installed template (before: REMOVE it, the probes dropped)
-          sudo $amc plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee ag3b.txt
+          sudo $ma plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --no-smoke | tee ag3b.txt
           must 'is kept' ag3b.txt
           if grep -E '^  (CHANGE|NEW|REMOVE) ' ag3b.txt; then die "plan without --agent-allow is not clean"; fi
           # agent removed from the answers: unit + polkit rule gone, Cloudprober stays only with own probes (none: removed)
-          sudo $amc apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee ag4.txt
+          sudo $ma apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee ag4.txt
           must 'no agent: monitoring-agent.service stopped, disabled and unlinked' ag4.txt
           if systemctl is-active -q monitoring-agent; then die "agent still running"; fi
           [ ! -e /etc/polkit-1/rules.d/50-monitoring-agent.rules ] || die "polkit rule left"
-          sudo $amc apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag5.txt
+          sudo $ma apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag5.txt
           must 'monitoring-agent.service active' ag5.txt
           pkill -f "http.server 18080" || true
           echo "::endgroup::"
-          # Uninstall: check mode first (must change nothing), then everything; afterwards nothing of amc is left.
+          # Uninstall: check mode first (must change nothing), then everything; afterwards nothing of the installation is left.
           echo "::group::uninstall"
           grep -q '"/u01/app/oracle/diag/rdbms/orcl/ORCL/trace/alert_ORCL.log"' /opt/monitoring/state.json || die "ACL not recorded"
-          sudo $amc uninstall | tee un1.txt
+          sudo $ma uninstall | tee un1.txt
           must 'CHECK done' un1.txt
           systemctl is-active monitoring-collector || die "uninstall check mode stopped the collector"
-          sudo $amc uninstall --yes --purge-data --purge-secrets --purge < /dev/null | tee un2.txt  # no tty: flags confirm
+          sudo $ma uninstall --yes --purge-data --purge-secrets --purge < /dev/null | tee un2.txt  # no tty: flags confirm
           echo "::endgroup::"
           must 'UNINSTALLED: 0 failure' un2.txt
           if systemctl is-active -q monitoring-collector; then die "collector still running"; fi
@@ -613,10 +577,33 @@ jobs:
           if systemctl is-active -q monitoring-prober; then die "cloudprober still running"; fi
           [ ! -e /opt/monitoring ] || die "/opt/monitoring left"
           if id monitoring 2>/dev/null || id otelcol-contrib 2>/dev/null; then die "collector user left"; fi
-          if id monitoring-agent 2>/dev/null || id amc-agent 2>/dev/null; then die "agent user left"; fi
+          if id monitoring-agent 2>/dev/null; then die "agent user left"; fi
           [ ! -e /etc/polkit-1/rules.d/50-monitoring-agent.rules ] || die "polkit rule left after uninstall"
           [ ! -e /etc/systemd/system/monitoring-agent.service ] || die "agent unit link left"
           for p in "$alert" /u01 /u01/app/oracle/diag/rdbms/orcl/ORCL/trace; do
             if sudo getfacl -p --omit-header "$p" | grep -E '^user:[^:]+:'; then die "ACL entry left on $p"; fi
           done
           [ "$(sudo stat -c %a "$alert")" = 640 ] || die "file mode of the alert log changed"
+          # v0.24.0: one-command install against the fake control plane: bootstrap (project, agent block, gateway
+          # endpoint + token) -> plan -> apply + start (--yes) -> enrol with the same token. No secret is printed.
+          echo "::group::install"
+          mab=$PWD/dist/monitoring-agent-linux-amd64
+          ./fakecp -listen 127.0.0.1:18091 -key-out cp.pub > fakecp2.log 2>&1 &
+          sleep 1
+          sudo "$mab" detect --json | python3 -c 'import json,sys; d=json.load(sys.stdin); d["findings"]=[]; print(json.dumps(d))' > scan-inst.json
+          echo "test-enrol-token-0123456789" | sudo "$mab" install --console http://127.0.0.1:18091/agent/ --token-stdin --yes \
+            --host ci-install --detect-json scan-inst.json --collector-file "$mc" --no-smoke | tee inst.txt
+          must 'installed and enrolled as ci-install' inst.txt
+          if grep -q 'smo_test' inst.txt; then die "the gateway token was printed"; fi
+          sudo grep -q '^project: CI' /opt/monitoring/answers.yaml || die "answers.yaml not written"
+          sudo grep -q '^OO_AUTH=' /opt/monitoring/secrets/collector.env || die "gateway authorization not written"
+          [ "$(sudo stat -c '%a %U' /opt/monitoring/secrets/collector.env)" = "600 root" ] || die "collector.env not root 600"
+          systemctl is-active -q monitoring-collector || die "collector not active after install"
+          systemctl is-active -q monitoring-agent || die "agent not active after install"
+          curl -fsS "http://127.0.0.1:18091/_test/enrolled?host=ci-install" > /dev/null || die "ci-install not enrolled"
+          set +e; echo "test-enrol-token-0123456789" | sudo "$mab" install --console http://127.0.0.1:18091/agent/ --token-stdin --yes > inst2.txt 2>&1; rc=$?; set -e
+          { [ "$rc" -ne 0 ] && grep -q 'installed already' inst2.txt; } || die "a second install was not refused: $(cat inst2.txt)"
+          sudo "$mab" uninstall --yes --purge-data --purge-secrets --purge < /dev/null > un3.txt
+          must 'UNINSTALLED: 0 failure' un3.txt
+          pkill -f "fakecp -listen" || true
+          echo "::endgroup::"

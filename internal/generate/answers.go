@@ -21,9 +21,13 @@ type Answers struct {
 	Project string `yaml:"project,omitempty"`
 	// HostName (v0.22.4): the host.name this host reports instead of the OS hostname (e.g. a VM called "docker").
 	// Empty = the OS hostname. A DNS-style name; it becomes host_name in the backend: keep it stable.
-	HostName string             `yaml:"host_name,omitempty"`
-	Services map[string]Service `yaml:"services,omitempty"`
-	Checks   struct {
+	HostName string `yaml:"host_name,omitempty"`
+	// ReleaseMirror (v0.24.0): an https base that serves this installer's signed release files as
+	// <mirror><version>/<file> (e.g. a control plane's /agent/dl/). Tried first for the collector and for self-update;
+	// on any error the GitHub release is used. The files are verified with the embedded release key either way.
+	ReleaseMirror string             `yaml:"release_mirror,omitempty"`
+	Services      map[string]Service `yaml:"services,omitempty"`
+	Checks        struct {
 		HTTP []HTTPCheck `yaml:"http,omitempty"`
 		// TCP (v0.11.0): connect checks from this host to OTHER hosts (host:port), e.g. the database or the next hop
 		// of a request path. Metrics tcpcheck.status (1 = connected) and tcpcheck.duration (ms), attribute
@@ -37,7 +41,7 @@ type Answers struct {
 	Agent *Agent `yaml:"agent,omitempty"`
 }
 
-// Service is one service's answers. Enabled nil = default (on when detected and amc has a profile).
+// Service is one service's answers. Enabled nil = default (on when detected and monitoring-agent has a profile).
 type Service struct {
 	Enabled *bool  `yaml:"enabled,omitempty"`
 	Service string `yaml:"service,omitempty"` // oracle: service name (ORACLE_SERVICE), e.g. the PDB
@@ -118,6 +122,9 @@ func LoadAnswers(path string) (Answers, error) {
 
 // Validate rejects unknown services, non-http(s) URLs and URLs with credentials.
 func (a Answers) Validate() error {
+	if err := ValidMirror(a.ReleaseMirror); err != nil {
+		return err
+	}
 	if a.HostName != "" && (len(a.HostName) > 253 || !hostNameRE.MatchString(a.HostName)) {
 		return fmt.Errorf("host_name: %q: a DNS-style name (a-z 0-9 - and dots, labels 1-63 characters)", a.HostName)
 	}
@@ -229,4 +236,17 @@ func (a Answers) Marshal() ([]byte, error) {
 		b = nil
 	}
 	return append([]byte(head), b...), nil
+}
+
+// ValidMirror: "" or an https URL with a host, ending in "/", without query, fragment or user info.
+func ValidMirror(m string) error {
+	if m == "" {
+		return nil
+	}
+	u, err := url.Parse(m)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+		!strings.HasSuffix(u.Path, "/") || strings.ContainsAny(m, " \t\n") {
+		return fmt.Errorf("release_mirror: %q: an https URL ending in /, e.g. https://console.example/agent/dl/", m)
+	}
+	return nil
 }
