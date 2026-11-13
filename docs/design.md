@@ -7,13 +7,13 @@ real host, network or company. Examples use generic values (`ORCL`, `/u01/app/or
 ---
 
 
-> **Names since v0.20.0** (one standard: everything that runs is `monitoring-*`): `amc` = `monitoring-agent` (binary
-> `bin/monitoring-agent`, `bin/amc` a symlink), Cloudprober = `monitoring-prober` (unit, `bin/monitoring-prober`,
-> `config/prober/prober.cfg` + `targets-*.json`), `amc-state.json` = `state.json`, `.amc.lock` = `.monitoring.lock`,
-> polkit `50-amc-agent.rules` = `50-monitoring-agent.rules`, release assets `amc-linux-*` = `monitoring-agent-linux-*`
-> (both published), `keys/amc-release.pub` = `keys/release.pub`. Older names below are history; data names
-> (metrics `cloudprober_*`, streams) stay. v0.21.0: Unix users `monitoring` (was `otelcol-contrib`) and
-> `monitoring-agent` (was `amc-agent`), moved by an apply (see internal/engine/users.go).
+> **Names** (one standard since v0.20.0: everything that runs is `monitoring-*`): the installer / agent binary
+> `monitoring-agent` (`bin/monitoring-agent`), Cloudprober = `monitoring-prober` (unit, `bin/monitoring-prober`,
+> `config/prober/prober.cfg` + `targets-*.json`), `state.json`, `.monitoring.lock`, polkit `50-monitoring-agent.rules`,
+> release assets `monitoring-agent-linux-*`, `keys/release.pub`, Unix users `monitoring` (collector + prober; was
+> `otelcol-contrib` before v0.21.0, still moved by an apply) and `monitoring-agent`. Older names below are history;
+> data names (metrics `cloudprober_*`, streams) stay. The product's old short name and its compatibility were dropped
+> after v0.23.1: supported hosts start at v0.21.0.
 ## 1. Purpose
 
 One command turns a Linux server into a monitored host:
@@ -53,7 +53,7 @@ installs it only when asked to (`--apply`). Data goes over OTLP to any backend (
 | OS | RHEL / Rocky / Alma / Oracle Linux 8-9, CentOS 7 (best effort, EOL), Ubuntu 22.04 / 24.04, Debian 12 |
 | CPU | amd64, arm64 |
 | Init | systemd |
-| Collector | `monitoring-collector` (OCB build in `collector/`, since v0.19.0) from the same signed release as amc; before: `otelcol-contrib`, version + SHA-256 pinned |
+| Collector | `monitoring-collector` (OCB build in `collector/`, since v0.19.0) from the same signed release as monitoring-agent; before: `otelcol-contrib`, version + SHA-256 pinned |
 | Profiles | host (always), Oracle, Tomcat (+ JMX exporter), Redis, Caddy; then PostgreSQL, MySQL/MariaDB, nginx, Docker |
 | Backend | any OTLP/HTTP endpoint with a header-based auth; OpenObserve stream layout as the first preset |
 | Extras (later) | dashboard and alert generators per backend (OpenObserve first), Telegram as an alert channel |
@@ -74,17 +74,17 @@ installs it only when asked to (`--apply`). Data goes over OTLP to any backend (
 ## 4. Workflow
 
 ```
-get.sh ──▶ download installer ──▶ verify signature + sha256 ──▶ amc plan  (default, read-only)
+get.sh ──▶ download installer ──▶ verify signature + sha256 ──▶ monitoring-agent plan  (default, read-only)
                                                                     │
      detect ─▶ propose ─▶ ask ─▶ generate (to a staging dir) ─▶ validate + smoke run ─▶ show diff
                                                                     │
-                                                    amc apply [--start]  (only on request)
+                                                    monitoring-agent apply [--start]  (only on request)
                                                                     │
                      install binary ─▶ backup ─▶ write files ─▶ ACLs / SELinux ─▶ systemd ─▶ start ─▶ check
 ```
 
 ### 4.0 Before the first run (by hand, once)
-- Database monitoring user + grants (SQL printed by `amc sql oracle`, run by a DBA).
+- Database monitoring user + grants (SQL printed by `monitoring-agent sql oracle`, run by a DBA).
 - Backend endpoint + ingest credential.
 - Outbound HTTPS to GitHub (download) and to the backend.
 
@@ -120,7 +120,7 @@ Enable [oracle, tomcat, redis]? (enter = yes, or list to change):
 | Value | Source order |
 |---|---|
 | Backend endpoint | answers file → existing host config → prompt (default from preset) |
-| Auth header | secrets file → env `AMC_OO_AUTH` → hidden prompt |
+| Auth header | secrets file → env `MONITORING_OO_AUTH` → hidden prompt |
 | Oracle service name | answers → derived from SID / listener config → prompt with the guess as default |
 | Oracle monitoring user / password | answers (user) → hidden prompt (password) |
 | HTTP checks (URLs) | answers → prompt (optional, empty = none) |
@@ -163,9 +163,9 @@ rollback to the backup.
   No answers.yaml (install via `--host-dir`) = stop with exit 2. Changing answers / site.d is still
   `plan` / `apply --answers F [--site-dir D]`. The engine reports `Result.Changes` (check mode: "would"
   actions + changed files) for this decision.
-- **Many hosts:** `--answers hosts/<name>.yaml --secrets-file /root/amc.secrets --yes` (answers files
+- **Many hosts:** `--answers hosts/<name>.yaml --secrets-file /root/monitoring.secrets --yes` (answers files
   live in the operator's private repository; secrets file put on the host by the operator or a vault agent).
-- **Removal:** `amc uninstall` (units, files; secrets only after an explicit confirmation).
+- **Removal:** `monitoring-agent uninstall` (units, files; secrets only after an explicit confirmation).
 
 ---
 
@@ -189,8 +189,8 @@ changes it). File and unit names stay the same, so existing installations need n
 
 ```
 /opt/monitoring/
-  bin/monitoring-collector       the collector of this amc release (v0.19.0+; before: bin/otelcol-contrib)
-  bin/amc                        installer (auto-mon-collector) (for updates / plan / uninstall)
+  bin/monitoring-collector       the collector of this monitoring-agent release (v0.19.0+; before: bin/otelcol-contrib)
+  bin/monitoring-agent           installer (auto-mon-collector) (for updates / plan / uninstall)
   config/
     config.yaml                  layer 1: shipped base, same everywhere: runtime discovery + all service
                                  profiles, each switched on/off in host.env (v1: profiles live in the base)
@@ -286,7 +286,7 @@ read_access:                            # single files, ACL u:<collector user>:r
 switches:
   ORACLE_MON: 'on'
 docs:
-  sql: sql/oracle-grants.sql            # printed by `amc sql oracle`, run by a DBA
+  sql: sql/oracle-grants.sql            # printed by `monitoring-agent sql oracle`, run by a DBA
 ```
 
 ---
@@ -294,14 +294,14 @@ docs:
 ## 8. CLI
 
 ```
-amc plan      [--answers F] [--secrets-file F] [--only a,b] [--skip c]   # default command, read-only
-amc apply     [--start] [same flags] [--yes]                              # changes the system
-amc update    [--plan] [--detect-json F]                                  # saved answers + installed site.d
-amc self-update --request F [--prefix D]                                  # root, v0.16.0: signed request from the agent (section 17)
-amc detect    [--json]                                                    # findings only
-amc sql <profile>                                                         # print DB grants
-amc uninstall [--keep-secrets]
-amc version
+monitoring-agent plan      [--answers F] [--secrets-file F] [--only a,b] [--skip c]   # default command, read-only
+monitoring-agent apply     [--start] [same flags] [--yes]                              # changes the system
+monitoring-agent update    [--plan] [--detect-json F]                                  # saved answers + installed site.d
+monitoring-agent self-update --request F [--prefix D]                                  # root, v0.16.0: signed request from the agent (section 17)
+monitoring-agent detect    [--json]                                                    # findings only
+monitoring-agent sql <profile>                                                         # print DB grants
+monitoring-agent uninstall [--keep-secrets]
+monitoring-agent version
 Global: --non-interactive (fail instead of asking), --release <tag>, --root <dir> (tests), --verbose
 Exit codes: 0 ok · 1 plan has failures · 2 usage · 3 verification (signature / checksum) failed
 ```
@@ -336,7 +336,7 @@ probes:                                 # v0.12.0: Cloudprober probes from this 
 
 `probes` (v0.12.0): active probes run by [Cloudprober](https://github.com/cloudprober/cloudprober) (Apache-2.0), a
 second small agent next to the collector. Empty = Cloudprober is not installed; removing all probes later stops,
-disables and unlinks its unit and removes its files (the binary stays until `amc uninstall`).
+disables and unlinks its unit and removes its files (the binary stays until `monitoring-agent uninstall`).
 - Install: pinned v0.14.6 (`internal/cloudprober`, release tarball checked against the pinned SHA-256, only the
   binary is extracted) -> `bin/cloudprober`; `config/cloudprober.cfg` (generated) + `config/cloudprober-tcp.json`
   (file targets, re-read every 30 s: the agent changes the list without a restart); ping = one probe per target with
@@ -349,7 +349,7 @@ disables and unlinks its unit and removes its files (the binary stays until `amc
   (`tcp`, `ping_<name>`, `http_<name>`), `dst` (`host:port` / host), `target` (the name above; keep names stable, they
   are labels), `path` (v0.14.0, only when a probe sets it).
 - Names: `a-z 0-9 _`, unique over all probes. Hosts: a DNS name or an IP; URLs: http(s) without credentials. Loopback
-  targets are allowed (unlike `checks.tcp`). Not asked interactively; an interactive run or `amc update` keeps them.
+  targets are allowed (unlike `checks.tcp`). Not asked interactively; an interactive run or `monitoring-agent update` keeps them.
 - PromQL: up (share of successful probes) = `increase(cloudprober_success[5m]) / increase(cloudprober_total[5m])`;
   average latency in ms = `rate(cloudprober_latency[5m]) / rate(cloudprober_success[5m]) / 1000`; TLS days left =
   `cloudprober_ssl_earliest_cert_expiry_sec / 86400`.
@@ -373,9 +373,9 @@ database or the next hop of a request path, so a dashboard can show the state of
 holds them together with the local Oracle listener check: metrics `tcpcheck.status` (1 = connected),
 `tcpcheck.duration` (ms), attribute `tcpcheck.endpoint` = the endpoint as written. Loopback targets are refused, so the
 listener stays the only `127.0.0.1:` endpoint: consumers that mean "the listener" filter on that prefix (a neighbour on
-`:1521` must not look like a local listener). Not asked interactively; an interactive run or `amc update` keeps the list.
+`:1521` must not look like a local listener). Not asked interactively; an interactive run or `monitoring-agent update` keeps the list.
 
-`project:` (optional, since v0.2.0): a group name (1-64 characters `A-Z a-z 0-9 space . _ -`). amc writes
+`project:` (optional, since v0.2.0): a group name (1-64 characters `A-Z a-z 0-9 space . _ -`). monitoring-agent writes
 `OTEL_RESOURCE_ATTRIBUTES=project=<url-encoded>` into `host.env`; the `env` detector of `resource_detection` turns it
 into the resource attribute `project` on every metric, log and span of the host. Asked interactively since v0.3.0
 (default = the saved answer). The base config also collects `system.uptime` (host_metrics `system` scraper).
@@ -558,7 +558,7 @@ Existing installations keep running unchanged until phase 5.
 
 | # | Question | Proposal |
 |---|---|---|
-| 1 | Project / repository name | **decided**: `auto-mon-collector`, binary `amc` (alias), env prefix `AMC_` |
+| 1 | Project / repository name | **decided**: `auto-mon-collector`, binary `monitoring-agent` (since v0.20.0), env prefix `MONITORING_` |
 | 2 | License | Apache-2.0 (same as OpenTelemetry) |
 | 3 | Ownership | approved by the owner of the original setup (2026-10-05) |
 | 4 | Signing | **decided**: ECDSA P-256 with openssl (no extra tool on the hosts); key in the GitHub Actions secret AMC_SIGNING_KEY (option A, 2026-10-05); public key keys/release.pub |
@@ -590,15 +590,15 @@ nonce -> "nonce reused"; (2) probes may carry `path` (see 9); (3) backup / rollb
 exact file mode (a rollback restored `config/cloudprober` as a plain root 0775 directory: the agent could no longer
 replace its files until the next apply).
 
-`amc agent` lets a control plane (for example a monitoring wall where an admin draws a link and answers "what to
-observe?") change the PROBES of a host within seconds, without SSH and without `amc apply`. The idea is the one of
+`monitoring-agent agent` lets a control plane (for example a monitoring wall where an admin draws a link and answers "what to
+observe?") change the PROBES of a host within seconds, without SSH and without `monitoring-agent apply`. The idea is the one of
 tunnel agents: the agent dials out, the host opens no port.
 
 **What it can do, and what never.** It accepts one thing: a signed list of probes (tcp / http / ping, the same schema
 and rules as `probes:`). It never runs commands, never writes a path it gets from the control plane, never installs or
-updates software (that stays `amc apply` / `amc update`, signed releases), never touches the collector, secrets,
-ACLs, SELinux or other units. One exception since v0.16.0, off by default: it may hand a signed "update amc to
-release X" request to root (see "Remote amc update" below); root checks everything again.
+updates software (that stays `monitoring-agent apply` / `monitoring-agent update`, signed releases), never touches the collector, secrets,
+ACLs, SELinux or other units. One exception since v0.16.0, off by default: it may hand a signed "update monitoring-agent to
+release X" request to root (see "Remote update" below); root checks everything again.
 
 **Host owner first.** `answers.yaml` (root) decides:
 
@@ -621,38 +621,38 @@ the flag (before, they removed it and the agent dropped every probe outside the 
 removes it. Effective list = template + host extras: lists joined, a number set on the host replaces the
 template's, ping allowed when either allows it. `plan` prints it (`agent allowlist: ...`).
 
-**Install** (`apply` with an `agent:` section): user `amc-agent` (system, no shell, no groups), `<prefix>/agent/`
-(amc-agent 700: key + state), `bin/amc` (a copy of the amc that ran the apply; `update` replaces it), unit
-`monitoring-agent` (amc-agent, `NoNewPrivileges`, `ProtectSystem=strict`, writes only `<prefix>/agent` and
-`config/cloudprober/`, no capabilities, `MemoryMax=200M`), `config/cloudprober/` owned root:amc-agent with setgid
-2775, and `/etc/polkit-1/rules.d/50-amc-agent.rules`: amc-agent may `restart` `monitoring-cloudprober.service`,
+**Install** (`apply` with an `agent:` section): user `monitoring-agent` (system, no shell, no groups), `<prefix>/agent/`
+(monitoring-agent 700: key + state), `bin/monitoring-agent` (a copy of the monitoring-agent that ran the apply; `update` replaces it), unit
+`monitoring-agent` (monitoring-agent, `NoNewPrivileges`, `ProtectSystem=strict`, writes only `<prefix>/agent` and
+`config/cloudprober/`, no capabilities, `MemoryMax=200M`), `config/cloudprober/` owned root:monitoring-agent with setgid
+2775, and `/etc/polkit-1/rules.d/50-monitoring-agent.rules`: monitoring-agent may `restart` `monitoring-cloudprober.service`,
 nothing else (no polkit on the host = a warning; target-only changes still work, config changes wait for an apply).
-Cloudprober then always runs (with an empty config until the first list). Everything is in `amc-state.json`; the
+Cloudprober then always runs (with an empty config until the first list). Everything is in `state.json`; the
 agent removed from the answers = unit stopped + unlinked, polkit rule removed (key and state stay until uninstall);
 `uninstall` removes the agent dir, the polkit rule and the user.
 
 **Enrol** (once, root): the control plane shows a one-time token; on the host
-`sudo amc agent enrol --token-stdin` (typed or piped, never an argument). The agent key (Ed25519) is created on the
-host, only its public key is sent; the file is written (amc-agent 600) only after the control plane accepted it. The
+`sudo monitoring-agent agent enrol --token-stdin` (typed or piped, never an argument). The agent key (Ed25519) is created on the
+host, only its public key is sent; the file is written (monitoring-agent 600) only after the control plane accepted it. The
 agent picks it up within 15 s.
 
 **Protocol** (`internal/agent/protocol.go` has the exact wire format):
 - `POST <url>v1/enrol {"host","token","public_key"}` (no signature).
-- Every other request is signed with the host key: headers `X-Amc-Host`, `X-Amc-Time` (unix s, ±120 s),
-  `X-Amc-Nonce`, `X-Amc-Signature` = Ed25519 over the lines `METHOD`, `REQUEST-URI`, `time`, `nonce`,
+- Every other request is signed with the host key: headers `X-Mon-Host`, `X-Mon-Time` (unix s, ±120 s),
+  `X-Mon-Nonce`, `X-Mon-Signature` = Ed25519 over the lines `METHOD`, `REQUEST-URI`, `time`, `nonce`,
   `hex(sha256(body))` joined with `\n`. TLS ends at a proxy in many setups, so client certificates would not reach the control plane: signatures work through
   any proxy.
 - `GET <url>v1/desired?have=N`: long poll (200 = newer signed document, 204 = nothing newer).
 - `POST <url>v1/status {"revision","result":"applied|rejected|error","detail","versions"}`.
 - v0.15.0: `POST <url>v1/inventory {"versions","revision","inventory","inventory_error"}`: at start and whenever the
-  body changes (a new revision applied, a new inventory.json after `amc update`). `inventory` = `<prefix>/inventory.json`
+  body changes (a new revision applied, a new inventory.json after `monitoring-agent update`). `inventory` = `<prefix>/inventory.json`
   compacted (`null` + `inventory_error` when missing / larger than 48 KiB / not JSON). A 4xx (404 = a control plane
   without the endpoint) is not retried until the body changes; other errors are retried with the next poll.
   inventory.json (schema 1, root 644, written by plan / apply / update as root: the agent cannot read other users'
   processes): `{"schema", "os", "services": [{"id", "monitored", "ports", "http_port", "instances" (Oracle SIDs),
   "apps" (Tomcat context paths)}], "listen": [{"ip", "port", "service"}], "truncated"}` (max 256 sockets). An
   allowlist of fields: no file paths, environment, pids or time stamps, so an unchanged host gives the same bytes.
-  The scan runs at plan / apply / update only: a service started later shows up after the next `amc update`.
+  The scan runs at plan / apply / update only: a service started later shows up after the next `monitoring-agent update`.
 - Document `{host, revision, issued_at, expires_at, probes, sig}`; `sig` = Ed25519 (control-plane key) over the
   canonical JSON of the received document without `sig` (keys sorted by bytes, no whitespace, no HTML escaping,
   numbers as received). Shared test vectors: `testdata/agent/canonical.json`.
@@ -668,9 +668,9 @@ The collector's scrape interval comes from the answers only (a list never change
 
 **Metrics**: as for `probes` (section 9); probe names chosen by the control plane are labels (`target`).
 
-### Remote amc update (v0.16.0; off by default)
+### Remote update (v0.16.0; off by default)
 
-One action with one argument: "update amc to signed release X". The control plane adds
+One action with one argument: "update monitoring-agent to signed release X". The control plane adds
 `"update": {"version": "vX.Y.Z", "id": "<8-64 chars A-Za-z0-9_->"}` to a signed document (signed like the rest; an
 agent before v0.16.0 rejects such a document as an unknown field, so a control plane sends it only to v0.16.0+
 agents: the inventory reports their version and `update_allowed`). The host owner decides in `answers.yaml` (root);
@@ -680,19 +680,19 @@ the project template `config/agent-allow.yaml` cannot switch it on:
 agent:
   update:
     allow: false        # default: every request is refused
-    downgrade: false    # default: only a release newer than the running amc
+    downgrade: false    # default: only a release newer than the running monitoring-agent
     window: ""          # "HH:MM-HH:MM" host local time, may span midnight (e.g. "22:00-04:00"); "" = any time
 ```
 
-**Agent (user amc-agent, not trusted with the update).** For a verified, applied document whose update id it has not
+**Agent (user monitoring-agent, not trusted with the update).** For a verified, applied document whose update id it has not
 handled yet: checks `allow`, the version syntax and "no downgrade", saves the id in `agent/state.json`, writes the
 WHOLE signed document to `<prefix>/agent/update-request.json` (600) and runs
-`systemctl start --no-block monitoring-update.service` (polkit: amc-agent may `start` that unit, nothing else). It
+`systemctl start --no-block monitoring-update.service` (polkit: monitoring-agent may `start` that unit, nothing else). It
 reports `update {id, result: started | refused | failed, detail, from, to}` with the revision's status. A later
 revision with the same id is not started again. Root's result (`agent/update-result.json`) is reported once in a
 status `{revision (the applied one), result: "applied", update {id, result, detail, from, to}}`.
 
-**Root (`amc self-update --request FILE`, oneshot unit `monitoring-update`, `TimeoutStartSec=15min`, never enabled).**
+**Root (`monitoring-agent self-update --request FILE`, oneshot unit `monitoring-update`, `TimeoutStartSec=15min`, never enabled).**
 Inputs: only the request file and the prefix. No URL, key, path or command comes from the request or the command line.
 1. `answers.yaml` must be a root-owned plain file nobody else can write; the control-plane key and `agent.update` come
    from it. The request file is opened without following links (one link only, at most 256 KiB).
@@ -700,25 +700,25 @@ Inputs: only the request file and the prefix. No URL, key, path or command comes
    above the last one root handled (`<prefix>/self-update.json`, root 644), an `update` with a valid id (not the last
    handled id) and version `^vMAJOR.MINOR.PATCH$`.
 3. Policy: `allow`, no downgrade (unless `downgrade: true`; a non-release running build then refuses), window.
-4. Lock `<prefix>/.amc.lock` (flock; `amc apply` / `amc update` take it too; the `amc update` started below inherits
-   it as fd 3, `AMC_LOCK_FD=3`). From here the request counts as handled.
+4. Lock `<prefix>/.monitoring.lock` (flock; `monitoring-agent apply` / `monitoring-agent update` take it too; the `monitoring-agent update` started below inherits
+   it as fd 3, `MONITORING_LOCK_FD=3`). From here the request counts as handled.
 5. Download from `https://github.com/NABIXcorp/auto-mon-collector/releases/download/<version>/` (compiled in):
-   `SHA256SUMS`, `SHA256SUMS.sig` (verified first), then `amc-linux-<amd64|arm64>` (limits 64 KiB / 1 KiB / 128 MiB,
+   `SHA256SUMS`, `SHA256SUMS.sig` (verified first), then `monitoring-agent-linux-<amd64|arm64>` (limits 64 KiB / 1 KiB / 128 MiB,
    10 min; redirects never from https to http). `SHA256SUMS.sig` must be a DER ECDSA P-256 signature over
-   sha256(SHA256SUMS) by the release key embedded in amc (`keys/release.pub`, the same bytes get.sh checks), and the
+   sha256(SHA256SUMS) by the release key embedded in monitoring-agent (`keys/release.pub`, the same bytes get.sh checks), and the
    asset's sha256 must match its one line. Any failure: result `failed`, nothing changed.
-6. Install: `bin/amc` -> `bin/amc.before-<old version>` (copy), the new binary written atomically (root 755); its
-   `amc version` must report the requested version, then the new `amc update --prefix <prefix>` runs (backup, plan,
+6. Install: `bin/monitoring-agent` -> `bin/monitoring-agent.before-<old version>` (copy), the new binary written atomically (root 755); its
+   `monitoring-agent version` must report the requested version, then the new `monitoring-agent update --prefix <prefix>` runs (backup, plan,
    smoke run, rollback as always). Either fails: the old binary goes back (`rolled_back`).
 7. Result `<prefix>/agent/update-result.json` (root 644, written atomically: a link the agent placed there is
    replaced, not followed): `{id, from, to, result: ok | failed | rolled_back | refused, detail, at, revision}`; then
    `systemctl try-restart monitoring-agent.service` when the binary changed. A request without a verified id, or one
    handled already, does not overwrite the result file.
 
-Threat notes: a compromised amc-agent can start the unit and write any request, but root accepts only a document signed
+Threat notes: a compromised monitoring-agent can start the unit and write any request, but root accepts only a document signed
 by the pinned control-plane key, for this host, not replayed, inside the owner's policy, and installs only a release
 signed by the release key. A compromised control plane can at most trigger an update to a real signed release (no
-downgrade unless the owner allows it). `uninstall` removes the unit link, `self-update.json` and `.amc.lock`.
+downgrade unless the owner allows it). `uninstall` removes the unit link, `self-update.json` and `.monitoring.lock`.
 
 ### Collector overlays from the control plane (v0.23.0, OFF by default)
 

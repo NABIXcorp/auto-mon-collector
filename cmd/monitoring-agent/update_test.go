@@ -74,7 +74,7 @@ func TestUpdate(t *testing.T) {
 				t.Errorf("first run must be a check with smoke run: %+v", calls[0])
 			}
 			if calls[0].CheckHint != "-" {
-				t.Errorf("update prints its own hint, not the engine's `amc apply`: %q", calls[0].CheckHint)
+				t.Errorf("update prints its own hint, not the engine's `monitoring-agent apply`: %q", calls[0].CheckHint)
 			}
 			if c.runs == 2 && (!calls[1].Apply || calls[1].Start == c.plan.NoRestart || !calls[1].Rollback || calls[1].Smoke) {
 				t.Errorf("second run = apply + rollback, start unless only VERSION changed, no second smoke run: %+v", calls[1])

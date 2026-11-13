@@ -41,7 +41,7 @@ func signSums(t *testing.T, k *ecdsa.PrivateKey, sums []byte) []byte {
 
 func sumsFor(files map[string][]byte) []byte {
 	var b strings.Builder
-	for _, n := range []string{"amc-linux-amd64", "amc-linux-arm64", "get.sh"} {
+	for _, n := range []string{"monitoring-agent-linux-amd64", "monitoring-agent-linux-arm64", "get.sh"} {
 		if f, ok := files[n]; ok {
 			h := sha256.Sum256(f)
 			b.WriteString(hex.EncodeToString(h[:]) + "  " + n + "\n") // sha256sum text mode: two spaces
@@ -83,9 +83,9 @@ func TestVerifyAsset(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := []byte("NEW BINARY")
-	sums := sumsFor(map[string][]byte{"amc-linux-amd64": bin, "amc-linux-arm64": []byte("ARM"), "get.sh": []byte("sh")})
+	sums := sumsFor(map[string][]byte{"monitoring-agent-linux-amd64": bin, "monitoring-agent-linux-arm64": []byte("ARM"), "get.sh": []byte("sh")})
 	sig := signSums(t, k, sums)
-	if err := VerifyAsset(key, sums, sig, "amc-linux-amd64", bin); err != nil {
+	if err := VerifyAsset(key, sums, sig, "monitoring-agent-linux-amd64", bin); err != nil {
 		t.Fatalf("good release: %v", err)
 	}
 	flip := func(b []byte, i int) []byte { c := append([]byte{}, b...); c[i] ^= 1; return c }
@@ -93,15 +93,15 @@ func TestVerifyAsset(t *testing.T) {
 		sums, sig, bin []byte
 		name, want     string
 	}{
-		"bad signature":       {sums, flip(sig, len(sig)-1), bin, "amc-linux-amd64", "not signed"},
-		"other key":           {sums, signSums(t, other, sums), bin, "amc-linux-amd64", "not signed"},
-		"sums changed":        {append(append([]byte{}, sums...), ' '), sig, bin, "amc-linux-amd64", "not signed"},
-		"binary changed":      {sums, sig, flip(bin, 0), "amc-linux-amd64", "checksum mismatch"},
-		"binary truncated":    {sums, sig, bin[:4], "amc-linux-amd64", "checksum mismatch"},
-		"signature truncated": {sums, sig[:len(sig)/2], bin, "amc-linux-amd64", "not signed"},
-		"signature empty":     {sums, nil, bin, "amc-linux-amd64", "signature missing"},
-		"signature oversize":  {sums, make([]byte, maxSig+1), bin, "amc-linux-amd64", "signature missing"},
-		"asset not listed":    {sums, sig, bin, "amc-linux-riscv64", "lists no"},
+		"bad signature":       {sums, flip(sig, len(sig)-1), bin, "monitoring-agent-linux-amd64", "not signed"},
+		"other key":           {sums, signSums(t, other, sums), bin, "monitoring-agent-linux-amd64", "not signed"},
+		"sums changed":        {append(append([]byte{}, sums...), ' '), sig, bin, "monitoring-agent-linux-amd64", "not signed"},
+		"binary changed":      {sums, sig, flip(bin, 0), "monitoring-agent-linux-amd64", "checksum mismatch"},
+		"binary truncated":    {sums, sig, bin[:4], "monitoring-agent-linux-amd64", "checksum mismatch"},
+		"signature truncated": {sums, sig[:len(sig)/2], bin, "monitoring-agent-linux-amd64", "not signed"},
+		"signature empty":     {sums, nil, bin, "monitoring-agent-linux-amd64", "signature missing"},
+		"signature oversize":  {sums, make([]byte, maxSig+1), bin, "monitoring-agent-linux-amd64", "signature missing"},
+		"asset not listed":    {sums, sig, bin, "monitoring-agent-linux-riscv64", "lists no"},
 	}
 	for name, c := range cases {
 		err := VerifyAsset(key, c.sums, c.sig, c.name, c.bin)
@@ -113,17 +113,17 @@ func TestVerifyAsset(t *testing.T) {
 
 func TestSumFor(t *testing.T) {
 	h := strings.Repeat("ab", 32)
-	if _, err := SumFor([]byte(h+" *amc-linux-amd64\n"), "amc-linux-amd64"); err != nil {
+	if _, err := SumFor([]byte(h+" *monitoring-agent-linux-amd64\n"), "monitoring-agent-linux-amd64"); err != nil {
 		t.Errorf("binary mode line: %v", err)
 	}
 	for name, s := range map[string]string{
-		"twice":     h + "  amc-linux-amd64\n" + h + "  amc-linux-amd64\n",
-		"malformed": h + "  amc-linux-amd64\ngarbage\n",
-		"upper hex": strings.ToUpper(h) + "  amc-linux-amd64\n",
-		"short":     h[:60] + "  amc-linux-amd64\n",
-		"prefix":    h + "  x/amc-linux-amd64\n",
+		"twice":     h + "  monitoring-agent-linux-amd64\n" + h + "  monitoring-agent-linux-amd64\n",
+		"malformed": h + "  monitoring-agent-linux-amd64\ngarbage\n",
+		"upper hex": strings.ToUpper(h) + "  monitoring-agent-linux-amd64\n",
+		"short":     h[:60] + "  monitoring-agent-linux-amd64\n",
+		"prefix":    h + "  x/monitoring-agent-linux-amd64\n",
 	} {
-		if _, err := SumFor([]byte(s), "amc-linux-amd64"); err == nil {
+		if _, err := SumFor([]byte(s), "monitoring-agent-linux-amd64"); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}

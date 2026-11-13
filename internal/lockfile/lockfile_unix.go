@@ -21,12 +21,6 @@ func Acquire(prefix string) (*Lock, error) {
 			return l, nil
 		}
 	}
-	if os.Getenv(LegacyEnvFD) == "3" { // an older self-update (before v0.20.0) runs this update
-		os.Unsetenv(LegacyEnvFD)
-		if l := inherited(filepath.Join(prefix, LegacyName)); l != nil {
-			return l, nil
-		}
-	}
 	f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
 		return nil, err

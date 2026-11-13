@@ -10,15 +10,14 @@ import (
 )
 
 // Unix users (v0.21.0, naming standard R2): the collector + prober run as `monitoring`, the agent as
-// `monitoring-agent`. Before: otelcol-contrib and amc-agent. A host on the old users is moved in one apply --start:
-// the new users are created, get the same groups (Desired.Groups) and the same single-file ACLs (Desired.ReadFiles,
-// checked with a real read), data/ and agent/ change owner, the units and the polkit rule name the new users; only
-// after the units run again are the old users removed (their ACL entries and group memberships, then userdel - only a
+// `monitoring-agent`. The collector user before was otelcol-contrib; a host still on it is moved in one apply --start:
+// the new user is created, gets the same groups (Desired.Groups) and the same single-file ACLs (Desired.ReadFiles,
+// checked with a real read), data/ changes owner, the units name the new user; only after the units run again is the
+// old user removed (their ACL entries and group memberships, then userdel - only a
 // user this installer created). A failed start puts the old owners and users back.
 const (
-	DefaultUser     = "monitoring"
-	LegacyUser      = "otelcol-contrib"
-	LegacyAgentUser = "amc-agent"
+	DefaultUser = "monitoring"
+	LegacyUser  = "otelcol-contrib"
 )
 
 // userMove: an old user this run replaces by a new one.
@@ -49,12 +48,6 @@ func (e *eng) planUserMoves() {
 				e.moves = append(e.moves, &userMove{old: LegacyUser, new: DefaultUser, dirs: []string{"data"},
 					oldCreated: ours || (e.st.User == LegacyUser && e.st.UserCreated)})
 			}
-		}
-	}
-	if e.d.Agent != nil {
-		if _, _, ok := e.lookupUser(LegacyAgentUser); ok && e.userHome(LegacyAgentUser) == e.pre("agent") {
-			e.moves = append(e.moves, &userMove{old: LegacyAgentUser, new: AgentUser, dirs: []string{"agent"},
-				oldCreated: true}) // amc-agent has always been created by the installer (home <prefix>/agent)
 		}
 	}
 	for _, m := range e.moves {
@@ -196,10 +189,14 @@ func (e *eng) dropUserAccess(user string) {
 }
 
 // legacyLeftovers: files of older layouts kept only for a rollback of the switch that replaced them (bin/otelcol-contrib
-// and the helper data v0.19.0, bin/cloudprober + bin/amc.previous + the old polkit rule v0.20.0). Removed after a
-// successful start, when no old unit is linked any more.
+// and the helper data v0.19.0, bin/cloudprober v0.20.0) or left behind under the product's old name (lock file, state
+// file, the old agent binary). Removed after a successful start, when no old unit is linked any more; uninstall
+// removes them too. oldSystemFiles: the same outside the prefix (the rollback copy of the old polkit rule).
 var legacyLeftovers = []string{"bin/otelcol-contrib", "bin/otelcol-contrib.previous", legacyProbeBinRel,
-	legacyProbeBinRel + ".previous", legacyAgentBinRel + ".previous", "data/netconn", "data/kmsg", "data/procs", "data/sshd"}
+	legacyProbeBinRel + ".previous", "bin/amc.previous", ".amc.lock", "amc-state.json",
+	"data/netconn", "data/kmsg", "data/procs", "data/sshd"}
+
+var oldSystemFiles = []string{"/etc/polkit-1/rules.d/50-amc-agent.rules.previous"}
 
 func (e *eng) cleanupLegacy() {
 	if len(e.legacyLinked()) > 0 {
@@ -219,9 +216,9 @@ func (e *eng) cleanupLegacy() {
 	if err := os.Remove(e.fs(e.pre("netconn"))); err == nil { // only when empty
 		e.r.ok("leftover of an older layout removed: netconn/")
 	}
-	if p := e.fs(LegacyPolkitRule) + ".previous"; fileExists(p) {
-		if err := os.Remove(p); err == nil {
-			e.r.ok("leftover of an older layout removed: %s.previous", LegacyPolkitRule)
+	for _, p := range oldSystemFiles {
+		if fileExists(e.fs(p)) && os.Remove(e.fs(p)) == nil {
+			e.r.ok("leftover of an older layout removed: %s", p)
 		}
 	}
 }

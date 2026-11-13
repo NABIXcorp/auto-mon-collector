@@ -13,10 +13,10 @@ import (
 type UninstallOptions struct {
 	PurgeData    bool // data/ (queue, log bookmarks) and backup/
 	PurgeSecrets bool // secrets/ (the caller must have asked the operator first)
-	PurgeUser    bool // the collector user, only if amc created / adopted it
+	PurgeUser    bool // the collector user, only if the installer created / adopted it
 }
 
-// Uninstall removes what amc installed, using amc-state.json for everything outside <prefix>. Check mode
+// Uninstall removes what monitoring-agent installed, using state.json for everything outside <prefix>. Check mode
 // (o.Apply false) prints what it would do.
 func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	if o.Prefix == "" {
@@ -110,8 +110,8 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	}
 
 	e.r.step("4. files in %s", o.Prefix)
-	remove := []string{"bin", "config", "systemd", "netconn", "agent", "VERSION", "answers.yaml", inventoryFile, StateFile,
-		LegacyStateFile, selfUpdateRecord, lockFile, legacyLockFile}
+	remove := append([]string{"bin", "config", "systemd", "netconn", "agent", "VERSION", "answers.yaml", inventoryFile,
+		StateFile, selfUpdateRecord, lockFile}, legacyLeftovers...)
 	keep := []string{}
 	if u.PurgeData {
 		remove = append(remove, "data", "backup")
@@ -146,14 +146,8 @@ func Uninstall(o Options, u UninstallOptions) (Result, error) {
 	}
 
 	if st.AgentUserCreated {
-		// the agent's own user: always removed with the agent (amc-agent on a host not yet moved, v0.21.0)
-		agentUser := AgentUser
-		if _, _, ok := e.lookupUser(AgentUser); !ok {
-			if _, _, ok := e.lookupUser(LegacyAgentUser); ok {
-				agentUser = LegacyAgentUser
-			}
-		}
-		e.doCmd("userdel", agentUser)
+		// the agent's own user: always removed with the agent
+		e.doCmd("userdel", AgentUser)
 	}
 
 	e.r.step("5. collector user")

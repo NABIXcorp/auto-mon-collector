@@ -8,46 +8,37 @@ import (
 )
 
 // StateFile (<prefix>/state.json) lists what monitoring-agent changed OUTSIDE its own directory, so `uninstall`
-// removes exactly that and nothing else. No secrets: paths and names only. Before v0.20.0: amc-state.json (read
-// when state.json is missing, removed after the first write of state.json).
-const (
-	StateFile       = "state.json"
-	LegacyStateFile = "amc-state.json"
-)
+// removes exactly that and nothing else. No secrets: paths and names only.
+const StateFile = "state.json"
 
 type state struct {
 	Version     int      `json:"version"`
 	Prefix      string   `json:"prefix"`
 	User        string   `json:"user"`
-	UserCreated bool     `json:"user_created"`     // amc created the collector user (or adopted ours)
+	UserCreated bool     `json:"user_created"`     // the installer created the collector user (or adopted ours)
 	ACLFiles    []string `json:"acl_files"`        // setfacl u:<user>:r
 	ACLDirs     []string `json:"acl_dirs"`         // setfacl u:<user>:--x (traverse)
 	Groups      []string `json:"groups_added"`     // usermod -aG
 	FContexts   []string `json:"selinux_fcontext"` // semanage fcontext -a -t bin_t
 	Units       []string `json:"units"`            // linked into /etc/systemd/system
 	// agent (v0.13.0)
-	AgentUserCreated bool     `json:"agent_user_created,omitempty"` // amc created the user amc-agent
+	AgentUserCreated bool     `json:"agent_user_created,omitempty"` // the installer created the user monitoring-agent
 	Polkit           []string `json:"polkit_rules,omitempty"`       // polkit rule files written
 	Changed          bool     `json:"-"`
 }
 
 func (e *eng) statePath() string { return e.fs(e.pre(StateFile)) }
 
-// loadState reads the state file; a missing file is an empty state (fresh host or pre-amc install).
+// loadState reads the state file; a missing file is an empty state (fresh host).
 func (e *eng) loadState() (*state, bool) {
 	s := &state{Version: 1, Prefix: e.o.Prefix, User: e.o.User}
 	b, err := os.ReadFile(e.statePath())
-	legacy := false
 	if err != nil {
-		if b, err = os.ReadFile(e.fs(e.pre(LegacyStateFile))); err != nil {
-			return s, false
-		}
-		legacy = true
+		return s, false
 	}
 	if json.Unmarshal(b, s) != nil {
 		return &state{Version: 1, Prefix: e.o.Prefix, User: e.o.User}, false
 	}
-	s.Changed = legacy // written under the new name by the next apply
 	return s, true
 }
 
@@ -87,13 +78,7 @@ func (e *eng) saveState() error {
 	if err != nil {
 		return err
 	}
-	if err := e.writeFile(e.pre(StateFile), append(b, '\n'), 0o644); err != nil {
-		return err
-	}
-	if err := os.Remove(e.fs(e.pre(LegacyStateFile))); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
+	return e.writeFile(e.pre(StateFile), append(b, '\n'), 0o644)
 }
 
 // hasUserACL reports whether getfacl shows an entry for the collector user on p (read-only check, used to

@@ -10,20 +10,20 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 )
 
-// Remote amc update (v0.16.0), the agent's half. The agent is NOT trusted with the update: it only does cheap
+// Remote monitoring-agent update (v0.16.0), the agent's half. The agent is NOT trusted with the update: it only does cheap
 // checks, saves the whole signed document for root and starts the root oneshot unit monitoring-update (polkit:
-// amc-agent may start that unit, nothing else). `amc self-update` (root) verifies everything again itself
+// monitoring-agent may start that unit, nothing else). `monitoring-agent self-update` (root) verifies everything again itself
 // (internal/selfupdate) and writes the result, which the agent reports once.
 const (
-	// UpdateRequestFile (below the prefix): the whole signed document with "update" (amc-agent 600; root reads it).
+	// UpdateRequestFile (below the prefix): the whole signed document with "update" (monitoring-agent 600; root reads it).
 	UpdateRequestFile = "agent/update-request.json"
 	// UpdateResultFile (below the prefix): root's result (root 644), see UpdateResult.
 	UpdateResultFile = "agent/update-result.json"
-	// UpdateUnit is the root oneshot unit that runs `amc self-update`.
+	// UpdateUnit is the root oneshot unit that runs `monitoring-agent self-update`.
 	UpdateUnit = "monitoring-update.service"
 )
 
-// UpdateResult is what `amc self-update` writes. Result: ok | failed (nothing changed) | rolled_back (the new
+// UpdateResult is what `monitoring-agent self-update` writes. Result: ok | failed (nothing changed) | rolled_back (the new
 // binary was installed but did not pass; the previous one is back) | refused (request or policy not accepted).
 type UpdateResult struct {
 	ID       string `json:"id"`
@@ -73,7 +73,7 @@ func prepareUpdate(prefix string, pol generate.AgentUpdate, running string, u *U
 
 // startUpdate starts the root unit without waiting for it (it runs up to 15 min and restarts this agent).
 func startUpdate(run Runner, st UpdateStatus) UpdateStatus {
-	// allowed by the polkit rule amc installs (this unit, verb start, this user only)
+	// allowed by the polkit rule monitoring-agent installs (this unit, verb start, this user only)
 	if out, err := run("systemctl", "start", "--no-block", UpdateUnit); err != nil {
 		st.Result, st.Detail = "failed", "starting "+UpdateUnit+" failed (polkit rule missing?): "+lastLine(out)
 		return st

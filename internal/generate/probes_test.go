@@ -56,8 +56,8 @@ func TestProbesGenerateCloudproberAndScrape(t *testing.T) {
 	if recv[len(recv)-1] != "prometheus/cloudprober" || !strings.Contains(y, `targets: ["127.0.0.1:9313"]`) {
 		t.Errorf("scrape job missing: %v\n%s", recv, y)
 	}
-	if os.Getenv("AMC_WRITE_PROBES") != "" { // manual check: cloudprober --configtest on the generated file
-		d := os.Getenv("AMC_WRITE_PROBES")
+	if os.Getenv("MONITORING_WRITE_PROBES") != "" { // manual check: cloudprober --configtest on the generated file
+		d := os.Getenv("MONITORING_WRITE_PROBES")
 		c := strings.ReplaceAll(cfg, ProbePrefix, d)
 		os.MkdirAll(filepath.Join(d, "config"), 0o755)
 		os.WriteFile(filepath.Join(d, "cloudprober.cfg"), []byte(c), 0o644)

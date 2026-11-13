@@ -1,6 +1,6 @@
 /dist/
-/amc
-/amc.exe
+/monitoring-agent
+/monitoring-agent.exe
 *.secrets
 .env
 /collector/_build/

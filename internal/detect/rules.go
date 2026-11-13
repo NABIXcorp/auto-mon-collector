@@ -14,7 +14,7 @@ import (
 type Finding struct {
 	ID         string            `json:"id"`         // oracle, tomcat, redis, caddy, or the process name
 	Confidence string            `json:"confidence"` // high = port + process, medium = one of them
-	Profile    bool              `json:"profile"`    // amc can monitor it (a profile exists)
+	Profile    bool              `json:"profile"`    // monitoring-agent can monitor it (a profile exists)
 	Ports      []int             `json:"ports"`
 	PIDs       []int             `json:"pids"`
 	Values     map[string]string `json:"values,omitempty"`
@@ -297,7 +297,7 @@ func byComm(snap Snapshot, id string, profile bool, comm string) []Finding {
 		f.Confidence = "high"
 	}
 	if !profile {
-		f.Notes = append(f.Notes, "no amc profile yet: not monitored")
+		f.Notes = append(f.Notes, "no monitoring-agent profile yet: not monitored")
 	}
 	if id == "redis" && len(f.Ports) > 0 && f.Ports[0] != 6379 {
 		f.Values = map[string]string{"REDIS_PORT": strconv.Itoa(f.Ports[0])}

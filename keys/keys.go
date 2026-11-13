@@ -4,7 +4,7 @@ package keys
 
 import _ "embed"
 
-// ReleasePub is release.pub (amc-release.pub before v0.20.0): the ECDSA P-256 public key (PEM, "PUBLIC KEY") whose private half signs
+// ReleasePub is release.pub: the ECDSA P-256 public key (PEM, "PUBLIC KEY") whose private half signs
 // SHA256SUMS of every release (secret AMC_SIGNING_KEY, release.yml).
 //
 //go:embed release.pub

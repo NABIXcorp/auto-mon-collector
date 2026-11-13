@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# get.sh: download, VERIFY and start monitoring-agent (called amc before v0.20.0; repository auto-mon-collector).
+# get.sh: download, VERIFY and start monitoring-agent (repository auto-mon-collector).
 #
 #   curl -fsSL https://github.com/NABIXcorp/auto-mon-collector/releases/latest/download/get.sh | sudo bash
 #   ... | sudo bash -s -- plan --answers answers.yaml        (arguments go to monitoring-agent; default: interactive plan)
 #   ... | sudo bash -s -- update                             (installed host: new release, nothing to copy)
-#   MONITORING_VERSION=v0.20.0 ... (pin a release instead of latest; AMC_VERSION works too)
+#   MONITORING_VERSION=v0.21.0 ... (pin a release instead of latest; v0.21.0 or newer)
 #
 # Trust: SHA256SUMS is signed (ECDSA P-256, openssl). The public key is embedded below. The binary runs only
 # if the signature AND its sha256 match. Without openssl this script stops: it never skips the check.
@@ -14,7 +14,7 @@ set -euo pipefail
 main() {
   local repo="https://github.com/NABIXcorp/auto-mon-collector/releases"
   local base="$repo/latest/download"
-  local version="${MONITORING_VERSION:-${AMC_VERSION:-}}"
+  local version="${MONITORING_VERSION:-}"
   if [ -n "$version" ]; then base="$repo/download/$version"; fi
   base="${MONITORING_BASE_URL_FOR_TESTS:-$base}"
 
@@ -46,9 +46,11 @@ PUBKEY
     echo "monitoring-agent: SIGNATURE CHECK FAILED: SHA256SUMS is not signed by the release key. Nothing was run." >&2
     exit 3
   fi
-  # v0.20.0+: monitoring-agent-linux-<arch>; a pinned older release has only amc-linux-<arch>
   local asset="monitoring-agent-linux-$arch"
-  grep -qE "^[0-9a-f]{64} [ *]$asset$" "$tmp/SHA256SUMS" || asset="amc-linux-$arch"
+  if ! grep -qE "^[0-9a-f]{64} [ *]$asset$" "$tmp/SHA256SUMS"; then
+    echo "monitoring-agent: this release lists no $asset (too old or another architecture). Nothing was run." >&2
+    exit 3
+  fi
   echo "monitoring-agent: downloading $asset from $base" >&2
   $get "$tmp/$asset" "$base/$asset"
   if ! (cd "$tmp" && grep -E "^[0-9a-f]{64} [ *]$asset$" SHA256SUMS | sha256sum -c --quiet - > /dev/null 2>&1); then

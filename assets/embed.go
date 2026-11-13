@@ -22,7 +22,7 @@ func JournalConfig() []byte { return mustRead("config/journal.yaml") }
 type UnitData struct {
 	Prefix      string   // install root, e.g. /opt/monitoring
 	User        string   // collector + prober user (v0.21.0: monitoring; before otelcol-contrib)
-	AgentUser   string   // agent user (v0.21.0: monitoring-agent; before amc-agent)
+	AgentUser   string   // agent user (monitoring-agent)
 	SiteConfigs []string // extra --config files (site.d overlay), absolute paths
 	Ping        bool     // monitoring-prober: ping probes need CAP_NET_RAW
 }

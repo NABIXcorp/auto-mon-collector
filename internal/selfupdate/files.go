@@ -24,7 +24,7 @@ func unmarshal(b []byte, v any) error {
 // placed there, e.g. in the agent's directory), mode, owner root when we are root, then rename over p (which
 // replaces a link instead of writing through it).
 func writeRoot(p string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(p), ".amc-self-update-*")
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".monitoring-self-update-*")
 	if err != nil {
 		return err
 	}

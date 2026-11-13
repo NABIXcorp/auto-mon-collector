@@ -32,7 +32,7 @@ func Parse(b []byte) (map[string]string, error) {
 			return nil, fmt.Errorf("line %d: not KEY=VALUE", n) // never echo the line: it may hold a secret
 		}
 		v = strings.TrimSpace(v)
-		// Quotes are removed; no escape sequences inside them (amc never writes any, see Format).
+		// Quotes are removed; no escape sequences inside them (monitoring-agent never writes any, see Format).
 		if len(v) >= 2 && (v[0] == '\'' || v[0] == '"') && v[len(v)-1] == v[0] {
 			v = v[1 : len(v)-1]
 		}

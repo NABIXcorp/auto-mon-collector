@@ -131,7 +131,7 @@ func Generate(h Host, a Answers) (Output, error) {
 		case access != "":
 		case t.Values["TOMCAT_ACCESS_LOG"] != "":
 			access = t.Values["TOMCAT_ACCESS_LOG"]
-		case t.Values["TOMCAT_ACCESS_LOG_DIR"] != "": // scans saved by amc <= v0.2.0
+		case t.Values["TOMCAT_ACCESS_LOG_DIR"] != "": // scans saved by v0.2.0 and older
 			access = t.Values["TOMCAT_ACCESS_LOG_DIR"] + "/localhost_access_log.*.txt"
 		default:
 			out.Defaults = append(out.Defaults, "no Tomcat access log found: no HTTP status / latency from logs "+

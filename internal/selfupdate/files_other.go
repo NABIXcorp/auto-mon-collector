@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// amc installs on Linux only; elsewhere (development builds, tests) links and owners are not checked.
+// monitoring-agent installs on Linux only; elsewhere (development builds, tests) links and owners are not checked.
 
 func openNoFollow(p string) (*os.File, error) { return os.Open(p) }
 

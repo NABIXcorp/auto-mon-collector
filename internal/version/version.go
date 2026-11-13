@@ -13,7 +13,7 @@ var (
 	Date    = "unknown"
 )
 
-// String returns one line for `amc version`.
+// String returns one line for `monitoring-agent version`.
 func String() string {
 	return fmt.Sprintf("auto-mon-collector %s (commit %s, built %s, %s/%s)",
 		Version, Commit, Date, runtime.GOOS, runtime.GOARCH)

@@ -22,12 +22,12 @@ import (
 )
 
 const (
-	oldBin  = "OLD AMC v0.16.0"
-	newBin  = "NEW AMC v0.16.1"
+	oldBin  = "OLD AGENT v0.16.0"
+	newBin  = "NEW AGENT v0.16.1"
 	testNow = 1792700000
 )
 
-// env: an installed prefix (answers with an agent section, bin/amc), a fake release server with a throwaway
+// env: an installed prefix (answers with an agent section, bin/monitoring-agent), a fake release server with a throwaway
 // release key, a control-plane key that signs requests, and a fake runner.
 type env struct {
 	t        *testing.T
@@ -38,8 +38,8 @@ type env struct {
 	files    map[string][]byte // served below /<version>/
 	calls    []string
 	lockSeen bool
-	version  func(bin []byte) string // output of `bin/amc version`
-	update   error                   // result of `bin/amc update`
+	version  func(bin []byte) string // output of `bin/monitoring-agent version`
+	update   error                   // result of `bin/monitoring-agent update`
 	out      bytes.Buffer
 }
 
@@ -55,12 +55,12 @@ func newEnv(t *testing.T, policy string) *env {
 	ans := "agent:\n  url: https://agent.example.com/agent/\n  control_plane_key: \"" +
 		agent.EncodeKey(e.cp.Public().(ed25519.PublicKey)) + "\"\n" + policy
 	e.write("answers.yaml", ans, 0o644)
-	e.write("bin/amc", oldBin, 0o755)
+	e.write("bin/monitoring-agent", oldBin, 0o755)
 
 	k, pub := testKey(t, elliptic.P256())
 	bin := []byte(newBin)
-	sums := sumsFor(map[string][]byte{"amc-linux-amd64": bin, "amc-linux-arm64": []byte("ARM"), "get.sh": []byte("sh")})
-	e.files = map[string][]byte{"amc-linux-amd64": bin, "SHA256SUMS": sums, "SHA256SUMS.sig": signSums(t, k, sums)}
+	sums := sumsFor(map[string][]byte{"monitoring-agent-linux-amd64": bin, "monitoring-agent-linux-arm64": []byte("ARM"), "get.sh": []byte("sh")})
+	e.files = map[string][]byte{"monitoring-agent-linux-amd64": bin, "SHA256SUMS": sums, "SHA256SUMS.sig": signSums(t, k, sums)}
 	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e.requests.Add(1)
 		if !strings.HasPrefix(r.URL.Path, "/v0.16.1/") {
@@ -162,15 +162,15 @@ func TestSelfUpdateOK(t *testing.T) {
 	if res.Result != "ok" || res.ID != "u-0123456789" || res.From != "v0.16.0" || res.To != "v0.16.1" {
 		t.Fatalf("result: %+v\n%s", res, e.out.String())
 	}
-	if e.read("bin/amc") != newBin || e.read("bin/amc.before-v0.16.0") != oldBin {
-		t.Errorf("binaries: amc=%q before=%q", e.read("bin/amc"), e.read("bin/amc.before-v0.16.0"))
+	if e.read("bin/monitoring-agent") != newBin || e.read("bin/monitoring-agent.before-v0.16.0") != oldBin {
+		t.Errorf("binaries: agent=%q before=%q", e.read("bin/monitoring-agent"), e.read("bin/monitoring-agent.before-v0.16.0"))
 	}
-	want := []string{"amc version", "amc update --prefix " + e.prefix, "systemctl try-restart monitoring-agent.service"}
+	want := []string{"monitoring-agent version", "monitoring-agent update --prefix " + e.prefix, "systemctl try-restart monitoring-agent.service"}
 	if strings.Join(e.calls, "|") != strings.Join(want, "|") {
 		t.Errorf("calls: %q", e.calls)
 	}
 	if !e.lockSeen {
-		t.Error("the lock was not handed to `amc update`")
+		t.Error("the lock was not handed to `monitoring-agent update`")
 	}
 	if r := e.result(); r.Result != "ok" || r.ID != res.ID || r.At != testNow {
 		t.Errorf("result file: %+v", r)
@@ -234,8 +234,8 @@ func TestSelfUpdateRefused(t *testing.T) {
 			if res.Result != "refused" || !strings.Contains(res.Detail, c.want) {
 				t.Fatalf("got %+v, want refused with %q", res, c.want)
 			}
-			if e.read("bin/amc") != oldBin || e.requests.Load() != 0 || len(e.calls) != 0 {
-				t.Errorf("something happened: amc=%q requests=%d calls=%q", e.read("bin/amc"), e.requests.Load(), e.calls)
+			if e.read("bin/monitoring-agent") != oldBin || e.requests.Load() != 0 || len(e.calls) != 0 {
+				t.Errorf("something happened: agent=%q requests=%d calls=%q", e.read("bin/monitoring-agent"), e.requests.Load(), e.calls)
 			}
 		})
 	}
@@ -274,7 +274,7 @@ func TestSelfUpdateDownloadFailures(t *testing.T) {
 		edit func(e *env)
 		want string
 	}{
-		"binary changed": {func(e *env) { e.files["amc-linux-amd64"] = []byte("EVIL") }, "checksum mismatch"},
+		"binary changed": {func(e *env) { e.files["monitoring-agent-linux-amd64"] = []byte("EVIL") }, "checksum mismatch"},
 		"sums changed": {func(e *env) {
 			e.files["SHA256SUMS"] = append([]byte{}, e.files["SHA256SUMS"]...)
 			e.files["SHA256SUMS"][0] ^= 1
@@ -284,7 +284,7 @@ func TestSelfUpdateDownloadFailures(t *testing.T) {
 			e.files["SHA256SUMS.sig"] = signSums(e.t, k, e.files["SHA256SUMS"])
 		}, "not signed"},
 		"no signature":   {func(e *env) { delete(e.files, "SHA256SUMS.sig") }, "HTTP 404"},
-		"no asset":       {func(e *env) { delete(e.files, "amc-linux-amd64") }, "HTTP 404"},
+		"no asset":       {func(e *env) { delete(e.files, "monitoring-agent-linux-amd64") }, "HTTP 404"},
 		"binary too big": {func(e *env) { old := maxBinary; maxBinary = 4; e.t.Cleanup(func() { maxBinary = old }) }, "too large"},
 	}
 	for name, c := range cases {
@@ -296,8 +296,8 @@ func TestSelfUpdateDownloadFailures(t *testing.T) {
 			if res.Result != "failed" || !strings.Contains(res.Detail, c.want) || !strings.Contains(res.Detail, "nothing changed") {
 				t.Fatalf("got %+v, want failed with %q", res, c.want)
 			}
-			if e.read("bin/amc") != oldBin || len(e.calls) != 0 {
-				t.Errorf("changed: amc=%q calls=%q", e.read("bin/amc"), e.calls)
+			if e.read("bin/monitoring-agent") != oldBin || len(e.calls) != 0 {
+				t.Errorf("changed: agent=%q calls=%q", e.read("bin/monitoring-agent"), e.calls)
 			}
 			if r := e.result(); r.Result != "failed" {
 				t.Errorf("result file: %+v", r)
@@ -315,16 +315,16 @@ func TestSelfUpdateRestoresOldBinary(t *testing.T) {
 		if res.Result != "rolled_back" || !strings.Contains(res.Detail, "previous version v0.16.0 restored") {
 			t.Fatalf("%+v", res)
 		}
-		if e.read("bin/amc") != oldBin {
-			t.Errorf("bin/amc = %q", e.read("bin/amc"))
+		if e.read("bin/monitoring-agent") != oldBin {
+			t.Errorf("bin/monitoring-agent = %q", e.read("bin/monitoring-agent"))
 		}
 		for _, c := range e.calls {
-			if strings.HasPrefix(c, "amc update") {
-				t.Errorf("amc update ran after a failed version check")
+			if strings.HasPrefix(c, "monitoring-agent update") {
+				t.Errorf("monitoring-agent update ran after a failed version check")
 			}
 		}
 	})
-	t.Run("amc update fails", func(t *testing.T) {
+	t.Run("monitoring-agent update fails", func(t *testing.T) {
 		e := newEnv(t, "  update:\n    allow: true\n")
 		e.update = errors.New("exit status 1")
 		e.request(nil, nil)
@@ -332,8 +332,8 @@ func TestSelfUpdateRestoresOldBinary(t *testing.T) {
 		if res.Result != "rolled_back" || !strings.Contains(res.Detail, "update failed") {
 			t.Fatalf("%+v", res)
 		}
-		if e.read("bin/amc") != oldBin || e.read("bin/amc.before-v0.16.0") != oldBin {
-			t.Errorf("bin/amc = %q", e.read("bin/amc"))
+		if e.read("bin/monitoring-agent") != oldBin || e.read("bin/monitoring-agent.before-v0.16.0") != oldBin {
+			t.Errorf("bin/monitoring-agent = %q", e.read("bin/monitoring-agent"))
 		}
 		if e.calls[len(e.calls)-1] != "systemctl try-restart monitoring-agent.service" {
 			t.Errorf("agent not restarted onto the restored binary: %q", e.calls)

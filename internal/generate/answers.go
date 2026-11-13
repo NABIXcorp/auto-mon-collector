@@ -37,7 +37,7 @@ type Answers struct {
 	Agent *Agent `yaml:"agent,omitempty"`
 }
 
-// Service is one service's answers. Enabled nil = default (on when detected and amc has a profile).
+// Service is one service's answers. Enabled nil = default (on when detected and monitoring-agent has a profile).
 type Service struct {
 	Enabled *bool  `yaml:"enabled,omitempty"`
 	Service string `yaml:"service,omitempty"` // oracle: service name (ORACLE_SERVICE), e.g. the PDB

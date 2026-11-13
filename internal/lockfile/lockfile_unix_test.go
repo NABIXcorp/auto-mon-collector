@@ -26,8 +26,8 @@ func TestBusyAndRelease(t *testing.T) {
 	b.Release()
 }
 
-// The child of a lock holder takes the lock over only through the inherited fd 3 (self-update -> amc update);
-// without it, it is refused like any other amc.
+// The child of a lock holder takes the lock over only through the inherited fd 3 (self-update -> update);
+// without it, it is refused like any other run.
 func TestInheritedLock(t *testing.T) {
 	if dir := os.Getenv("MONITORING_LOCK_TEST_DIR"); dir != "" { // the child
 		l, err := Acquire(dir)

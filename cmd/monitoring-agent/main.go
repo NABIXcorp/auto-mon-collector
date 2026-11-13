@@ -1,4 +1,4 @@
-// Command monitoring-agent (amc before v0.20.0; repository auto-mon-collector) scans a Linux host, proposes what to monitor, generates the configuration
+// Command monitoring-agent (repository auto-mon-collector) scans a Linux host, proposes what to monitor, generates the configuration
 // for monitoring-collector (our OpenTelemetry Collector build, same signed release) and installs it on request.
 // See docs/design.md.
 package main
@@ -29,7 +29,6 @@ import (
 )
 
 const usage = `monitoring-agent: host discovery installer and agent for monitoring-collector (OpenTelemetry)
-(called amc before v0.20.0: that name still works)
 
 Usage:
   monitoring-agent plan  --answers FILE [flags]

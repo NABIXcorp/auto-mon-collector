@@ -26,7 +26,7 @@ const Token = "test-enrol-token-0123456789"
 type Server struct {
 	Priv ed25519.PrivateKey
 	Poll time.Duration // long poll (default 2 s)
-	// NoInventory: answer /v1/inventory with 404 (a control plane older than amc v0.15.0)
+	// NoInventory: answer /v1/inventory with 404 (a control plane older than v0.15.0)
 	NoInventory bool
 
 	mu       sync.Mutex
@@ -65,7 +65,7 @@ func (s *Server) Publish(host string, rev int64, p generate.Probes, expires int6
 	return s.publish(host, rev, p, expires, tamper, otherKey, nil)
 }
 
-// PublishUpdate (v0.16.0) signs a newer document for host that also asks for an amc update.
+// PublishUpdate (v0.16.0) signs a newer document for host that also asks for a monitoring-agent update.
 func (s *Server) PublishUpdate(host string, p generate.Probes, version, id string) int64 {
 	return s.publish(host, 0, p, 0, false, false, map[string]any{"update": map[string]any{"version": version, "id": id}})
 }
@@ -227,8 +227,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) verify(r *http.Request) (string, []byte, bool) {
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 64<<10))
-	host, ts, nonce := r.Header.Get("X-Amc-Host"), r.Header.Get("X-Amc-Time"), r.Header.Get("X-Amc-Nonce")
-	sig, err := base64.StdEncoding.DecodeString(r.Header.Get("X-Amc-Signature"))
+	host, ts, nonce := r.Header.Get("X-Mon-Host"), r.Header.Get("X-Mon-Time"), r.Header.Get("X-Mon-Nonce")
+	sig, err := base64.StdEncoding.DecodeString(r.Header.Get("X-Mon-Signature"))
 	t, terr := strconv.ParseInt(ts, 10, 64)
 	s.mu.Lock()
 	k := s.hosts[host]

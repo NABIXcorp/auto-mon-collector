@@ -28,7 +28,7 @@ func release(t *testing.T, body string, tamper bool) (*Release, [32]byte) {
 	der, _ := x509.MarshalPKIXPublicKey(&k.PublicKey)
 	pub := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
 	sum := sha256.Sum256([]byte(body))
-	sums := "1111111111111111111111111111111111111111111111111111111111111111  amc-linux-amd64\n" +
+	sums := "1111111111111111111111111111111111111111111111111111111111111111  monitoring-agent-linux-amd64\n" +
 		hex.EncodeToString(sum[:]) + "  monitoring-collector-linux-amd64\n"
 	h := sha256.Sum256([]byte(sums))
 	sig, err := ecdsa.SignASN1(rand.Reader, k, h[:])

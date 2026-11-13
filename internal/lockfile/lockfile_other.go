@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-// Lock: amc installs on Linux only; elsewhere (development builds, tests) the file is created but not locked.
+// Lock: monitoring-agent installs on Linux only; elsewhere (development builds, tests) the file is created but not locked.
 type Lock struct{ f *os.File }
 
 // Acquire creates the lock file; no locking on this platform.

@@ -195,7 +195,7 @@ func desired() Desired {
 		SecretKeys: []string{"OO_ENDPOINT", "OO_AUTH", "ORACLE_MON_PASSWORD"},
 		ReadFiles:  []string{"/var/log/app/alert.log"},
 		Groups:     []string{"tomcat"},
-		Version:    []byte("installer=amc test\ncollector=" + collector.Name + "\n"),
+		Version:    []byte("installer=monitoring-agent test\ncollector=" + collector.Name + "\n"),
 		Inventory:  []byte("{\"schema\": 1}\n"),
 	}
 }
@@ -719,10 +719,10 @@ func TestCheckCountsChanges(t *testing.T) {
 	// the fake runner does not edit /etc/group: do what the real usermod -aG did
 	h.write("/etc/group", "root:x:0:\ntomcat:x:992:monitoring\nmonitoring:x:990:\n", 0o644)
 	if res, out := run(t, h, r, false, false, false); res.Changes != 0 {
-		t.Errorf("check after apply: %d changes, want 0 (amc update would restart for nothing):\n%s", res.Changes, out)
+		t.Errorf("check after apply: %d changes, want 0 (update would restart for nothing):\n%s", res.Changes, out)
 	}
 	// a new installer, identical configuration: only VERSION differs
-	h.write("/opt/monitoring/VERSION", "installer=amc older\n", 0o644)
+	h.write("/opt/monitoring/VERSION", "installer=monitoring-agent older\n", 0o644)
 	if res, out := run(t, h, r, false, false, false); res.Changes != 1 || !res.NoRestart {
 		t.Errorf("only VERSION changed: changes %d, NoRestart %v, want 1 / true:\n%s", res.Changes, res.NoRestart, out)
 	}

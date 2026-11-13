@@ -115,7 +115,7 @@ func writeAtomic(p string, data []byte, mode os.FileMode) error {
 	return err
 }
 
-// State is what the agent applied last (<prefix>/agent/state.json). `amc plan` / `amc apply` read it, so the files
+// State is what the agent applied last (<prefix>/agent/state.json). `monitoring-agent plan` / `monitoring-agent apply` read it, so the files
 // they generate are the agent's (no drift, no undoing the agent's last change).
 type State struct {
 	Revision int64           `json:"revision"`
@@ -151,9 +151,5 @@ func saveState(prefix string, s State) error {
 	return writeAtomic(filepath.Join(prefix, filepath.FromSlash(StateFile)), append(b, '\n'), 0o640)
 }
 
-// VersionKey: this agent's own version in the versions it reports (v0.20.0). The agent also sends the old key
-// LegacyVersionKey ("amc") with the same value until every control plane reads the new one.
-const (
-	VersionKey       = "monitoring-agent"
-	LegacyVersionKey = "amc"
-)
+// VersionKey: this agent's own version in the versions it reports (v0.20.0).
+const VersionKey = "monitoring-agent"

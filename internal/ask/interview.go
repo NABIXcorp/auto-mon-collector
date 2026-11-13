@@ -42,7 +42,7 @@ func Interview(fs []detect.Finding, prev generate.Answers, p Prompter) (generate
 			profiles = append(profiles, f.ID)
 			p.Say("found  %-10s %s %s\n", f.ID, f.Confidence, ports)
 		} else {
-			p.Say("seen   %-10s %s (no amc profile yet: not monitored)\n", f.ID, ports)
+			p.Say("seen   %-10s %s (no monitoring-agent profile yet: not monitored)\n", f.ID, ports)
 		}
 	}
 	sort.Strings(profiles)
@@ -204,7 +204,7 @@ func tomcatLogs(a *generate.Answers, t detect.Finding, prev generate.Service, p 
 // secret and is shown; the auth header and the database password are read without echo.
 func Secrets(p Prompter, keys []string, endpointDefault string) (map[string]string, error) {
 	out := map[string]string{}
-	p.Say("\nsecrets/collector.env is missing: amc asks for the values (written only by apply, root 600)\n")
+	p.Say("\nsecrets/collector.env is missing: monitoring-agent asks for the values (written only by apply, root 600)\n")
 	for _, k := range keys {
 		var v string
 		var err error

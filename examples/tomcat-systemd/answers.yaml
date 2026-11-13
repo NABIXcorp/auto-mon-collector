@@ -1,7 +1,7 @@
 # Example answers for a Tomcat started by systemd (no catalina.out: daily catalina.<date>.log / localhost.<date>.log,
 # access log renamed by the AccessLogValve). The scan finds these logs itself (detect.json); answers only for
 # what it cannot know. Logs elsewhere: services.tomcat.access_log / logs (globs, '-' = none), see docs/design.md.
-#   amc plan --answers answers.yaml --detect-json detect.json
+#   monitoring-agent plan --answers answers.yaml --detect-json detect.json
 project: Shop online
 checks:
   http:

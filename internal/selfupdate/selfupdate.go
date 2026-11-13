@@ -1,13 +1,13 @@
 // Package selfupdate is `monitoring-agent self-update` (v0.16.0): root's half of a remote update requested through
 // the agent
-// (docs/design.md, section 17). Root does not trust the agent (user amc-agent): the ONLY input is the signed
+// (docs/design.md, section 17). Root does not trust the agent (user monitoring-agent): the ONLY input is the signed
 // document the agent saved, and it is verified again here with the control-plane key pinned in the root-owned
 // answers.yaml. The host owner's policy comes from answers.yaml agent.update only. The release is downloaded from
 // the one repository compiled in below and must carry a valid signature of the release key embedded in this binary
 // (keys/release.pub, the same check get.sh does); nothing of the URL, key or commands comes from the request.
 //
 //	verify the request -> policy (allow, downgrade, window) -> lock -> download SHA256SUMS + .sig + asset
-//	-> verify -> keep bin/monitoring-agent.before-<old> -> install bin/monitoring-agent (bin/amc before v0.20.0)
+//	-> verify -> keep bin/monitoring-agent.before-<old> -> install bin/monitoring-agent
 //	-> new `version` -> new `update`
 //	-> result (<prefix>/agent/update-result.json); on a failed version check or update the old binary goes back.
 package selfupdate
@@ -61,7 +61,7 @@ type Options struct {
 	Prefix  string // default /opt/monitoring
 	Request string // default <prefix>/agent/update-request.json
 	Host    string // "" = os.Hostname() (what the agent uses)
-	Running string // the running amc's version (version.Version)
+	Running string // the running monitoring-agent's version (version.Version)
 	Arch    string // default runtime.GOARCH
 	Now     func() time.Time
 	HTTP    *http.Client
@@ -74,7 +74,7 @@ type Options struct {
 func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	o.defaults()
 	res.From = o.Running
-	changed := false // bin/amc was replaced: the agent is restarted at the end (it then runs bin/amc as it is)
+	changed := false // bin/monitoring-agent was replaced: the agent is restarted at the end (it then runs the new binary)
 	keepResult := false
 	defer func() {
 		res.At = o.Now().Unix()
@@ -119,7 +119,7 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	if err := pol.InWindow(o.Now()); err != nil {
 		return set("refused", "%v", err)
 	}
-	// no `amc apply` / `amc update` at the same time (the unit itself never runs twice at once: oneshot)
+	// no `monitoring-agent apply` / `update` at the same time (the unit itself never runs twice at once: oneshot)
 	lk, err := lockfile.Acquire(o.Prefix)
 	if err != nil {
 		return set("refused", "%v", err)
@@ -132,22 +132,14 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	}
 	fmt.Fprintf(o.Out, "self-update: request %s accepted: %s -> %s\n", res.ID, o.Running, target)
 
-	// v0.20.0: the release asset is monitoring-agent-linux-<arch>; a release before that has only amc-linux-<arch>
-	asset := "monitoring-agent-linux-" + o.Arch
+	asset := "monitoring-agent-linux-" + o.Arch // v0.20.0 and later
 	bin, err := o.download(ctx, target, asset)
-	if err != nil && (strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "lists no")) {
-		asset = "amc-linux-" + o.Arch
-		bin, err = o.download(ctx, target, asset)
-	}
 	if err != nil {
 		return set("failed", "nothing changed: %v", err)
 	}
 	fmt.Fprintf(o.Out, "self-update: %s %s: signature and sha256 verified\n", asset, target)
 
 	binPath := filepath.Join(o.Prefix, "bin", "monitoring-agent")
-	if _, err := os.Stat(binPath); err != nil {
-		binPath = filepath.Join(o.Prefix, "bin", "amc") // installed before v0.20.0
-	}
 	old, err := os.ReadFile(binPath)
 	if err != nil {
 		return set("failed", "nothing changed: %v", err)
@@ -219,7 +211,7 @@ func noDowngrade(req *http.Request, via []*http.Request) error {
 }
 
 func execRun(lock *os.File, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...) // no context: a running `amc update` is never killed half-way by us
+	cmd := exec.Command(name, args...) // no context: a running `monitoring-agent update` is never killed half-way by us
 	if lock != nil {
 		cmd.ExtraFiles = []*os.File{lock} // fd 3
 		cmd.Env = append(os.Environ(), lockfile.EnvFD+"=3")
@@ -371,7 +363,7 @@ func (o *Options) get(ctx context.Context, base, name string, limit int64) ([]by
 	return b, nil
 }
 
-// fileVersion: the running version for the file name bin/amc.before-<v> (a non-release build = "unknown").
+// fileVersion: the running version for the file name bin/monitoring-agent.before-<v> (a non-release build = "unknown").
 func fileVersion(v string) string {
 	if _, err := version.Parse(v); err != nil {
 		return "unknown"
