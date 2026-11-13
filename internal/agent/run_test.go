@@ -193,3 +193,25 @@ func TestFirst401RetriedQuickly(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// The agent enrols and reports under the answers' host_name (the collector's host.name), not the OS hostname: a VM
+// called "docker" that reports as "vm-web-01" must enrol as "vm-web-01" (seen in the field).
+func TestHostNameFromAnswers(t *testing.T) {
+	cp := agenttest.New()
+	pre := setupPrefix(t, cp.PublicKey(), "https://cp.example.com/agent/")
+	osName, _ := os.Hostname()
+	if got := agent.HostName(pre); got != osName {
+		t.Fatalf("no host_name: %q, want the OS hostname %q", got, osName)
+	}
+	p := filepath.Join(pre, "answers.yaml")
+	b, _ := os.ReadFile(p)
+	if err := os.WriteFile(p, append([]byte("host_name: vm-web-01\n"), b...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.HostName(pre); got != "vm-web-01" {
+		t.Fatalf("host_name vm-web-01: got %q", got)
+	}
+	if got := agent.HostName(t.TempDir()); got != "" {
+		t.Fatalf("no answers: %q, want empty", got)
+	}
+}

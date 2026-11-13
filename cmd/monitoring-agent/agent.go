@@ -72,7 +72,7 @@ func agentCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "\nmonitoring-agent agent enrol: %v\n", err)
 			return exitPlan
 		}
-		host, _ := os.Hostname()
+		host := agent.HostName(*prefix) // answers host_name, else the OS hostname (the name in the data)
 		fmt.Fprintf(stdout, "\nenrolled as %s; the agent picks the key up within 15 s (journalctl -u monitoring-agent)\n", host)
 		return exitOK
 	default:
