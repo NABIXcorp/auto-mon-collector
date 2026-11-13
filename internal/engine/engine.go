@@ -29,7 +29,9 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/internal/cloudprober"
 	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 	"github.com/NABIXcorp/auto-mon-collector/internal/envfile"
+	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 	"github.com/NABIXcorp/auto-mon-collector/internal/version"
+	"gopkg.in/yaml.v3"
 )
 
 // Runner runs system tools. Run = exit status only; Output = combined output (read-only tools, validate);
@@ -712,6 +714,12 @@ func (e *eng) collectorBinary(ctx context.Context, tmp string) bool {
 		}
 		src = f
 	} else {
+		if m := releaseMirror(e.d.Answers); m != "" {
+			if r, ok := e.o.Collector.(*collector.Release); ok && r.Mirror == "" {
+				r.Mirror, r.Log = m, e.o.Out
+				e.r.ok("release mirror %s (GitHub when it fails)", m)
+			}
+		}
 		want, err := e.o.Collector.Sum(ctx, e.o.Arch)
 		switch {
 		case err != nil && !e.o.Fetch && haveErr == nil:
@@ -1293,4 +1301,15 @@ func (e *eng) journalErrors(unit string) {
 		e.r.warn("%d error/warn line(s) in the last minute:", len(bad))
 		e.r.indent(e.mask(strings.Join(bad[max(0, len(bad)-10):], "\n")), 10)
 	}
+}
+
+// releaseMirror: answers release_mirror (v0.24.0) when it is valid, else "" (Validate refuses a bad one earlier).
+func releaseMirror(answers []byte) string {
+	var a struct {
+		M string `yaml:"release_mirror"`
+	}
+	if yaml.Unmarshal(answers, &a) != nil || generate.ValidMirror(a.M) != nil {
+		return ""
+	}
+	return a.M
 }

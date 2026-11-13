@@ -111,3 +111,25 @@ func TestFetchReusesTheDownloadInDir(t *testing.T) {
 		t.Fatalf("second fetch: %s %v", p2, err)
 	}
 }
+
+func TestReleaseMirrorFirstThenBase(t *testing.T) {
+	r, want := release(t, "collector binary", false)
+	var hits int
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		http.Error(w, "warming", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(dead.Close)
+	var log strings.Builder
+	r.Mirror, r.Log = dead.URL+"/", &log
+	got, err := r.Sum(context.Background(), "amd64")
+	if err != nil || got != want || hits == 0 || !strings.Contains(log.String(), "release mirror") {
+		t.Fatalf("Sum = %x, %v; mirror hits %d; log %q", got, err, hits, log.String())
+	}
+	// a working mirror: the base is not asked
+	good := r.Base
+	r.Mirror, r.Base, r.sums = good, dead.URL+"/", nil
+	if got, err := r.Sum(context.Background(), "amd64"); err != nil || got != want {
+		t.Fatalf("Sum via mirror = %x, %v", got, err)
+	}
+}

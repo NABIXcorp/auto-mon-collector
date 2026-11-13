@@ -32,8 +32,9 @@ import (
 	"github.com/NABIXcorp/auto-mon-collector/keys"
 )
 
-// releaseBase is the only place a release comes from: <base><version>/<asset>. Not configurable on purpose (no
-// flag, no answers key, nothing from the request).
+// releaseBase: where a release comes from: <base><version>/<asset>. v0.24.0: the root-owned answers may name a
+// mirror (release_mirror) that is tried first; never anything from the request. The embedded key checks the bytes
+// from either place, and the new binary must report the requested version.
 const releaseBase = "https://github.com/NABIXcorp/auto-mon-collector/releases/download/"
 
 // replaced in tests only (an httptest server, a throwaway key, a small limit)
@@ -68,6 +69,8 @@ type Options struct {
 	Run     Runner
 	Out     io.Writer
 	RootUID int // uid that must own answers.yaml: 0 = root (tests use their own uid)
+
+	mirror string // answers release_mirror (set by loadRequest)
 }
 
 // Run does one self-update and returns the result it also wrote to <prefix>/agent/update-result.json.
@@ -252,6 +255,9 @@ func (o *Options) loadRequest() (request, error) {
 		return r, errors.New("answers.yaml has no agent section")
 	}
 	r.answers = a
+	if a.ReleaseMirror != "" && generate.ValidMirror(a.ReleaseMirror) == nil {
+		o.mirror = a.ReleaseMirror
+	}
 	cpKey, err := generate.ParseKey(a.Agent.ControlPlaneKey)
 	if err != nil {
 		return r, err
@@ -300,8 +306,20 @@ func (o *Options) verifyRequest(res *agent.UpdateResult) (agent.Doc, generate.Ag
 	return doc, req.answers.Agent.Update, last, nil
 }
 
-// download fetches SHA256SUMS, its signature and asset of release v, and verifies them with the embedded key.
+// download: from the mirror (answers release_mirror) when there is one, else / on any error from GitHub.
 func (o *Options) download(ctx context.Context, v, asset string) ([]byte, error) {
+	if o.mirror != "" {
+		b, err := o.downloadFrom(ctx, o.mirror, v, asset)
+		if err == nil {
+			return b, nil
+		}
+		fmt.Fprintf(o.Out, "self-update: release mirror: %v; using GitHub\n", err)
+	}
+	return o.downloadFrom(ctx, baseURL, v, asset)
+}
+
+// downloadFrom fetches SHA256SUMS, its signature and asset of release v, and verifies them with the embedded key.
+func (o *Options) downloadFrom(ctx context.Context, root, v, asset string) ([]byte, error) {
 	if _, err := version.Parse(v); err != nil { // checked before; the URL is built from it
 		return nil, err
 	}
@@ -314,7 +332,7 @@ func (o *Options) download(ctx context.Context, v, asset string) ([]byte, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	base := baseURL + v + "/"
+	base := root + v + "/"
 	sums, err := o.get(ctx, base, "SHA256SUMS", maxSums)
 	if err != nil {
 		return nil, err

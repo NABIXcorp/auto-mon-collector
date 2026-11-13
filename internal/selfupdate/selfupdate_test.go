@@ -41,6 +41,7 @@ type env struct {
 	version  func(bin []byte) string // output of `bin/monitoring-agent version`
 	update   error                   // result of `bin/monitoring-agent update`
 	out      bytes.Buffer
+	httpc    *http.Client // nil = default (the mirror tests: a TLS test server's client)
 }
 
 func newEnv(t *testing.T, policy string) *env {
@@ -128,7 +129,7 @@ func (e *env) run() agent.UpdateResult {
 	e.t.Helper()
 	return Run(context.Background(), Options{
 		Prefix: e.prefix, Host: "app-1.example.com", Running: "v0.16.0", Arch: "amd64", RootUID: os.Getuid(),
-		Now: func() time.Time { return time.Unix(testNow, 0) }, Out: &e.out,
+		Now: func() time.Time { return time.Unix(testNow, 0) }, Out: &e.out, HTTP: e.httpc,
 		Run: func(lock *os.File, name string, args ...string) ([]byte, error) {
 			e.calls = append(e.calls, filepath.Base(name)+" "+strings.Join(args, " "))
 			switch {
@@ -339,4 +340,50 @@ func TestSelfUpdateRestoresOldBinary(t *testing.T) {
 			t.Errorf("agent not restarted onto the restored binary: %q", e.calls)
 		}
 	})
+}
+
+// mirrorEnv: answers with release_mirror = a TLS server (https only) that serves the same signed files, or 503.
+func mirrorEnv(t *testing.T, works bool) (*env, *atomic.Int64) {
+	e := newEnv(t, "  update:\n    allow: true\n")
+	var hits atomic.Int64
+	m := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if !works {
+			http.Error(w, "warming", http.StatusServiceUnavailable)
+			return
+		}
+		b, ok := e.files[strings.TrimPrefix(r.URL.Path, "/dl/v0.16.1/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(b)
+	}))
+	t.Cleanup(m.Close)
+	e.httpc = m.Client()
+	ans, _ := os.ReadFile(filepath.Join(e.prefix, "answers.yaml"))
+	e.write("answers.yaml", "release_mirror: "+m.URL+"/dl/\n"+string(ans), 0o644)
+	return e, &hits
+}
+
+func TestSelfUpdateFromMirror(t *testing.T) {
+	e, hits := mirrorEnv(t, true)
+	e.request(nil, nil)
+	if res := e.run(); res.Result != "ok" {
+		t.Fatalf("result: %+v\n%s", res, e.out.String())
+	}
+	if hits.Load() != 3 || e.requests.Load() != 0 {
+		t.Errorf("mirror %d requests, GitHub %d: want 3 and 0", hits.Load(), e.requests.Load())
+	}
+}
+
+func TestSelfUpdateMirrorFallsBackToGitHub(t *testing.T) {
+	e, hits := mirrorEnv(t, false)
+	e.request(nil, nil)
+	if res := e.run(); res.Result != "ok" {
+		t.Fatalf("result: %+v\n%s", res, e.out.String())
+	}
+	if hits.Load() == 0 || e.requests.Load() != 3 || !strings.Contains(e.out.String(), "release mirror") {
+		t.Errorf("mirror %d, GitHub %d, out %s", hits.Load(), e.requests.Load(), e.out.String())
+	}
 }

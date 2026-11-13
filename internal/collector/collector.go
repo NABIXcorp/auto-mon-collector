@@ -67,8 +67,11 @@ var tagRE = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 type Release struct {
 	Version string
 	Base    string // default releaseBase
-	Key     []byte // default keys.ReleasePub
-	HTTP    *http.Client
+	// Mirror (v0.24.0, answers release_mirror): tried first; any error -> Base. Same signature check.
+	Mirror string
+	Log    io.Writer // where a mirror fallback is reported (nil = nowhere)
+	Key    []byte    // default keys.ReleasePub
+	HTTP   *http.Client
 	// Dir: keep the download here and reuse it while its sha256 matches (`monitoring-agent update` plans and then applies:
 	// one download, not two). "" = into the directory Fetch is given. The caller removes Dir.
 	Dir string
@@ -145,7 +148,20 @@ func (r *Release) Fetch(ctx context.Context, arch string, want [32]byte, dir str
 }
 
 func (r *Release) open(ctx context.Context, name string, limit int64) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.Base+r.Version+"/"+name, nil)
+	if r.Mirror != "" {
+		resp, err := r.openAt(ctx, r.Mirror, name, limit)
+		if err == nil {
+			return resp, nil
+		}
+		if r.Log != nil {
+			fmt.Fprintf(r.Log, "release mirror: %v; using %s\n", err, r.Base)
+		}
+	}
+	return r.openAt(ctx, r.Base, name, limit)
+}
+
+func (r *Release) openAt(ctx context.Context, base, name string, limit int64) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+r.Version+"/"+name, nil)
 	if err != nil {
 		return nil, err
 	}
