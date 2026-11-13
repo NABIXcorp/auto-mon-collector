@@ -42,9 +42,10 @@ type Config struct {
 
 // Local is the host owner's side: answers (own probes + agent section) and the effective allowlist.
 type Local struct {
-	Probes generate.Probes
-	Agent  generate.Agent
-	Allow  generate.Allow
+	HostName string // answers host_name ("" = the OS hostname): the name the agent enrols and reports as
+	Probes   generate.Probes
+	Agent    generate.Agent
+	Allow    generate.Allow
 }
 
 // LoadLocal reads <prefix>/answers.yaml and the project template <prefix>/config/agent-allow.yaml (if any).
@@ -64,13 +65,10 @@ func LoadLocal(prefix string) (Local, error) {
 			return l, err
 		}
 	}
-	return Local{Probes: a.Probes, Agent: *a.Agent, Allow: tmpl.Merge(a.Agent.Allow)}, nil
+	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: tmpl.Merge(a.Agent.Allow)}, nil
 }
 
 func (c *Config) defaults() {
-	if c.Host == "" {
-		c.Host, _ = os.Hostname()
-	}
 	if c.HTTP == nil {
 		c.HTTP = &http.Client{Timeout: 90 * time.Second} // > the 60 s long poll
 	}
@@ -156,7 +154,8 @@ func Run(ctx context.Context, cfg Config) error {
 			lg.Printf("agent: %s: %v", StateFile, err)
 		}
 		seen = max(seen, st.Revision)
-		cl := &Client{Base: local.Agent.URL, Host: cfg.Host, Key: key, HTTP: cfg.HTTP, Now: cfg.Now}
+		host := hostOf(cfg.Host, local)
+		cl := &Client{Base: local.Agent.URL, Host: host, Key: key, HTTP: cfg.HTTP, Now: cfg.Now}
 		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) {
 			return nil
 		}
@@ -202,7 +201,7 @@ func Run(ctx context.Context, cfg Config) error {
 			continue
 		}
 		backoff, unauth = 0, 0
-		doc, verr := Verify(raw, ed25519.PublicKey(cpKey), cfg.Host, st.Revision, cfg.Now(), local.Allow)
+		doc, verr := Verify(raw, ed25519.PublicKey(cpKey), host, st.Revision, cfg.Now(), local.Allow)
 		status := Status{Revision: doc.Revision, Versions: cfg.Versions}
 		var rej *Reject
 		switch {
@@ -343,9 +342,7 @@ func Enrol(ctx context.Context, prefix, host, token string, uid, gid int, httpc 
 	if err != nil {
 		return err
 	}
-	if host == "" {
-		host, _ = os.Hostname()
-	}
+	host = hostOf(host, local)
 	if httpc == nil {
 		httpc = &http.Client{Timeout: 30 * time.Second}
 	}
@@ -365,4 +362,26 @@ func Enrol(ctx context.Context, prefix, host, token string, uid, gid int, httpc 
 		return nil // tests on a system without owners
 	}
 	return os.Lchown(p, uid, gid)
+}
+
+// hostOf: the name this agent enrols and reports as: the explicit one (tests), else the answers' host_name (the
+// collector's host.name, e.g. "vm-web-01" on a VM called "docker"), else the OS hostname. The same name as the data.
+func hostOf(explicit string, l Local) string {
+	if explicit != "" {
+		return explicit
+	}
+	if l.HostName != "" {
+		return l.HostName
+	}
+	h, _ := os.Hostname()
+	return h
+}
+
+// HostName: the name `agent enrol` uses for this host (see hostOf); "" when the answers cannot be read.
+func HostName(prefix string) string {
+	l, err := LoadLocal(prefix)
+	if err != nil {
+		return ""
+	}
+	return hostOf("", l)
 }
