@@ -13,6 +13,12 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > `MONITORING_VERSION`; the agent's signed requests carry `X-Mon-Host` / `-Time` / `-Nonce` / `-Signature` (same
 > signed string) and report only the version keys `monitoring-agent` / `monitoring-prober`. The control plane must
 > accept the new headers before this release goes to a host.
+> Also next: `monitoring-agent install --console URL --token-stdin [--yes] [--host NAME]` = a new host in one step
+> (the control plane's `v1/bootstrap` gives project, host name, agent block, allowlist template, an OTLP gateway
+> endpoint + this host's own gateway token and a release mirror; then plan, "Apply?", apply + start, enrol with the
+> same one-time token). `release_mirror:` in answers.yaml (https, ends in `/`): the collector and self-update try that
+> mirror of the signed release files first, GitHub when it fails (same signature check); get.sh:
+> `MONITORING_RELEASE_BASE` (with `MONITORING_VERSION`).
 > v0.2.0: optional `project:` in answers.yaml (resource attribute `project` on all data), host uptime.
 > v0.3.0: Tomcat started by systemd (daily `catalina.*.log` / `localhost.*.log`), renamed access logs, the log
 > paths can be answered (`services.tomcat.access_log` / `logs`); the project is asked interactively.

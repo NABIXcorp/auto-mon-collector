@@ -584,3 +584,26 @@ jobs:
             if sudo getfacl -p --omit-header "$p" | grep -E '^user:[^:]+:'; then die "ACL entry left on $p"; fi
           done
           [ "$(sudo stat -c %a "$alert")" = 640 ] || die "file mode of the alert log changed"
+          # v0.24.0: one-command install against the fake control plane: bootstrap (project, agent block, gateway
+          # endpoint + token) -> plan -> apply + start (--yes) -> enrol with the same token. No secret is printed.
+          echo "::group::install"
+          mab=$PWD/dist/monitoring-agent-linux-amd64
+          ./fakecp -listen 127.0.0.1:18091 -key-out cp.pub > fakecp2.log 2>&1 &
+          sleep 1
+          sudo "$mab" detect --json | python3 -c 'import json,sys; d=json.load(sys.stdin); d["findings"]=[]; print(json.dumps(d))' > scan-inst.json
+          echo "test-enrol-token-0123456789" | sudo "$mab" install --console http://127.0.0.1:18091/agent/ --token-stdin --yes \
+            --host ci-install --detect-json scan-inst.json --collector-file "$mc" --no-smoke | tee inst.txt
+          must 'installed and enrolled as ci-install' inst.txt
+          if grep -q 'smo_test' inst.txt; then die "the gateway token was printed"; fi
+          sudo grep -q '^project: CI' /opt/monitoring/answers.yaml || die "answers.yaml not written"
+          sudo grep -q '^OO_AUTH=' /opt/monitoring/secrets/collector.env || die "gateway authorization not written"
+          [ "$(sudo stat -c '%a %U' /opt/monitoring/secrets/collector.env)" = "600 root" ] || die "collector.env not root 600"
+          systemctl is-active -q monitoring-collector || die "collector not active after install"
+          systemctl is-active -q monitoring-agent || die "agent not active after install"
+          curl -fsS "http://127.0.0.1:18091/_test/enrolled?host=ci-install" > /dev/null || die "ci-install not enrolled"
+          set +e; echo "test-enrol-token-0123456789" | sudo "$mab" install --console http://127.0.0.1:18091/agent/ --token-stdin --yes > inst2.txt 2>&1; rc=$?; set -e
+          { [ "$rc" -ne 0 ] && grep -q 'installed already' inst2.txt; } || die "a second install was not refused: $(cat inst2.txt)"
+          sudo "$mab" uninstall --yes --purge-data --purge-secrets --purge < /dev/null > un3.txt
+          must 'UNINSTALLED: 0 failure' un3.txt
+          pkill -f "fakecp -listen" || true
+          echo "::endgroup::"

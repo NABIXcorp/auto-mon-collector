@@ -28,6 +28,8 @@ type Server struct {
 	Poll time.Duration // long poll (default 2 s)
 	// NoInventory: answer /v1/inventory with 404 (a control plane older than v0.15.0)
 	NoInventory bool
+	// v0.24.0 bootstrap: what /agent/v1/bootstrap hands out (OTLP = the fake backend, Allow = a YAML template)
+	OTLP, Allow string
 
 	mu       sync.Mutex
 	hosts    map[string]ed25519.PublicKey
@@ -139,6 +141,23 @@ func (s *Server) Enrolled(host string) bool {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/agent/v1/bootstrap": // checks the token, does not use it up (the enrolment does)
+		var in struct {
+			Host  string `json:"host"`
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Token != Token || in.Host == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "token not valid for this host"})
+			return
+		}
+		otlp := s.OTLP
+		if otlp == "" {
+			otlp = "http://127.0.0.1:4320"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"project": "CI", "host_name": in.Host,
+			"agent": map[string]any{"url": "http://" + r.Host + "/agent/", "control_plane_key": s.PublicKey(), "site_allow": true},
+			"allow": s.Allow, "otlp": map[string]string{"endpoint": otlp, "authorization": "Bearer smo_test"}})
 	case "/agent/v1/enrol":
 		var in struct {
 			Host      string `json:"host"`
