@@ -35,6 +35,9 @@ func TestBootstrap(t *testing.T) {
 	if cp.Enrolled("vm-web-01") {
 		t.Fatal("bootstrap used the token up")
 	}
+	if b.ReleaseMirror != "" {
+		t.Errorf("mirror for an http console: %q", b.ReleaseMirror)
+	}
 	// a wrong token: the console's reason, never the token
 	_, err = agent.Bootstrap(context.Background(), base, "vm-web-01", "secret-wrong-token", nil)
 	if err == nil || !strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "secret-wrong-token") {
@@ -74,5 +77,15 @@ func TestConsoleURLAndBundleCheck(t *testing.T) {
 	b.OTLP.Authorization, b.ReleaseMirror = "Bearer smo_x", "http://mirror/"
 	if b.Check() == nil {
 		t.Error("http mirror accepted")
+	}
+}
+
+func TestBundleDefaultsFromConsole(t *testing.T) {
+	var b agent.Bundle
+	b.UseMirror = true
+	agent.DefaultsForTest(&b, "https://agent.example.com/agent/")
+	if b.Agent.URL != "https://agent.example.com/agent/" || b.OTLP.Endpoint != "https://agent.example.com/agent/otlp" ||
+		b.ReleaseMirror != "https://agent.example.com/agent/dl/" {
+		t.Fatalf("%+v", b)
 	}
 }

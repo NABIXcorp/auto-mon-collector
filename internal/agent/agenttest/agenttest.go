@@ -156,7 +156,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			otlp = "http://127.0.0.1:4320"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"project": "CI", "host_name": in.Host,
-			"agent": map[string]any{"url": "http://" + r.Host + "/agent/", "control_plane_key": s.PublicKey(), "site_allow": true},
+			"agent": map[string]any{"control_plane_key": s.PublicKey(), "site_allow": true}, "use_mirror": true, // url: the console
 			"allow": s.Allow, "otlp": map[string]string{"endpoint": otlp, "authorization": "Bearer smo_test"}})
 	case "/agent/v1/enrol":
 		var in struct {

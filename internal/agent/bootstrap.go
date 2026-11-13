@@ -37,6 +37,22 @@ type Bundle struct {
 		Authorization string `json:"authorization"` // -> OO_AUTH ("Bearer smo_..."), never printed
 	} `json:"otlp"`
 	ReleaseMirror string `json:"release_mirror"` // -> answers release_mirror ("" = GitHub only)
+	// UseMirror: the console mirrors the release files at <console>dl/ (when ReleaseMirror is empty)
+	UseMirror bool `json:"use_mirror"`
+}
+
+// defaults: what the console leaves out is relative to the URL install was given (a console behind a proxy
+// does not know its public address): agent url = console, OTLP endpoint = <console>otlp, mirror = <console>dl/.
+func (b *Bundle) defaults(console string) {
+	if b.Agent.URL == "" {
+		b.Agent.URL = console
+	}
+	if b.OTLP.Endpoint == "" {
+		b.OTLP.Endpoint = console + "otlp"
+	}
+	if b.ReleaseMirror == "" && b.UseMirror && strings.HasPrefix(console, "https://") {
+		b.ReleaseMirror = console + "dl/"
+	}
 }
 
 // ConsoleURL: https, or http to a loopback address (tests); ends in "/".
@@ -129,5 +145,6 @@ func Bootstrap(ctx context.Context, base, host, token string, httpc *http.Client
 	if err := json.Unmarshal(raw, &b); err != nil {
 		return b, fmt.Errorf("bootstrap: answer not readable: %w", err)
 	}
+	b.defaults(base)
 	return b, b.Check()
 }
