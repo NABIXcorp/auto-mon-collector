@@ -42,6 +42,7 @@ type env struct {
 	update   error                   // result of `bin/monitoring-agent update`
 	out      bytes.Buffer
 	httpc    *http.Client // nil = default (the mirror tests: a TLS test server's client)
+	noHost   bool         // run without Options.Host (the name comes from answers)
 }
 
 func newEnv(t *testing.T, policy string) *env {
@@ -125,10 +126,17 @@ func (e *env) request(change func(map[string]any), after func(map[string]any)) {
 	e.write(agent.UpdateRequestFile, string(raw), 0o600)
 }
 
+func (e *env) host() string {
+	if e.noHost {
+		return ""
+	}
+	return "app-1.example.com"
+}
+
 func (e *env) run() agent.UpdateResult {
 	e.t.Helper()
 	return Run(context.Background(), Options{
-		Prefix: e.prefix, Host: "app-1.example.com", Running: "v0.16.0", Arch: "amd64", RootUID: os.Getuid(),
+		Prefix: e.prefix, Host: e.host(), Running: "v0.16.0", Arch: "amd64", RootUID: os.Getuid(),
 		Now: func() time.Time { return time.Unix(testNow, 0) }, Out: &e.out, HTTP: e.httpc,
 		Run: func(lock *os.File, name string, args ...string) ([]byte, error) {
 			e.calls = append(e.calls, filepath.Base(name)+" "+strings.Join(args, " "))
@@ -194,6 +202,18 @@ func TestSelfUpdateOK(t *testing.T) {
 	}
 	if len(e.calls) != 0 {
 		t.Errorf("repeat ran %q", e.calls)
+	}
+}
+
+// v0.24.1: no Host given = the agent's name from answers host_name (not the OS hostname, which differs on such hosts)
+func TestSelfUpdateHostFromAnswers(t *testing.T) {
+	e := newEnv(t, "  update:\n    allow: true\n")
+	ans := e.read("answers.yaml")
+	e.write("answers.yaml", "host_name: app-1.example.com\n"+ans, 0o644)
+	e.noHost = true
+	e.request(nil, nil)
+	if res := e.run(); res.Result != "ok" {
+		t.Fatalf("result: %+v\n%s", res, e.out.String())
 	}
 }
 

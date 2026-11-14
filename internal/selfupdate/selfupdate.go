@@ -61,7 +61,7 @@ type Runner func(lock *os.File, name string, args ...string) ([]byte, error)
 type Options struct {
 	Prefix  string // default /opt/monitoring
 	Request string // default <prefix>/agent/update-request.json
-	Host    string // "" = os.Hostname() (what the agent uses)
+	Host    string // "" = the name the agent uses: answers host_name, else os.Hostname() (agent.HostName)
 	Running string // the running monitoring-agent's version (version.Version)
 	Arch    string // default runtime.GOARCH
 	Now     func() time.Time
@@ -180,6 +180,11 @@ func (o *Options) defaults() {
 	}
 	if o.Request == "" {
 		o.Request = filepath.Join(o.Prefix, filepath.FromSlash(agent.UpdateRequestFile))
+	}
+	// v0.24.1: the agent enrols and signs as answers host_name when it is set (on a host whose OS name differs from it,
+	// every request was refused "document is for host ..."); the same rule here
+	if o.Host == "" {
+		o.Host = agent.HostName(o.Prefix)
 	}
 	if o.Host == "" {
 		o.Host, _ = os.Hostname()
