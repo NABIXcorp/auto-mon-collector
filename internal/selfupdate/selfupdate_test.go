@@ -217,6 +217,28 @@ func TestSelfUpdateHostFromAnswers(t *testing.T) {
 	}
 }
 
+// v0.24.1: a refusal before the id is verified is still written under the request's id (the console shows it)
+func TestSelfUpdateRefusedReported(t *testing.T) {
+	e := newEnv(t, "  update:\n    allow: true\n")
+	e.request(func(d map[string]any) { d["host"] = "other.example.com" }, nil)
+	if res := e.run(); res.Result != "refused" || res.ID != "u-0123456789" {
+		t.Fatalf("result: %+v", res)
+	}
+	if r := e.result(); r.Result != "refused" || r.ID != "u-0123456789" || !strings.Contains(r.Detail, "is for host") {
+		t.Errorf("result file: %+v", r)
+	}
+	// a malformed id: nothing to report under
+	e2 := newEnv(t, "  update:\n    allow: true\n")
+	e2.request(func(d map[string]any) {
+		d["host"] = "other.example.com"
+		d["update"] = map[string]any{"version": "v0.16.1", "id": "../x"}
+	}, nil)
+	e2.run()
+	if r := e2.result(); r.ID != "" {
+		t.Errorf("malformed id written: %+v", r)
+	}
+}
+
 func TestSelfUpdateRefused(t *testing.T) {
 	_, otherCP, _ := ed25519.GenerateKey(rand.Reader)
 	allow := "  update:\n    allow: true\n"
