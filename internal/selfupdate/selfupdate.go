@@ -14,6 +14,7 @@ package selfupdate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -61,7 +62,7 @@ type Runner func(lock *os.File, name string, args ...string) ([]byte, error)
 type Options struct {
 	Prefix  string // default /opt/monitoring
 	Request string // default <prefix>/agent/update-request.json
-	Host    string // "" = os.Hostname() (what the agent uses)
+	Host    string // "" = the name the agent uses: answers host_name, else os.Hostname() (agent.HostName)
 	Running string // the running monitoring-agent's version (version.Version)
 	Arch    string // default runtime.GOARCH
 	Now     func() time.Time
@@ -85,7 +86,17 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 			res.Detail = res.Detail[:1000]
 		}
 		fmt.Fprintf(o.Out, "self-update: %s: %s\n", res.Result, res.Detail)
-		// no verified id (nothing to report it under) or a request handled before: the result file keeps the
+		// v0.24.1: a request refused before its id was verified (wrong host, bad signature, expired, ...) is still
+		// reported under the id the request names, so the control plane shows the refusal instead of "updating"
+		// until its timeout; only a refusal, and never over an earlier result for the same id (a replay)
+		if res.ID == "" && !keepResult && res.Result == "refused" {
+			if id := unverifiedID(o.Request); id != "" {
+				if prev, err := agent.LoadUpdateResult(o.Prefix); err == nil && prev.ID != id {
+					res.ID = id
+				}
+			}
+		}
+		// no id (nothing to report it under) or a request handled before: the result file keeps the
 		// earlier result, which the agent may not have reported yet
 		if res.ID == "" || keepResult {
 			return
@@ -180,6 +191,11 @@ func (o *Options) defaults() {
 	}
 	if o.Request == "" {
 		o.Request = filepath.Join(o.Prefix, filepath.FromSlash(agent.UpdateRequestFile))
+	}
+	// v0.24.1: the agent enrols and signs as answers host_name when it is set (on a host whose OS name differs from it,
+	// every request was refused "document is for host ..."); the same rule here
+	if o.Host == "" {
+		o.Host = agent.HostName(o.Prefix)
 	}
 	if o.Host == "" {
 		o.Host, _ = os.Hostname()
@@ -398,4 +414,22 @@ func lastLine(s string) string {
 		s = s[:300]
 	}
 	return s
+}
+
+// unverifiedID: the update id a request names, read WITHOUT checking its signature: used only to report a refusal
+// under it ("" = no well-formed id)
+func unverifiedID(p string) string {
+	raw, err := readRequest(p)
+	if err != nil {
+		return ""
+	}
+	var d struct {
+		Update *struct {
+			ID string `json:"id"`
+		} `json:"update"`
+	}
+	if json.Unmarshal(raw, &d) != nil || d.Update == nil || !agent.ValidUpdateID(d.Update.ID) {
+		return ""
+	}
+	return d.Update.ID
 }
