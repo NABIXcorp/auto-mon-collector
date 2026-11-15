@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -1292,8 +1293,7 @@ func (e *eng) journalErrors(unit string) {
 	out, _ := e.o.Runner.Output(nil, "journalctl", "-u", unit, "--since", "-1min", "--no-pager", "-o", "cat")
 	var bad []string
 	for _, l := range strings.Split(string(out), "\n") {
-		ll := strings.ToLower(l)
-		if (strings.Contains(ll, "error") || strings.Contains(ll, "warn")) && !strings.Contains(ll, "probe") {
+		if badLogLine(l) {
 			bad = append(bad, l)
 		}
 	}
@@ -1301,6 +1301,41 @@ func (e *eng) journalErrors(unit string) {
 		e.r.warn("%d error/warn line(s) in the last minute:", len(bad))
 		e.r.indent(e.mask(strings.Join(bad[max(0, len(bad)-10):], "\n")), 10)
 	}
+}
+
+// badLogLine: a warn / error line of the unit's own log. A line with a level field (collector console log
+// "time<TAB>level<TAB>...", logfmt "level=...", JSON "level":"...") is judged by that field only, so an info line
+// whose text holds the word (the journald receiver's "--priority warning") is not counted. A line without a level
+// keeps the word check. "probe" lines stay out (the oracledb RDS/OCI hosting probe warning is harmless).
+func badLogLine(l string) bool {
+	ll := strings.ToLower(l)
+	if strings.TrimSpace(ll) == "" || strings.Contains(ll, "probe") {
+		return false
+	}
+	if lv, ok := logLevel(ll); ok {
+		switch lv {
+		case "warn", "warning", "error", "err", "dpanic", "panic", "fatal", "crit", "critical":
+			return true
+		}
+		return false
+	}
+	return strings.Contains(ll, "error") || strings.Contains(ll, "warn")
+}
+
+var levelRE = regexp.MustCompile(`(?:^|[\s,{])"?level"?\s*[=:]\s*"?([a-z]+)`)
+
+// logLevel: the level field of a lower-cased log line, when the line has one.
+func logLevel(ll string) (string, bool) {
+	if f := strings.Split(ll, "\t"); len(f) >= 3 {
+		switch lv := strings.TrimSpace(f[1]); lv {
+		case "debug", "info", "warn", "error", "dpanic", "panic", "fatal":
+			return lv, true
+		}
+	}
+	if m := levelRE.FindStringSubmatch(ll); m != nil {
+		return m[1], true
+	}
+	return "", false
 }
 
 // releaseMirror: answers release_mirror (v0.24.0) when it is valid, else "" (Validate refuses a bad one earlier).
