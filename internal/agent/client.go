@@ -153,6 +153,19 @@ type Inventory struct {
 	UpdateAllowed bool `json:"update_allowed"`
 	// SiteAllowed (v0.23.0): answers.yaml agent.site.allow (the control plane sends overlays only then)
 	SiteAllowed bool `json:"site_allowed"`
+	// Allow (v0.25.0): the effective allowlist (template + answers.yaml extras), so the control plane can show it and
+	// warn before it sends a probe the agent would refuse
+	Allow *InvAllow `json:"allow,omitempty"`
+}
+
+// InvAllow: the effective allowlist as the inventory sends it.
+type InvAllow struct {
+	Domains      []string `json:"domains"`
+	Networks     []string `json:"networks"`
+	Ports        []int    `json:"ports"`
+	MaxProbes    int      `json:"max_probes"`
+	MinIntervalS int      `json:"min_interval_s"`
+	Ping         bool     `json:"ping"`
 }
 
 // RefusedError: the control plane answered 4xx (not 401 / 429), e.g. 404 = an older control plane without

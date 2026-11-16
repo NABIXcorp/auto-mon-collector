@@ -159,7 +159,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) {
 			return nil
 		}
-		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow); sum != sentInv {
+		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -309,12 +309,28 @@ func reportUpdateResult(ctx context.Context, cfg Config, cl *Client, st *State) 
 	return true
 }
 
+// invAllow: the effective allowlist for the inventory (empty lists as [] so the console tells "none" from "unknown")
+func invAllow(a generate.Allow) *InvAllow {
+	nz := func(xs []string) []string {
+		if xs == nil {
+			return []string{}
+		}
+		return xs
+	}
+	ports := a.Ports
+	if ports == nil {
+		ports = []int{}
+	}
+	return &InvAllow{Domains: nz(a.Domains), Networks: nz(a.Networks), Ports: ports, MaxProbes: a.MaxProbes, MinIntervalS: a.MinIntervalS, Ping: a.Ping}
+}
+
 // maxInventory: a larger inventory.json is not sent (the control plane caps request bodies).
 const maxInventory = 48 << 10
 
 // inventoryBody builds the inventory request and its hash.
-func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool) ([]byte, string) {
-	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed}
+func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow) ([]byte, string) {
+	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
+		Allow: invAllow(allow)}
 	b, err := os.ReadFile(filepath.Join(prefix, generate.InventoryFile))
 	switch {
 	case os.IsNotExist(err):
