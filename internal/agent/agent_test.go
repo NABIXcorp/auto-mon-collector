@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,7 @@ func TestVerify(t *testing.T) {
 			"probes": map[string]any{"interval_s": 30, "tcp": []any{map[string]any{"name": "db", "host": "db.example.com", "port": 5432}},
 				"http": []any{map[string]any{"name": "api", "url": "https://api.example.org/health"}}, "ping": []any{}}}
 	}
-	if d, err := Verify(sign(t, priv, good()), pub, "app-1", 3, now, testAllow); err != nil || d.Revision != 4 || len(d.Probes.TCP) != 1 {
+	if d, _, err := Verify(sign(t, priv, good()), pub, "app-1", 3, now, testAllow); err != nil || d.Revision != 4 || len(d.Probes.TCP) != 1 {
 		t.Fatalf("good document: %v %+v", err, d)
 	}
 	raw := sign(t, priv, good())
@@ -97,19 +98,40 @@ func TestVerify(t *testing.T) {
 			d["probes"] = map[string]any{"tcp": []any{map[string]any{"name": "Bad Name", "host": "db.example.com", "port": 5432}}}
 			return sign(t, priv, d)
 		}(), 3, "name"},
-		"outside allowlist": {func() []byte {
+		"over the probe count": {func() []byte {
 			d := good()
-			d["probes"] = map[string]any{"tcp": []any{map[string]any{"name": "x", "host": "evil.example.net", "port": 5432}}}
+			var tcp []any
+			for i := 0; i < 31; i++ {
+				tcp = append(tcp, map[string]any{"name": fmt.Sprintf("p%d", i), "host": fmt.Sprintf("db%d.example.com", i), "port": 5432})
+			}
+			d["probes"] = map[string]any{"tcp": tcp}
 			return sign(t, priv, d)
 		}(), 3, "allowlist"},
 		"unknown field": {func() []byte { d := good(); d["command"] = "rm -rf /"; return sign(t, priv, d) }(), 3, "not a probe document"},
 	}
 	for name, c := range cases {
-		_, err := Verify(c.raw, pub, "app-1", c.applied, now, testAllow)
+		_, _, err := Verify(c.raw, pub, "app-1", c.applied, now, testAllow)
 		var rej *Reject
 		if !errors.As(err, &rej) || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: got %v, want a rejection containing %q", name, err, c.want)
 		}
+	}
+}
+
+// v0.27.0: a probe outside the allowlist is left out and reported; the other probes of the list still run
+func TestVerifyLeavesOutRefusedProbes(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	now := time.Unix(1792500000, 0)
+	d := map[string]any{"host": "app-1", "revision": 4, "issued_at": now.Unix(), "expires_at": now.Unix() + 600,
+		"probes": map[string]any{"tcp": []any{map[string]any{"name": "db", "host": "db.example.com", "port": 5432},
+			map[string]any{"name": "x", "host": "evil.example.net", "port": 5432}},
+			"ping": []any{map[string]any{"name": "p", "host": "db.example.com"}}}}
+	doc, refused, err := Verify(sign(t, priv, d), pub, "app-1", 3, now, testAllow)
+	if err != nil || doc.Revision != 4 || len(doc.Probes.TCP) != 1 || doc.Probes.TCP[0].Name != "db" || len(doc.Probes.Ping) != 0 {
+		t.Fatalf("doc: %v %+v", err, doc.Probes)
+	}
+	if len(refused) != 2 || refused[0].Name != "x" || !strings.Contains(refused[0].Reason, "domains") || refused[1].Name != "p" || !strings.Contains(refused[1].Reason, "ping") {
+		t.Fatalf("refused: %+v", refused)
 	}
 }
 

@@ -207,8 +207,8 @@ func Run(ctx context.Context, cfg Config) error {
 			continue
 		}
 		backoff, unauth = 0, 0
-		doc, verr := Verify(raw, ed25519.PublicKey(cpKey), host, st.Revision, cfg.Now(), local.Allow)
-		status := Status{Revision: doc.Revision, Versions: cfg.Versions}
+		doc, refused, verr := Verify(raw, ed25519.PublicKey(cpKey), host, st.Revision, cfg.Now(), local.Allow)
+		status := Status{Revision: doc.Revision, Versions: cfg.Versions, Refused: refused}
 		var rej *Reject
 		switch {
 		case errors.As(verr, &rej):
@@ -249,6 +249,12 @@ func Run(ctx context.Context, cfg Config) error {
 				}
 				n := len(doc.Probes.TCP) + len(doc.Probes.HTTP) + len(doc.Probes.Ping)
 				status.Result, status.Detail = "applied", fmt.Sprintf("%d probes", n)
+				if len(refused) > 0 {
+					status.Detail += fmt.Sprintf(", %d left out (allowlist)", len(refused))
+					for _, r := range refused {
+						lg.Printf("agent: probe %s left out: %s", r.Name, r.Reason)
+					}
+				}
 				if restarted {
 					status.Detail += ", Cloudprober restarted"
 				}

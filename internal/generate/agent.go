@@ -277,6 +277,50 @@ func ParseKey(s string) ([]byte, error) {
 // Validate applies the answers rules for probes (the same for a list from the control plane).
 func (p Probes) Validate() error { return p.validate() }
 
+// Refused (v0.27.0): one probe left out of a list because the allowlist does not cover it.
+type Refused struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+// SplitAllow (v0.27.0): the probes the allowlist covers, and the ones it does not (each with its reason). Before,
+// one probe outside the allowlist made the agent refuse the WHOLE list (and with it an update or overlay in the same
+// document). The list-wide limits (count, interval) still refuse the whole list: the control plane keeps to them.
+func (p Probes) SplitAllow(al Allow) (Probes, []Refused, error) {
+	n := len(p.TCP) + len(p.HTTP) + len(p.Ping)
+	if n > al.MaxProbes {
+		return p, nil, fmt.Errorf("%d probes, allowed %d", n, al.MaxProbes)
+	}
+	if p.IntervalS != 0 && p.IntervalS < al.MinIntervalS {
+		return p, nil, fmt.Errorf("interval %d s below the allowed %d s", p.IntervalS, al.MinIntervalS)
+	}
+	out := Probes{IntervalS: p.IntervalS}
+	var refused []Refused
+	keep := func(name string, err error) bool {
+		if err != nil {
+			refused = append(refused, Refused{Name: name, Reason: err.Error()})
+			return false
+		}
+		return true
+	}
+	for _, t := range p.TCP {
+		if keep(t.Name, Probes{TCP: []TCPProbe{t}}.CheckAllow(al)) {
+			out.TCP = append(out.TCP, t)
+		}
+	}
+	for _, h := range p.HTTP {
+		if keep(h.Name, Probes{HTTP: []HTTPProbe{h}}.CheckAllow(al)) {
+			out.HTTP = append(out.HTTP, h)
+		}
+	}
+	for _, g := range p.Ping {
+		if keep(g.Name, Probes{Ping: []PingProbe{g}}.CheckAllow(al)) {
+			out.Ping = append(out.Ping, g)
+		}
+	}
+	return out, refused, nil
+}
+
 // CheckAllow: every probe of p must be inside the effective allowlist. Nothing is resolved: IP literals must be in
 // a network, names must match a domain; ports must be listed (http(s) URLs: the URL port or 80 / 443).
 func (p Probes) CheckAllow(al Allow) error {

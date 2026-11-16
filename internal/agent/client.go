@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 	"io"
 	"net/http"
 	"net/url"
@@ -121,6 +122,8 @@ type Status struct {
 	Update   *UpdateStatus     `json:"update,omitempty"` // v0.16.0: about an update request (see UpdateStatus)
 	Site     *SiteStatus       `json:"site,omitempty"`   // v0.23.0: about an overlay set (see SiteStatus)
 	Allow    *AllowStatus      `json:"allow,omitempty"`  // v0.26.0: about an allowlist overlay (see AllowStatus)
+	// v0.27.0: probes left out because the allowlist does not cover them (the others run)
+	Refused []generate.Refused `json:"refused,omitempty"`
 }
 
 // AllowStatus (v0.26.0) reports an allowlist overlay like SiteStatus: "started" / "refused" / "failed" from the
