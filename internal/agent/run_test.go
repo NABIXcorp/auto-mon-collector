@@ -89,11 +89,12 @@ func TestRunAgainstFakeControlPlane(t *testing.T) {
 		t.Fatalf("tampered: %+v", s[1])
 	}
 	cp.Publish("app-1", 0, generate.Probes{TCP: []generate.TCPProbe{{Name: "y", Host: "evil.example.net", Port: 5432}}}, 0, false, false)
-	if s := waitStatus(3); s[2].Result != "rejected" || !strings.Contains(s[2].Detail, "allowlist") {
+	// v0.27.0: the probe outside the allowlist is left out and reported; the list itself is applied
+	if s := waitStatus(3); s[2].Result != "applied" || len(s[2].Refused) != 1 || s[2].Refused[0].Name != "y" || !strings.Contains(s[2].Detail, "left out") {
 		t.Fatalf("outside: %+v", s[2])
 	}
-	if st, _ := agent.LoadState(pre); st.Revision != 1 {
-		t.Fatalf("a rejected list changed the state: %+v", st)
+	if st, _ := agent.LoadState(pre); st.Revision != 3 || len(st.Probes.TCP) != 0 {
+		t.Fatalf("state after a list with a refused probe: %+v", st)
 	}
 	srv.CloseClientConnections()
 	cancel()

@@ -177,18 +177,22 @@ func (r *Reject) Error() string { return r.Reason }
 func reject(format string, a ...any) error { return &Reject{fmt.Sprintf(format, a...)} }
 
 // Verify checks a received document: signature (pinned key), host, revision, expiry, probe rules, allowlist.
-func Verify(raw []byte, cpKey ed25519.PublicKey, host string, applied int64, now time.Time, allow generate.Allow) (Doc, error) {
+// v0.27.0: a probe the allowlist does not cover is left out (returned in refused, reported to the control plane);
+// the rest of the document (the other probes, an update, an overlay) goes on. The list-wide limits still reject.
+func Verify(raw []byte, cpKey ed25519.PublicKey, host string, applied int64, now time.Time, allow generate.Allow) (Doc, []generate.Refused, error) {
 	d, err := VerifySigned(raw, cpKey, host, applied, now)
 	if err != nil {
-		return d, err
+		return d, nil, err
 	}
 	if err := d.Probes.Validate(); err != nil {
-		return d, reject("%v", err)
+		return d, nil, reject("%v", err)
 	}
-	if err := d.Probes.CheckAllow(allow); err != nil {
-		return d, reject("outside the allowlist: %v", err)
+	ok, refused, err := d.Probes.SplitAllow(allow)
+	if err != nil {
+		return d, nil, reject("outside the allowlist: %v", err)
 	}
-	return d, nil
+	d.Probes = ok
+	return d, refused, nil
 }
 
 // VerifySigned checks what every document needs, whatever it asks for: signature (pinned key), host, revision >

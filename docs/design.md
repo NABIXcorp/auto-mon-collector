@@ -659,7 +659,10 @@ agent picks it up within 15 s.
 
 **Apply rules.** A list is applied only when: signature valid with the PINNED key (the key a control plane sends at
 enrolment is ignored), host = this host, revision > the applied one, not expired, the probe rules pass (the answers'
-own probes + the list: names unique), the allowlist passes, and `cloudprober --configtest` passes on a staged copy.
+own probes + the list: names unique), the list-wide allowlist limits pass (probe count, interval), and
+`cloudprober --configtest` passes on a staged copy. v0.27.0: a single probe outside the allowlist (target, port, ping) is
+left out and reported in the status (`refused: [{name, reason}]`, detail "n left out (allowlist)"); the rest of the
+list, and an update or overlay in the same document, go on (before, one such probe made the agent refuse it all).
 Then target files, then the config; Cloudprober restarts only when its config changed (target files are re-read).
 Otherwise the last good list stays and the reason is reported (`rejected` / `error`). Network errors: backoff with
 jitter up to 5 min; the control plane down = probes keep running. `<prefix>/agent/state.json` holds the applied list:
