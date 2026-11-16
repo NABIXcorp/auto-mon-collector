@@ -118,6 +118,10 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	if req, err := o.loadRequest(); err == nil && siteJob(req) {
 		sr := o.runSite(ctx, req)
 		return agent.UpdateResult{Result: sr.Result, Detail: sr.Detail, At: sr.At}
+	} else if err == nil && allowJob(req) {
+		// v0.26.0: or the control plane's allowlist overlay (allow.go)
+		ar := o.runAllow(ctx, req)
+		return agent.UpdateResult{Result: ar.Result, Detail: ar.Detail, At: ar.At}
 	}
 	doc, pol, last, err := o.verifyRequest(&res)
 	if errors.Is(err, errHandled) {
@@ -140,7 +144,7 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	}
 	defer lk.Release()
 	// from here on the request counts as handled: it never runs a second time
-	rec := record{ID: res.ID, Revision: doc.Revision, SiteRevision: last.SiteRevision, At: o.Now().Unix()}
+	rec := record{ID: res.ID, Revision: doc.Revision, SiteRevision: last.SiteRevision, AllowRevision: last.AllowRevision, At: o.Now().Unix()}
 	if err := writeRoot(filepath.Join(o.Prefix, RecordFile), marshal(rec), 0o644); err != nil {
 		return set("failed", "nothing changed: write %s: %v", RecordFile, err)
 	}
@@ -245,7 +249,9 @@ type record struct {
 	Revision int64  `json:"revision"`
 	// v0.23.0: the last overlay set root handled
 	SiteRevision int64 `json:"site_revision,omitempty"`
-	At           int64 `json:"at"`
+	// v0.26.0: the last allowlist overlay root handled
+	AllowRevision int64 `json:"allow_revision,omitempty"`
+	At            int64 `json:"at"`
 }
 
 // request is a verified request: the signed document, the root-owned answers and root's record of the last one.
@@ -306,7 +312,7 @@ func (o *Options) verifyRequest(res *agent.UpdateResult) (agent.Doc, generate.Ag
 	doc, last := req.doc, req.last
 	u := doc.Update
 	if u == nil {
-		return doc, none, last, errors.New("request: the signed document asks for no update (and no new overlay set)")
+		return doc, none, last, errors.New("request: the signed document asks for no update (and no new overlay set or allowlist)")
 	}
 	if !agent.ValidUpdateID(u.ID) {
 		return doc, none, last, errors.New("request: update id malformed")

@@ -21,6 +21,11 @@
 //     complete collector overlay set, inside generate.CheckSite); the status may carry "site":{"revision","result",
 //     "detail"} and the inventory "site_allowed". Send it only to agents that report site_allowed (v0.23.0+), and
 //     never together with a new update request (the update goes first, the set waits for a later document).
+//   - v0.26.0: the document may carry "allow":{"revision":N,"allow":{"domains","networks","ports","max_probes",
+//     "min_interval_s","ping"}} (the control plane's COMPLETE allowlist overlay, inside generate.CheckAllowOverlay;
+//     all empty = remove it); the status may carry "allow":{"revision","result","detail"} and the inventory
+//     "allow_edit":{"allow","ping","max_probes"}. Send it only to agents that report allow_edit.allow (v0.26.0+),
+//     never together with a new update or overlay set (one root job per document).
 package agent
 
 import (
@@ -131,6 +136,7 @@ type Doc struct {
 	Probes   generate.Probes `json:"probes"`
 	Update   *UpdateRequest  `json:"update,omitempty"` // v0.16.0: remote monitoring-agent update (nil = none)
 	Site     *SiteRequest    `json:"site,omitempty"`   // v0.23.0: the control plane's collector overlays (nil = none)
+	Allow    *DocAllow       `json:"allow,omitempty"`  // v0.26.0: the control plane's allowlist overlay (nil = none)
 	Sig      string          `json:"sig"`
 }
 
@@ -147,6 +153,14 @@ type UpdateRequest struct {
 type SiteRequest struct {
 	Revision int64             `json:"revision"`
 	Files    map[string]string `json:"files"`
+}
+
+// DocAllow (v0.26.0): the control plane's complete allowlist overlay for this host (generate.CheckAllowOverlay);
+// an empty one removes the installed overlay. Revision counts the overlay; it is reported back with root's result.
+// The overlay is not part of the allowlist this document's probes are checked against: it counts after root applied it.
+type DocAllow struct {
+	Revision int64          `json:"revision"`
+	Allow    generate.Allow `json:"allow"`
 }
 
 // updateIDRE: an update id (it goes into files and status lines, never into a path).

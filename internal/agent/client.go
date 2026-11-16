@@ -120,6 +120,15 @@ type Status struct {
 	Versions map[string]string `json:"versions,omitempty"`
 	Update   *UpdateStatus     `json:"update,omitempty"` // v0.16.0: about an update request (see UpdateStatus)
 	Site     *SiteStatus       `json:"site,omitempty"`   // v0.23.0: about an overlay set (see SiteStatus)
+	Allow    *AllowStatus      `json:"allow,omitempty"`  // v0.26.0: about an allowlist overlay (see AllowStatus)
+}
+
+// AllowStatus (v0.26.0) reports an allowlist overlay like SiteStatus: "started" / "refused" / "failed" from the
+// agent, then root's result once (ok | failed | rolled_back | refused).
+type AllowStatus struct {
+	Revision int64  `json:"revision"`
+	Result   string `json:"result"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 // SiteStatus (v0.23.0) reports an overlay set like UpdateStatus: "started" / "refused" / "failed" from the agent,
@@ -155,7 +164,18 @@ type Inventory struct {
 	SiteAllowed bool `json:"site_allowed"`
 	// Allow (v0.25.0): the effective allowlist (template + answers.yaml extras), so the control plane can show it and
 	// warn before it sends a probe the agent would refuse
+	// (v0.26.0: + the control plane's overlay)
 	Allow *InvAllow `json:"allow,omitempty"`
+	// AllowEdit (v0.26.0): answers.yaml agent.allow_edit (the switch + ceilings): the control plane sends an
+	// allowlist overlay only when allow is true, and shows the lock / the limits
+	AllowEdit *InvAllowEdit `json:"allow_edit,omitempty"`
+}
+
+// InvAllowEdit: answers.yaml agent.allow_edit as the inventory sends it.
+type InvAllowEdit struct {
+	Allow     bool `json:"allow"`
+	Ping      bool `json:"ping"`
+	MaxProbes int  `json:"max_probes"`
 }
 
 // InvAllow: the effective allowlist as the inventory sends it.
@@ -197,6 +217,11 @@ func (c *Client) SendInventory(ctx context.Context, body []byte) error {
 func (c *Client) Report(ctx context.Context, s Status) error {
 	if len(s.Detail) > 500 {
 		s.Detail = s.Detail[:500]
+	}
+	if s.Allow != nil && len(s.Allow.Detail) > 500 {
+		a := *s.Allow
+		a.Detail = a.Detail[:500]
+		s.Allow = &a
 	}
 	if s.Update != nil && len(s.Update.Detail) > 500 {
 		u := *s.Update

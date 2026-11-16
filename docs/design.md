@@ -742,3 +742,37 @@ configuration can read any file (a `file_log` include), run commands or send all
   `agent/site-result.json` (root 644: ok | failed | rolled_back | refused), reported once as status `site`.
 - **Ownership:** `config/site.d/cp-*` belong to the control plane. `plan` / `apply` (with or without `--site-dir`)
   keep them and refuse `cp-*` files in the owner's `--site-dir`; the owner's own files are never touched by a set.
+
+### Allowlist changes from the control plane (v0.26.0, OFF by default)
+
+Why: a probe outside the allowlist makes the agent refuse its whole list, and only root could widen the allowlist
+(answers.yaml / template). Why bounded: the allowlist is the host owner's guard against a compromised control plane,
+so changing it from that control plane is off by default and limited by ceilings the host owner sets.
+
+- **Host switch + ceilings** (answers.yaml, root only, like `agent.update` / `agent.site`; missing = off):
+
+  ```yaml
+  agent:
+    allow_edit:
+      allow: true        # the control plane may add to this host's allowlist
+      ping: false        # it may switch ping on (the prober unit gets CAP_NET_RAW)
+      max_probes: 50     # ceiling for its max_probes (0 = the value without the overlay; never above 100)
+  ```
+
+  The inventory reports `allow_edit {allow, ping, max_probes}`; its `allow` is the EFFECTIVE list (with the overlay).
+- **Flow:** the signed document carries `allow {revision, allow {domains, networks, ports, max_probes, min_interval_s,
+  ping}}` = the control plane's COMPLETE overlay (all empty = remove it), never together with a new update or
+  overlay set (one root job per document; those go first). The agent checks the switch and the bounds and hands a
+  new revision to root (same request file and unit). Root: the request again (`self-update.json` also keeps
+  `allow_revision`), the switch and ceilings re-read from answers.yaml, the bounds again, the lock, the record; then
+  it writes `config/agent-allow.cp.yaml` (root 644, the template's format; empty overlay = file removed) and runs
+  `monitoring-agent update --no-fetch` (re-renders the prober unit, smoke run, automatic rollback; on failure the
+  previous overlay file is put back). Result in `agent/allow-result.json` (ok | failed | rolled_back | refused),
+  reported once as status `allow`. answers.yaml is never edited: the overlay cannot touch url, key, update or site.
+- **Bounds** (agent and root): domains by the domain pattern, networks a CIDR no wider than /16 (IPv4, also as
+  IPv4-mapped IPv6) or /48 (IPv6), never a default route; at most 64 domains / networks / ports; ports 1-65535;
+  max_probes 0 or up to the ceiling; min_interval_s 0 or at least 15; ping only with `allow_edit.ping`.
+- **Effective list** (agent, plan / apply / update) = template + answers.yaml extras + overlay: lists joined, a
+  non-zero number of the overlay replaces (max_probes clamped to the ceiling), ping when either allows it (the
+  overlay's only with `allow_edit.ping`). With the switch off an installed overlay is ignored. The overlay counts
+  only after root applied it: the probes of the same document are checked against the installed allowlist.
