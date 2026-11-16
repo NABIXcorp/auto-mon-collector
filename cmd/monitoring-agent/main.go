@@ -448,8 +448,18 @@ func agentInputs(w io.Writer, h *generate.Host, a generate.Answers, in inputs) (
 			return nil, err
 		}
 	}
-	h.AgentAllow = tmpl.Merge(a.Agent.Allow)
-	fmt.Fprintf(w, "  ok    agent allowlist: %s\n", h.AgentAllow)
+	// v0.26.0: + the control plane's overlay (config/agent-allow.cp.yaml, written by root's allowlist job), when
+	// answers.yaml agent.allow_edit.allow is on, clamped to its ceilings
+	base, eff, err := generate.LocalAllow(tmpl, *a.Agent, in.prefix)
+	if err != nil {
+		return nil, err
+	}
+	h.AgentAllow = eff
+	if eff.String() != base.String() {
+		fmt.Fprintf(w, "  ok    agent allowlist (with the control plane's %s): %s\n", generate.AllowOverlayFile, h.AgentAllow)
+	} else {
+		fmt.Fprintf(w, "  ok    agent allowlist: %s\n", h.AgentAllow)
+	}
 	if in.prefix != "" {
 		st, err := agent.LoadState(in.prefix)
 		if err != nil {

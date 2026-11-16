@@ -29,6 +29,9 @@ type Agent struct {
 	// Site (v0.23.0): may the control plane send collector overlays (processors only, see CheckSite)? Read ONLY
 	// from answers.yaml (root), like Update.
 	Site AgentSite `yaml:"site,omitempty"`
+	// AllowEdit (v0.26.0): may the control plane add to this host's allowlist (config/agent-allow.cp.yaml), and up to
+	// which ceilings? Read ONLY from answers.yaml (root), like Update and Site. See allowedit.go.
+	AllowEdit AgentAllowEdit `yaml:"allow_edit,omitempty"`
 }
 
 // AgentUpdate is the host owner's policy for remote monitoring-agent updates (docs/design.md, section 17). Default: off.
@@ -109,12 +112,13 @@ func (u AgentUpdate) InWindow(now time.Time) error {
 // config/agent-allow.yaml) + the host's agent.allow = the effective list: lists are joined; a number set on the
 // host replaces the template's; ping is allowed when either allows it.
 type Allow struct {
-	Domains      []string `yaml:"domains,omitempty"`        // exact names or "*.suffix" (any depth below)
-	Networks     []string `yaml:"networks,omitempty"`       // CIDRs for IP targets; empty = no IP targets
-	Ports        []int    `yaml:"ports,omitempty"`          // tcp ports and the ports of http(s) URLs
-	MaxProbes    int      `yaml:"max_probes,omitempty"`     // default 30
-	MinIntervalS int      `yaml:"min_interval_s,omitempty"` // default 15
-	Ping         bool     `yaml:"ping,omitempty"`           // ping probes allowed (the Cloudprober unit gets CAP_NET_RAW)
+	// json (v0.26.0): the console overlay in the signed document ("allow": {"revision", "allow": {...}})
+	Domains      []string `yaml:"domains,omitempty" json:"domains"`               // exact names or "*.suffix" (any depth below)
+	Networks     []string `yaml:"networks,omitempty" json:"networks"`             // CIDRs for IP targets; empty = no IP targets
+	Ports        []int    `yaml:"ports,omitempty" json:"ports"`                   // tcp ports and the ports of http(s) URLs
+	MaxProbes    int      `yaml:"max_probes,omitempty" json:"max_probes"`         // default 30
+	MinIntervalS int      `yaml:"min_interval_s,omitempty" json:"min_interval_s"` // default 15
+	Ping         bool     `yaml:"ping,omitempty" json:"ping"`                     // ping probes allowed (the Cloudprober unit gets CAP_NET_RAW)
 }
 
 const (
@@ -239,6 +243,9 @@ func (a *Agent) validate() error {
 		return fmt.Errorf("agent.control_plane_key: %w", err)
 	}
 	if err := a.Update.validate(); err != nil {
+		return err
+	}
+	if err := a.AllowEdit.validate(); err != nil {
 		return err
 	}
 	return a.Allow.validate()

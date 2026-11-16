@@ -45,10 +45,12 @@ type Local struct {
 	HostName string // answers host_name ("" = the OS hostname): the name the agent enrols and reports as
 	Probes   generate.Probes
 	Agent    generate.Agent
-	Allow    generate.Allow
+	Allow    generate.Allow // effective: template + answers extras + the control plane's overlay (v0.26.0)
+	Base     generate.Allow // template + answers extras (what the overlay is checked against)
 }
 
-// LoadLocal reads <prefix>/answers.yaml and the project template <prefix>/config/agent-allow.yaml (if any).
+// LoadLocal reads <prefix>/answers.yaml, the project template <prefix>/config/agent-allow.yaml (if any) and the
+// control plane's overlay <prefix>/config/agent-allow.cp.yaml (v0.26.0, if any and switched on).
 func LoadLocal(prefix string) (Local, error) {
 	var l Local
 	a, err := generate.LoadAnswers(filepath.Join(prefix, "answers.yaml"))
@@ -65,7 +67,11 @@ func LoadLocal(prefix string) (Local, error) {
 			return l, err
 		}
 	}
-	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: tmpl.Merge(a.Agent.Allow)}, nil
+	base, eff, err := generate.LocalAllow(tmpl, *a.Agent, prefix)
+	if err != nil {
+		return l, err
+	}
+	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base}, nil
 }
 
 func (c *Config) defaults() {
@@ -156,10 +162,10 @@ func Run(ctx context.Context, cfg Config) error {
 		seen = max(seen, st.Revision)
 		host := hostOf(cfg.Host, local)
 		cl := &Client{Base: local.Agent.URL, Host: host, Key: key, HTTP: cfg.HTTP, Now: cfg.Now}
-		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) {
+		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) || !reportAllowResult(ctx, cfg, cl, &st) {
 			return nil
 		}
-		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow); sum != sentInv {
+		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -223,6 +229,7 @@ func Run(ctx context.Context, cfg Config) error {
 				// control plane has the result). The id is saved BEFORE the root unit starts.
 				var upd *UpdateStatus
 				var site *SiteStatus
+				var alw *AllowStatus
 				start := false
 				if u := doc.Update; u != nil && u.ID != st.UpdateID {
 					us, ok := prepareUpdate(cfg.Prefix, local.Agent.Update, cfg.Versions[VersionKey], u, raw)
@@ -231,6 +238,10 @@ func Run(ctx context.Context, cfg Config) error {
 					// v0.23.0: one root job per document: an overlay set waits while an update is handed over
 					ss, ok := prepareSite(cfg.Prefix, local.Agent.Site, s, raw)
 					site, start, next.SiteRevision = &ss, ok, s.Revision
+				} else if a := doc.Allow; a != nil && a.Revision != st.AllowRevision {
+					// v0.26.0: the allowlist overlay, also one root job per document (after an update or an overlay set)
+					as, ok := prepareAllow(cfg.Prefix, local, a, raw)
+					alw, start, next.AllowRevision = &as, ok, a.Revision
 				}
 				if err := saveState(cfg.Prefix, next); err != nil {
 					status.Result, status.Detail = "error", "applied, but "+StateFile+": "+err.Error()
@@ -248,6 +259,14 @@ func Run(ctx context.Context, cfg Config) error {
 				if start && site != nil {
 					ss := startSite(cfg.Run, *site)
 					site = &ss
+				}
+				if start && alw != nil {
+					as := startAllow(cfg.Run, *alw)
+					alw = &as
+				}
+				if alw != nil {
+					status.Allow = alw
+					lg.Printf("agent: allowlist revision %d: %s: %s", alw.Revision, alw.Result, alw.Detail)
 				}
 				if site != nil {
 					status.Site = site
@@ -328,9 +347,9 @@ func invAllow(a generate.Allow) *InvAllow {
 const maxInventory = 48 << 10
 
 // inventoryBody builds the inventory request and its hash.
-func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow) ([]byte, string) {
+func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit) ([]byte, string) {
 	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
-		Allow: invAllow(allow)}
+		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}}
 	b, err := os.ReadFile(filepath.Join(prefix, generate.InventoryFile))
 	switch {
 	case os.IsNotExist(err):

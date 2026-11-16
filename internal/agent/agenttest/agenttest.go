@@ -85,6 +85,19 @@ func (s *Server) PublishSite(host string, p generate.Probes, siteRev int64, file
 	return s.publish(host, 0, p, 0, false, false, extra)
 }
 
+// PublishAllow (v0.26.0) signs a newer document for host that also carries an allowlist overlay (and the extra
+// fields given, e.g. "update" or "site").
+func (s *Server) PublishAllow(host string, p generate.Probes, allowRev int64, allow map[string]any, extra map[string]any) int64 {
+	if allow == nil {
+		allow = map[string]any{"domains": []any{}, "networks": []any{}, "ports": []any{}, "max_probes": 0, "min_interval_s": 0, "ping": false}
+	}
+	x := map[string]any{"allow": map[string]any{"revision": allowRev, "allow": allow}}
+	for k, v := range extra {
+		x[k] = v
+	}
+	return s.publish(host, 0, p, 0, false, false, x)
+}
+
 func (s *Server) publish(host string, rev int64, p generate.Probes, expires int64, tamper, otherKey bool, extra map[string]any) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
