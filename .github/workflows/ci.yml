@@ -511,10 +511,13 @@ jobs:
           publish "{\"host\":\"$host\",\"tamper\":true,$P}"
           waitn 2; last | grep -q '^2 rejected.*signature' || die "tampered list not rejected: $(last)"
           publish "{\"host\":\"$host\",\"probes\":{\"tcp\":[{\"name\":\"evil\",\"host\":\"198.51.100.1\",\"port\":18080}]}}"
-          waitn 3; last | grep -q '^3 rejected.*allowlist' || die "target outside the allowlist not rejected: $(last)"
+          # v0.27.0: a probe outside the allowlist is left out (reported), the rest of the list is applied
+          waitn 3; last | grep -q '^3 applied.*1 left out (allowlist)' || die "target outside the allowlist not left out: $(last)"
+          sudo grep -q '"revision": 3' /opt/monitoring/agent/state.json || die "the list with a left-out probe was not applied"
+          sudo grep -q 'evil' /opt/monitoring/agent/state.json && die "the probe outside the allowlist is in the agent state"
           publish "{\"host\":\"$host\",\"revision\":1,$P}"
           waitn 4; last | grep -q 'rejected.*not newer' || die "old revision not rejected: $(last)"
-          sudo grep -q '"revision": 1' /opt/monitoring/agent/state.json || die "a rejected list changed the agent state"
+          sudo grep -q '"revision": 3' /opt/monitoring/agent/state.json || die "a rejected list changed the agent state"
           # v0.23.0: overlays from the control plane (agent.site.allow): a set in the catalog -> root (polkit start of
           # monitoring-update) -> plan + smoke run + apply; a set outside the catalog refused; an empty set removes
           # the control plane's overlays; the host owner's own site.d files stay.
