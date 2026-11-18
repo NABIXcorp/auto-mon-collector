@@ -7,7 +7,8 @@ import (
 	"strings"
 )
 
-// hostAddrs (v0.28.0): the host's IPs for the inventory; a variable so tests can swap it.
+// hostAddrs (v0.28.0): the host's IPs for the inventory; a variable so tests can swap it. It needs AF_NETLINK in the
+// agent unit (v0.28.1): without it net.Interfaces fails and the inventory has no addresses.
 var hostAddrs = func() []InvAddress {
 	ifs, err := net.Interfaces()
 	if err != nil {
