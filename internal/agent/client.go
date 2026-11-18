@@ -172,6 +172,16 @@ type Inventory struct {
 	// AllowEdit (v0.26.0): answers.yaml agent.allow_edit (the switch + ceilings): the control plane sends an
 	// allowlist overlay only when allow is true, and shows the lock / the limits
 	AllowEdit *InvAllowEdit `json:"allow_edit,omitempty"`
+	// Addresses (v0.28.0): the host's own IP addresses (up interfaces; no loopback, link-local or container bridges),
+	// each private or public, so the control plane knows where peers reach this host without typing them by hand
+	Addresses []InvAddress `json:"addresses,omitempty"`
+}
+
+// InvAddress: one IP of the host. Kind: private (RFC 1918, 100.64/10, fc00::/7) | public (any other global unicast).
+type InvAddress struct {
+	Kind      string `json:"kind"`
+	Address   string `json:"address"`
+	Interface string `json:"interface,omitempty"`
 }
 
 // InvAllowEdit: answers.yaml agent.allow_edit as the inventory sends it.

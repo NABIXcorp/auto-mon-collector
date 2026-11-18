@@ -82,6 +82,9 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > that the old helper let through). The collector unit is `monitoring-collector` and the ONLY unit with the group
 > `systemd-journal`. `apply --start` / `update` switch an existing host (old units stopped, disabled, unlinked; a failed
 > start links and starts them again). `--collector-file FILE` installs a local build (CI, hosts without internet).
+> v0.28.0: the inventory also carries the host's own IP addresses (`addresses`: kind private | public, address,
+> interface; up interfaces only, no loopback, link-local or container bridges such as docker / veth / cni; IPv4 first,
+> at most 16), read at each poll and sent when they change, so the control plane knows where peers reach the host.
 > v0.15.0: `<prefix>/inventory.json` = the services the scan found (ids, ports, Oracle SIDs, Tomcat context paths, bind
 > addresses; no paths, no environment), written by plan / apply / update; the agent sends it with its versions at start and
 > when it changes (`POST v1/inventory`). An update that only changes VERSION / inventory.json does not restart anything.
