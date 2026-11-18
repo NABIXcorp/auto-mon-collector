@@ -82,6 +82,8 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > that the old helper let through). The collector unit is `monitoring-collector` and the ONLY unit with the group
 > `systemd-journal`. `apply --start` / `update` switch an existing host (old units stopped, disabled, unlinked; a failed
 > start links and starts them again). `--collector-file FILE` installs a local build (CI, hosts without internet).
+> v0.28.1: the agent unit allows AF_NETLINK (read only: the unit has no capabilities), so v0.28.0's addresses arrive
+> (v0.28.0 sent none: the sandbox refused the interface list).
 > v0.28.0: the inventory also carries the host's own IP addresses (`addresses`: kind private | public, address,
 > interface; up interfaces only, no loopback, link-local or container bridges such as docker / veth / cni; IPv4 first,
 > at most 16), read at each poll and sent when they change, so the control plane knows where peers reach the host.

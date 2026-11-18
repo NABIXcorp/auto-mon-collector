@@ -3,8 +3,10 @@ package agent
 import (
 	"encoding/json"
 	"net/netip"
+	"strings"
 	"testing"
 
+	"github.com/NABIXcorp/auto-mon-collector/assets"
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 )
 
@@ -38,5 +40,16 @@ func TestInventoryAddresses(t *testing.T) {
 	}
 	if err := json.Unmarshal(body, &inv); err != nil || len(inv.Addresses) != 1 || inv.Addresses[0].Address != "10.0.0.5" {
 		t.Fatalf("addresses: %s (%v)", body, err)
+	}
+}
+
+// v0.28.1: the agent unit lets the agent read the interface list (netlink); v0.28.0 sent no addresses without it
+func TestAgentUnitAllowsNetlink(t *testing.T) {
+	b, err := assets.Unit(assets.AgentUnit, assets.UnitData{Prefix: "/opt/monitoring", User: "monitoring"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK\n") || !strings.Contains(string(b), "CapabilityBoundingSet=\n") {
+		t.Fatalf("agent unit:\n%s", b)
 	}
 }
