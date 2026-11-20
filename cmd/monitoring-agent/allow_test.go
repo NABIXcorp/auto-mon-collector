@@ -69,3 +69,35 @@ func TestAgentInputsWithTheOverlay(t *testing.T) {
 		}
 	}
 }
+
+// plan / apply without --site-dir keep the owner's installed overlays (like the allowlist since v0.22.5); "none"
+// removes them; a given directory wins; the control plane's cp-* files are not counted as the owner's
+func TestSiteForKeepsTheInstalledOverlays(t *testing.T) {
+	prefix := t.TempDir()
+	site := filepath.Join(prefix, "config", "site.d")
+	var out bytes.Buffer
+	if d, kept := siteFor(&out, "", prefix); d != "" || kept {
+		t.Fatalf("nothing installed: %q %v", d, kept)
+	}
+	if err := os.MkdirAll(site, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(site, generate.SitePrefix+"noise.yaml"), []byte("processors: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if d, kept := siteFor(&out, "", prefix); d != "" || kept {
+		t.Fatalf("only control-plane files: not the owner's: %q %v", d, kept)
+	}
+	if err := os.WriteFile(filepath.Join(site, "filter.yaml"), []byte("processors: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if d, kept := siteFor(&out, "", prefix); d != site || !kept || !strings.Contains(out.String(), "filter.yaml") {
+		t.Fatalf("installed overlays must be kept: %q %v %q", d, kept, out.String())
+	}
+	if d, _ := siteFor(&out, "none", prefix); d != "" {
+		t.Fatalf("none removes them: %q", d)
+	}
+	if d, kept := siteFor(&out, "/x/site.d", prefix); d != "/x/site.d" || kept {
+		t.Fatalf("a given directory wins: %q %v", d, kept)
+	}
+}
