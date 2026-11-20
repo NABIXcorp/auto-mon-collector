@@ -125,7 +125,8 @@ No files to copy: `update` uses what the last install left on the host (`/opt/mo
 installed `config/site.d/`), scans again, plans (validate + test run) and applies + restarts only when something
 changes (backup first, automatic rollback); a new installer with an identical configuration only writes `VERSION`
 (no restart). `update --plan` stops after the plan. To change answers or the site
-overlay use `plan` / `apply --answers FILE [--site-dir DIR]` as before.
+overlay use `plan` / `apply --answers FILE [--site-dir DIR]` as before (without `--site-dir` the installed
+overlays and without `--agent-allow` the installed allowlist are kept; `none` removes them).
 
 ## Verify instead of trusting
 

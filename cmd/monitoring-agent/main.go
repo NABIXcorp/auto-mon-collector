@@ -59,7 +59,8 @@ Usage:
 Flags (plan / apply / generate):
   --answers FILE      what a scan cannot know: Oracle service name + user, HTTP checks, services on/off
   --detect-json FILE  use a saved "monitoring-agent detect --json" instead of scanning (offline / review)
-  --site-dir DIR      operator overlay *.yaml, installed as config/site.d/ (plan / apply)
+  --site-dir DIR      operator overlay *.yaml, installed as config/site.d/ (plan / apply; without it the
+                      installed overlays are kept, "--site-dir none" removes them; update keeps them)
   --agent-allow FILE  project allowlist template for the agent, installed as config/agent-allow.yaml
                       (plan / apply; without it the installed template is kept, "--agent-allow none"
                       removes it; update keeps it)
@@ -195,7 +196,8 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	case *answers != "":
 		var a generate.Answers
 		if a, err = generate.LoadAnswers(*answers); err == nil {
-			d, err = desiredFrom(stdout, a, *detectFile, *siteDir, inputs{prefix: *prefix, allow: allowFor(stdout, *allowFile, *prefix, a), keepCP: true})
+			sd, kept := siteFor(stdout, *siteDir, *prefix)
+			d, err = desiredFrom(stdout, a, *detectFile, sd, inputs{prefix: *prefix, allow: allowFor(stdout, *allowFile, *prefix, a), keepCP: true, siteKept: kept})
 		}
 	default: // no answers file: ask on the terminal (previous answers are the defaults)
 		tty, terr := openPrompter()
@@ -205,7 +207,8 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 		}
 		defer tty.Close()
 		p = tty
-		d, secrets, err = interview(stdout, p, *prefix, *detectFile, *siteDir, inputs{prefix: *prefix, allow: *allowFile, keepCP: true})
+		sd, kept := siteFor(stdout, *siteDir, *prefix)
+		d, secrets, err = interview(stdout, p, *prefix, *detectFile, sd, inputs{prefix: *prefix, allow: *allowFile, keepCP: true, siteKept: kept})
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "monitoring-agent: %v\n", err)
@@ -397,6 +400,39 @@ type inputs struct {
 	// keepCP (v0.23.0, plan / apply): the installed control-plane overlays (config/site.d/cp-*) stay; the host
 	// owner's --site-dir may not contain cp-* files. `update` (and root's overlay job) uses the given set as is.
 	keepCP bool
+	// siteKept (plan / apply without --site-dir): the site directory is the INSTALLED config/site.d; its
+	// control-plane files are not the owner's (keepCP adds them back)
+	siteKept bool
+}
+
+// siteFor: the site overlay directory of a plan / apply. Without --site-dir the INSTALLED site.d stays (an apply
+// that forgot the flag removed the owner's overlays, like the allowlist before v0.22.5); "none" removes them (the
+// control plane's cp-* overlays stay either way). kept = the installed directory is used.
+func siteFor(w io.Writer, flag, prefix string) (dir string, kept bool) {
+	switch flag {
+	case "none":
+		return "", false
+	case "":
+	default:
+		return flag, false
+	}
+	d := filepath.Join(prefix, "config", "site.d")
+	site, err := hostdir.LoadSite(d)
+	if err != nil {
+		return "", false
+	}
+	var own []string
+	for n := range site {
+		if !strings.HasPrefix(n, generate.SitePrefix) {
+			own = append(own, n)
+		}
+	}
+	if len(own) == 0 {
+		return "", false
+	}
+	sort.Strings(own)
+	fmt.Fprintf(w, "  ok    site overlay: the installed config/site.d is kept: %s (--site-dir DIR changes it, --site-dir none removes it)\n", strings.Join(own, ", "))
+	return d, true
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
@@ -490,6 +526,13 @@ func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string, in 
 	site, err := hostdir.LoadSite(siteDir)
 	if err != nil {
 		return engine.Desired{}, err
+	}
+	if in.siteKept {
+		for n := range site {
+			if strings.HasPrefix(n, generate.SitePrefix) {
+				delete(site, n)
+			}
+		}
 	}
 	if in.keepCP {
 		if site, err = keepControlPlaneSite(w, site, in.prefix); err != nil {

@@ -154,7 +154,7 @@ rollback to the backup.
 ### 4.8 Update, many hosts, removal
 - **Update (v0.10.0):** `get.sh | sudo bash -s -- update`. Inputs come from the installation itself:
   `<prefix>/answers.yaml` (written by every `--answers` / interactive apply) and the installed `config/site.d/`
-  (kept as is; `plan` / `apply` without `--site-dir` would remove it). Scan again, check run (validate + smoke);
+  (kept as is; since v0.27.2 `plan` / `apply` without `--site-dir` keep it too, `--site-dir none` removes it). Scan again, check run (validate + smoke);
   only after a clean check that changes something: apply + start + rollback (no second smoke run). An
   up-to-date host is NOT restarted (a restart resets cumulative counters). `--plan` stops after the check.
   v0.10.1: only `VERSION` differs (a new installer, identical configuration) = apply WITHOUT start (VERSION
