@@ -34,14 +34,14 @@ func TestScanTreeAndTopFiles(t *testing.T) {
 	minFileSize = 1000
 	defer func() { minFileSize = old }()
 	root := t.TempDir()
-	write(t, filepath.Join(root, "u01/app/oracle/diag/trace/big.trc"), 50000)
+	write(t, filepath.Join(root, "u01/app/oracle/diag/trace/big.trc"), 5000000)
 	write(t, filepath.Join(root, "u01/app/oracle/diag/trace/small.trc"), 10)
-	write(t, filepath.Join(root, "opt/tomcat/logs/catalina.out"), 30000)
-	write(t, filepath.Join(root, "home/user/private.dmp"), 20000)
+	write(t, filepath.Join(root, "opt/tomcat/logs/catalina.out"), 3000000)
+	write(t, filepath.Join(root, "home/user/private.dmp"), 2000000)
 	write(t, filepath.Join(root, "var/tiny"), 5)
-	used := int64(100000)
+	used := int64(10000000) // 0.5 % = 50 kB: above the 4 kB blocks of small files and folders (Linux)
 	r := Scan(context.Background(), Options{
-		Mounts:  []MountInfo{{Path: root, FS: "xfs", Size: 200000, Used: used}},
+		Mounts:  []MountInfo{{Path: root, FS: "xfs", Size: 20000000, Used: used}},
 		Exclude: []string{filepath.Join(root, "home/user")},
 		Trigger: Trigger{ID: "req_12345678", Reason: "request"},
 	})
@@ -49,7 +49,7 @@ func TestScanTreeAndTopFiles(t *testing.T) {
 		t.Fatalf("result %+v", r)
 	}
 	m := r.Mounts[0]
-	if m.Scanned < 80000 || m.Partial || m.Errors != 0 {
+	if m.Scanned < 8000000 || m.Partial || m.Errors != 0 {
 		t.Fatalf("mount %+v", m)
 	}
 	u01 := find(m.Tree, "u01")
@@ -64,7 +64,7 @@ func TestScanTreeAndTopFiles(t *testing.T) {
 	if find(m.Tree, "var") != nil {
 		t.Fatal("var is below 0.5 % of used: not listed")
 	}
-	if h := find(m.Tree, "home"); h != nil && h.Size > 1000 {
+	if h := find(m.Tree, "home"); h != nil && h.Size > 100000 {
 		t.Fatalf("excluded folder counted: %+v", h)
 	}
 	if len(m.Excluded) != 1 || !strings.HasSuffix(filepath.ToSlash(m.Excluded[0]), "home/user") {
