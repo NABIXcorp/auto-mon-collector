@@ -60,6 +60,11 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > exporters, extensions, no `${...}`), checked by the agent and again by root; installed as `config/site.d/cp-*.yaml`
 > through `monitoring-agent update` (plan, smoke run, apply, automatic rollback). `plan` / `apply` keep these files.
 > See [docs/design.md](docs/design.md#17-agent-v0130-probe-lists-from-a-control-plane).
+> v0.29.0: disk scan, OFF by default (`answers.yaml agent.disk_scan: {allow, exclude}`): the biggest folders and files
+> of each local disk, like `du -x`, for the control plane. A read-only oneshot unit `monitoring-diskscan` (user
+> monitoring-agent + `CAP_DAC_READ_SEARCH` only, no network, idle IO, 10 min) started by the agent daily, when a disk is
+> >= 85 % full, or on a signed request that carries only an id. It never opens a file. See
+> [docs/design.md](docs/design.md#disk-scan-v0290).
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and
