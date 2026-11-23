@@ -130,6 +130,11 @@ type State struct {
 	// v0.26.0: the last allowlist overlay handed to root and the last root result reported (allow revisions)
 	AllowRevision int64 `json:"allow_revision,omitempty"`
 	AllowReported int64 `json:"allow_reported,omitempty"`
+	// v0.29.0: the last console disk scan request handled, when a scan was last started, the last result uploaded
+	// (its finished_at)
+	DiskScanID      string `json:"disk_scan_id,omitempty"`
+	DiskScanStarted int64  `json:"disk_scan_started,omitempty"` // unix ms (= the trigger's at)
+	DiskScanSent    int64  `json:"disk_scan_sent,omitempty"`
 }
 
 // StateFile below the prefix.

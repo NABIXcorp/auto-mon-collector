@@ -32,6 +32,27 @@ type Agent struct {
 	// AllowEdit (v0.26.0): may the control plane add to this host's allowlist (config/agent-allow.cp.yaml), and up to
 	// which ceilings? Read ONLY from answers.yaml (root), like Update and Site. See allowedit.go.
 	AllowEdit AgentAllowEdit `yaml:"allow_edit,omitempty"`
+	// DiskScan (v0.29.0): may this host list its biggest folders / files for the console (unit monitoring-diskscan,
+	// read-only, CAP_DAC_READ_SEARCH)? Read ONLY from answers.yaml (root), like Update.
+	DiskScan AgentDiskScan `yaml:"disk_scan,omitempty"`
+}
+
+// AgentDiskScan is the host owner's switch for the disk scan (internal/diskscan). Default: off.
+type AgentDiskScan struct {
+	Allow   bool     `yaml:"allow,omitempty"`   // false (default) = no scanner unit, every request refused
+	Exclude []string `yaml:"exclude,omitempty"` // absolute paths never walked (e.g. a private home); their size is not listed
+}
+
+func (d AgentDiskScan) validate() error {
+	if len(d.Exclude) > 50 {
+		return fmt.Errorf("agent.disk_scan.exclude: at most 50 paths")
+	}
+	for _, e := range d.Exclude {
+		if !strings.HasPrefix(e, "/") || strings.Contains(e, "..") || strings.ContainsAny(e, "\n\x00") || len(e) > 512 {
+			return fmt.Errorf("agent.disk_scan.exclude %q: an absolute path without ..", e)
+		}
+	}
+	return nil
 }
 
 // AgentUpdate is the host owner's policy for remote monitoring-agent updates (docs/design.md, section 17). Default: off.
@@ -246,6 +267,9 @@ func (a *Agent) validate() error {
 		return err
 	}
 	if err := a.AllowEdit.validate(); err != nil {
+		return err
+	}
+	if err := a.DiskScan.validate(); err != nil {
 		return err
 	}
 	return a.Allow.validate()

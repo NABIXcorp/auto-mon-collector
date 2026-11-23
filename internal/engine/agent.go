@@ -34,6 +34,7 @@ const (
 type Agent struct {
 	AllowTemplate []byte // config/agent-allow.yaml (project template); nil = none
 	Binary        string // the binary installed as bin/monitoring-agent (normally the running one)
+	DiskScan      bool   // v0.29.0: answers agent.disk_scan.allow -> the unit monitoring-diskscan (linked, never enabled)
 }
 
 const allowFile = "config/agent-allow.yaml"
@@ -158,6 +159,13 @@ func (e *eng) agentFiles(ud assets.UnitData) ([]file, error) {
 		return nil, err
 	}
 	out := []file{{"systemd/" + assets.AgentUnit + ".service", b, 0o644}, {"systemd/" + assets.UpdateUnit + ".service", u, 0o644}}
+	if e.d.Agent.DiskScan {
+		ds, err := assets.Unit(assets.DiskScanUnit, ud)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, file{"systemd/" + assets.DiskScanUnit + ".service", ds, 0o644})
+	}
 	if t := e.d.Agent.AllowTemplate; t != nil {
 		out = append(out, file{allowFile, t, 0o644})
 	}
@@ -171,7 +179,8 @@ func (e *eng) staleAgentFiles() []string {
 		want[f.rel] = true
 	}
 	var out []string
-	for _, rel := range []string{"systemd/" + assets.AgentUnit + ".service", "systemd/" + assets.UpdateUnit + ".service", allowFile} {
+	for _, rel := range []string{"systemd/" + assets.AgentUnit + ".service", "systemd/" + assets.UpdateUnit + ".service",
+		"systemd/" + assets.DiskScanUnit + ".service", allowFile} {
 		if _, err := os.Stat(e.fs(e.pre(rel))); err == nil && !want[rel] {
 			out = append(out, rel)
 		}
@@ -181,10 +190,15 @@ func (e *eng) staleAgentFiles() []string {
 
 // dropAgent: agent removed from the answers -> stop + disable its unit (before its file goes) and remove the
 // polkit rule. The key and state in <prefix>/agent stay until uninstall (enrol again = new key anyway).
+// v0.29.0: the disk scan unit goes when the agent or agent.disk_scan.allow goes.
 func (e *eng) dropAgent() {
 	if e.d.Agent != nil {
+		if !e.d.Agent.DiskScan {
+			e.unlinkUnit(assets.DiskScanUnit+".service", "no disk scan")
+		}
 		return
 	}
+	e.unlinkUnit(assets.DiskScanUnit+".service", "no agent")
 	e.dropUnit(assets.AgentUnit+".service", "no agent")
 	e.unlinkUnit(assets.UpdateUnit+".service", "no agent")
 	for _, p := range append([]string{}, e.st.Polkit...) {
@@ -217,6 +231,9 @@ func (e *eng) unlinkUnit(name, why string) {
 func (e *eng) linkOnly() []string {
 	if e.d.Agent == nil {
 		return nil
+	}
+	if e.d.Agent.DiskScan {
+		return []string{assets.UpdateUnit + ".service", assets.DiskScanUnit + ".service"}
 	}
 	return []string{assets.UpdateUnit + ".service"}
 }

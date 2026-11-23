@@ -40,6 +40,7 @@ type Server struct {
 	statuses []agent.Status
 	invs     []agent.Inventory
 	invCalls int
+	scans    [][]byte // v0.29.0: disk scan results received
 	wake     chan struct{}
 	refuse   int // answer the next N signed requests with 401 (a proxy re-sending an old request after a restart)
 }
@@ -145,6 +146,18 @@ func (s *Server) Inventories() ([]agent.Inventory, int) {
 	return append([]agent.Inventory{}, s.invs...), s.invCalls
 }
 
+// DiskScans (v0.29.0): the disk scan results received so far (raw bodies).
+func (s *Server) DiskScans() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][]byte{}, s.scans...)
+}
+
+// PublishDiskScan (v0.29.0) signs a newer document for host that also asks for a disk scan.
+func (s *Server) PublishDiskScan(host string, p generate.Probes, id string) int64 {
+	return s.publish(host, 0, p, 0, false, false, map[string]any{"disk_scan": map[string]any{"id": id}})
+}
+
 // Enrolled reports whether host has a key.
 func (s *Server) Enrolled(host string) bool {
 	s.mu.Lock()
@@ -190,7 +203,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.hosts[in.Host] = k
 		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"host": in.Host, "control_plane_key": "ed25519:IGNORED"})
-	case "/agent/v1/desired", "/agent/v1/status", "/agent/v1/inventory":
+	case "/agent/v1/desired", "/agent/v1/status", "/agent/v1/inventory", "/agent/v1/diskscan":
 		host, body, ok := s.verify(r)
 		s.mu.Lock()
 		if s.refuse > 0 {
@@ -216,6 +229,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.invs = append(s.invs, inv)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == "/agent/v1/diskscan" {
+			s.mu.Lock()
+			s.scans = append(s.scans, body)
+			s.mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

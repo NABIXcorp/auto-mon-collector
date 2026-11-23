@@ -1,5 +1,6 @@
 // /etc/polkit-1/rules.d/50-monitoring-agent.rules  (installed and removed by monitoring-agent; do not edit)
-// The agent (user monitoring-agent) may RESTART the monitoring-prober unit and (v0.16.0) START the self-update unit.
+// The agent (user monitoring-agent) may RESTART the monitoring-prober unit, (v0.16.0) START the self-update unit and
+// (v0.29.0) START the read-only disk scan unit.
 // Nothing else: no other unit, no other verb. The self-update unit re-verifies every request as root.
 polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
@@ -11,6 +12,12 @@ polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
         subject.user == "monitoring-agent" &&
         action.lookup("unit") == "monitoring-update.service" &&
+        action.lookup("verb") == "start") {
+        return polkit.Result.YES;
+    }
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "monitoring-agent" &&
+        action.lookup("unit") == "monitoring-diskscan.service" &&
         action.lookup("verb") == "start") {
         return polkit.Result.YES;
     }

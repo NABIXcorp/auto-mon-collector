@@ -116,13 +116,36 @@ func TestAgentUnitAndPolkitRule(t *testing.T) {
 	for _, want := range []string{`subject.user == "monitoring-agent"`, `action.lookup("unit") == "monitoring-prober.service"`,
 		`action.lookup("verb") == "restart"`, `"org.freedesktop.systemd1.manage-units"`,
 		// v0.16.0: start (only) of the self-update unit
-		"action.lookup(\"unit\") == \"monitoring-update.service\" &&\n        action.lookup(\"verb\") == \"start\")"} {
+		"action.lookup(\"unit\") == \"monitoring-update.service\" &&\n        action.lookup(\"verb\") == \"start\")",
+		// v0.29.0: start (only) of the read-only disk scan unit
+		"action.lookup(\"unit\") == \"monitoring-diskscan.service\" &&\n        action.lookup(\"verb\") == \"start\")"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("polkit rule lacks %q:\n%s", want, r)
 		}
 	}
-	if strings.Count(r, "polkit.Result.YES") != 2 || strings.Count(r, `subject.user == "monitoring-agent"`) != 2 {
+	if strings.Count(r, "polkit.Result.YES") != 3 || strings.Count(r, `subject.user == "monitoring-agent"`) != 3 {
 		t.Errorf("polkit rule: every YES must be bound to monitoring-agent, one unit and one verb:\n%s", r)
+	}
+}
+
+// Disk scan unit (v0.29.0): oneshot as the agent user, ONLY CAP_DAC_READ_SEARCH, no network, writes only the agent
+// dir, idle IO; never enabled (no [Install]).
+func TestDiskScanUnit(t *testing.T) {
+	b, err := Unit(DiskScanUnit, UnitData{Prefix: "/opt/monitoring", User: "monitoring"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{"Type=oneshot\n", "User=monitoring-agent\n", "AmbientCapabilities=CAP_DAC_READ_SEARCH\n",
+		"CapabilityBoundingSet=CAP_DAC_READ_SEARCH\n", "NoNewPrivileges=yes\n", "ProtectSystem=strict\n",
+		"ReadWritePaths=/opt/monitoring/agent\n", "ProtectHome=read-only\n", "PrivateNetwork=yes\n", "IOSchedulingClass=idle\n",
+		"ExecStart=/opt/monitoring/bin/monitoring-agent disk-scan --prefix /opt/monitoring\n"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("disk scan unit lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "[Install]") || strings.Count(s, "=CAP_") != 2 || strings.Contains(s, " CAP_") {
+		t.Errorf("disk scan unit: no [Install], only CAP_DAC_READ_SEARCH:\n%s", s)
 	}
 }
 
