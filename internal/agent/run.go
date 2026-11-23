@@ -165,7 +165,10 @@ func Run(ctx context.Context, cfg Config) error {
 		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) || !reportAllowResult(ctx, cfg, cl, &st) {
 			return nil
 		}
-		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit); sum != sentInv {
+		if !diskScanTick(ctx, cfg, cl, local.Agent.DiskScan.Allow, &st) {
+			return nil
+		}
+		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit, local.Agent.DiskScan.Allow); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -243,6 +246,12 @@ func Run(ctx context.Context, cfg Config) error {
 					as, ok := prepareAllow(cfg.Prefix, local, a, raw)
 					alw, start, next.AllowRevision = &as, ok, a.Revision
 				}
+				// v0.29.0: a disk scan request is not a root job: handled with anything else, once per id
+				var dsc *DiskScanStatus
+				if d := doc.DiskScan; d != nil && d.ID != st.DiskScanID {
+					ds := requestDiskScan(cfg, local.Agent.DiskScan.Allow, d, &next)
+					dsc = &ds
+				}
 				if err := saveState(cfg.Prefix, next); err != nil {
 					status.Result, status.Detail = "error", "applied, but "+StateFile+": "+err.Error()
 					break
@@ -269,6 +278,10 @@ func Run(ctx context.Context, cfg Config) error {
 				if start && alw != nil {
 					as := startAllow(cfg.Run, *alw)
 					alw = &as
+				}
+				if dsc != nil {
+					status.DiskScan = dsc
+					lg.Printf("agent: disk scan request %s: %s: %s", dsc.ID, dsc.Result, dsc.Detail)
 				}
 				if alw != nil {
 					status.Allow = alw
@@ -353,9 +366,10 @@ func invAllow(a generate.Allow) *InvAllow {
 const maxInventory = 48 << 10
 
 // inventoryBody builds the inventory request and its hash.
-func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit) ([]byte, string) {
+func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit, diskScan bool) ([]byte, string) {
 	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
-		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}, Addresses: hostAddrs()}
+		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}, Addresses: hostAddrs(),
+		DiskScan: diskScan}
 	b, err := os.ReadFile(filepath.Join(prefix, generate.InventoryFile))
 	switch {
 	case os.IsNotExist(err):

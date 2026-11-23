@@ -3,6 +3,7 @@
 //
 //	POST /_test/publish  {"host","revision","probes",...,"tamper","other_key","expires_at","site"}  -> {"revision"}
 //	GET  /_test/status   reported statuses (JSON list)
+//	GET  /_test/diskscans  disk scan results received (JSON list)
 //	GET  /_test/enrolled?host=H   200 when enrolled
 package main
 
@@ -40,13 +41,17 @@ func main() {
 			OtherKey bool            `json:"other_key"`
 			// v0.23.0: an overlay set (the revision is then the next one)
 			Site *agent.SiteRequest `json:"site"`
+			// v0.29.0: a disk scan request
+			DiskScan *agent.DiskScanRequest `json:"disk_scan"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		var rev int64
-		if in.Site != nil {
+		if in.DiskScan != nil {
+			rev = s.PublishDiskScan(in.Host, in.Probes, in.DiskScan.ID)
+		} else if in.Site != nil {
 			rev = s.PublishSite(in.Host, in.Probes, in.Site.Revision, in.Site.Files, nil)
 		} else {
 			rev = s.Publish(in.Host, in.Revision, in.Probes, in.Expires, in.Tamper, in.OtherKey)
@@ -55,6 +60,14 @@ func main() {
 	})
 	mux.HandleFunc("GET /_test/status", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(s.Statuses())
+	})
+	// v0.29.0: the disk scan results received (a JSON list of the raw bodies)
+	mux.HandleFunc("GET /_test/diskscans", func(w http.ResponseWriter, r *http.Request) {
+		out := []json.RawMessage{}
+		for _, b := range s.DiskScans() {
+			out = append(out, b)
+		}
+		_ = json.NewEncoder(w).Encode(out)
 	})
 	mux.HandleFunc("GET /_test/enrolled", func(w http.ResponseWriter, r *http.Request) {
 		if !s.Enrolled(r.URL.Query().Get("host")) {

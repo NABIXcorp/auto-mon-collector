@@ -119,9 +119,10 @@ type Status struct {
 	Result   string            `json:"result"` // applied | rejected | error
 	Detail   string            `json:"detail,omitempty"`
 	Versions map[string]string `json:"versions,omitempty"`
-	Update   *UpdateStatus     `json:"update,omitempty"` // v0.16.0: about an update request (see UpdateStatus)
-	Site     *SiteStatus       `json:"site,omitempty"`   // v0.23.0: about an overlay set (see SiteStatus)
-	Allow    *AllowStatus      `json:"allow,omitempty"`  // v0.26.0: about an allowlist overlay (see AllowStatus)
+	Update   *UpdateStatus     `json:"update,omitempty"`    // v0.16.0: about an update request (see UpdateStatus)
+	Site     *SiteStatus       `json:"site,omitempty"`      // v0.23.0: about an overlay set (see SiteStatus)
+	Allow    *AllowStatus      `json:"allow,omitempty"`     // v0.26.0: about an allowlist overlay (see AllowStatus)
+	DiskScan *DiskScanStatus   `json:"disk_scan,omitempty"` // v0.29.0: about a disk scan request
 	// v0.27.0: probes left out because the allowlist does not cover them (the others run)
 	Refused []generate.Refused `json:"refused,omitempty"`
 }
@@ -175,6 +176,9 @@ type Inventory struct {
 	// Addresses (v0.28.0): the host's own IP addresses (up interfaces; no loopback, link-local or container bridges),
 	// each private or public, so the control plane knows where peers reach this host without typing them by hand
 	Addresses []InvAddress `json:"addresses,omitempty"`
+	// DiskScan (v0.29.0): answers.yaml agent.disk_scan.allow (the control plane shows "Scan now" and sends requests
+	// only then)
+	DiskScan bool `json:"disk_scan"`
 }
 
 // InvAddress: one IP of the host. Kind: private (RFC 1918, 100.64/10, fc00::/7) | public (any other global unicast).

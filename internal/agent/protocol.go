@@ -26,6 +26,11 @@
 //     all empty = remove it); the status may carry "allow":{"revision","result","detail"} and the inventory
 //     "allow_edit":{"allow","ping","max_probes"}. Send it only to agents that report allow_edit.allow (v0.26.0+),
 //     never together with a new update or overlay set (one root job per document).
+//   - v0.29.0: the document may carry "disk_scan":{"id":"..."} (start the read-only disk scan unit; trigger times in unix ms; not a root job,
+//     may come with anything); the status may carry "disk_scan":{"id","result","detail"} (started | busy | refused |
+//     failed); the inventory "disk_scan" (answers agent.disk_scan.allow). The result goes to POST <url>v1/diskscan
+//     (signed like the others; body = internal/diskscan.Result, <= 256 KB). Send it only to agents that report
+//     disk_scan.
 package agent
 
 import (
@@ -129,15 +134,16 @@ func EncodeKey(p ed25519.PublicKey) string { return "ed25519:" + base64.StdEncod
 
 // Doc is the control plane's desired state for one host.
 type Doc struct {
-	Host     string          `json:"host"`
-	Revision int64           `json:"revision"`
-	Issued   int64           `json:"issued_at"`
-	Expires  int64           `json:"expires_at"`
-	Probes   generate.Probes `json:"probes"`
-	Update   *UpdateRequest  `json:"update,omitempty"` // v0.16.0: remote monitoring-agent update (nil = none)
-	Site     *SiteRequest    `json:"site,omitempty"`   // v0.23.0: the control plane's collector overlays (nil = none)
-	Allow    *DocAllow       `json:"allow,omitempty"`  // v0.26.0: the control plane's allowlist overlay (nil = none)
-	Sig      string          `json:"sig"`
+	Host     string           `json:"host"`
+	Revision int64            `json:"revision"`
+	Issued   int64            `json:"issued_at"`
+	Expires  int64            `json:"expires_at"`
+	Probes   generate.Probes  `json:"probes"`
+	Update   *UpdateRequest   `json:"update,omitempty"`    // v0.16.0: remote monitoring-agent update (nil = none)
+	Site     *SiteRequest     `json:"site,omitempty"`      // v0.23.0: the control plane's collector overlays (nil = none)
+	Allow    *DocAllow        `json:"allow,omitempty"`     // v0.26.0: the control plane's allowlist overlay (nil = none)
+	DiskScan *DiskScanRequest `json:"disk_scan,omitempty"` // v0.29.0: "scan the disks now" (an id only)
+	Sig      string           `json:"sig"`
 }
 
 // UpdateRequest (v0.16.0): "update monitoring-agent to this signed release". The only argument is the version: the download

@@ -475,11 +475,15 @@ jobs:
           python3 -m http.server 18080 --bind 127.0.0.1 > /dev/null 2>&1 &
           sleep 1
           printf 'domains: ["localhost"]\nnetworks: ["127.0.0.0/8"]\nports: [18080]\nmin_interval_s: 10\n' > allow.yaml
-          { cat $td/answers.yaml; printf 'agent:\n  url: http://127.0.0.1:18091/agent/\n  control_plane_key: "%s"\n  site:\n    allow: true\n' "$(cat cp.pub)"; } > agent.yaml
+          # v0.29.0: disk scan on (big runner trees excluded to keep the walk short); a root-only 120 MB file proves
+          # the scanner reads what monitoring-agent alone cannot (CAP_DAC_READ_SEARCH)
+          sudo install -d -m 700 /var/lib/ci-ds && sudo fallocate -l 120M /var/lib/ci-ds/big.bin && sudo chmod 600 /var/lib/ci-ds/big.bin
+          { cat $td/answers.yaml; printf 'agent:\n  url: http://127.0.0.1:18091/agent/\n  control_plane_key: "%s"\n  site:\n    allow: true\n  disk_scan:\n    allow: true\n    exclude: [/usr, /opt, /home, /snap, /var/lib/docker, /var/cache, /tmp]\n' "$(cat cp.pub)"; } > agent.yaml
           sudo $ma plan --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee ag0.txt
           must 'agent allowlist: domains localhost; networks 127.0.0.0/8; ports 18080' ag0.txt
           must 'NEW    systemd/monitoring-agent.service' ag0.txt
           must 'NEW    config/agent-allow.yaml' ag0.txt
+          must 'NEW    systemd/monitoring-diskscan.service' ag0.txt
           sudo $ma apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag1.txt
           must 'monitoring-agent.service active' ag1.txt
           must 'monitoring-prober.service active' ag1.txt
@@ -541,6 +545,22 @@ jobs:
           sudo test -f /opt/monitoring/config/site.d/10-ci.yaml || die "the host's own overlay was removed"
           # root's job ran `update` with a real scan of this runner: back to the example's scan for the plan checks below
           sudo $ma apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke > ag-site2.txt || { cat ag-site2.txt; die "re-apply after the overlays failed"; }
+          # v0.29.0: disk scan. The agent started a daily scan at its first poll (unit monitoring-diskscan, user
+          # monitoring-agent + CAP_DAC_READ_SEARCH, no network); the result reached the control plane; then a signed
+          # "scan now" request (an id only) gives a second result with that id.
+          dsr() { curl -fsS http://127.0.0.1:18091/_test/diskscans | python3 -c 'import json,sys; r=json.load(sys.stdin) or [{}]; x=r[-1]; m=[m for m in x.get("mounts",[]) if m["mount"]=="/"]; print(len(r) if r[0] else 0, x.get("reason","none"), x.get("id","-") or "-", any(f["path"]=="/var/lib/ci-ds/big.bin" for f in (m[0]["files_top"] if m else [])))'; }
+          waitds() { for i in $(seq 1 600); do dsr | grep -q "^$1 $2" && return 0; sleep 1; done; dsr; sudo journalctl -u monitoring-diskscan -n 30 --no-pager; die "disk scan: no result $1 $2"; }
+          waitds 1 daily
+          dsr | tee ds1.txt | grep -q '^1 daily - True' || die "daily scan did not find the root-only 120 MB file: $(cat ds1.txt)"
+          [ "$(systemctl show -p Result --value monitoring-diskscan)" = success ] || die "disk scan unit did not succeed"
+          systemctl show -p User --value monitoring-diskscan | grep -qx monitoring-agent || die "disk scan not run as monitoring-agent"
+          systemctl is-enabled -q monitoring-diskscan 2>/dev/null && die "disk scan unit enabled (must be start-on-demand only)"
+          n=$(nstatus)
+          publish "{\"host\":\"$host\",$P,\"disk_scan\":{\"id\":\"ci-scan-0001\"}}"
+          waitn $((n+1))
+          curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; s=json.load(sys.stdin)[-1].get("disk_scan") or {}; print(s.get("id"), s.get("result"))' | grep -qx 'ci-scan-0001 started' || die "disk scan request not started"
+          waitds 2 request
+          dsr | grep -q '^2 request ci-scan-0001 True' || die "requested scan result wrong: $(dsr)"
           # control plane gone: the agent keeps running, the probes keep running
           pkill -f "fakecp -listen" || true
           before=$(curl -fsS http://127.0.0.1:9313/metrics | grep -E '^cloudprober_total\{.*target="link_ci_tcp"' | awk '{print $2}')
@@ -563,6 +583,7 @@ jobs:
           # agent removed from the answers: unit + polkit rule gone, Cloudprober stays only with own probes (none: removed)
           sudo $ma apply --answers $td/answers.yaml --detect-json $td/detect.json --site-dir site-upd --start --no-smoke | tee ag4.txt
           must 'no agent: monitoring-agent.service stopped, disabled and unlinked' ag4.txt
+          must 'no agent: monitoring-diskscan.service unlinked' ag4.txt
           if systemctl is-active -q monitoring-agent; then die "agent still running"; fi
           [ ! -e /etc/polkit-1/rules.d/50-monitoring-agent.rules ] || die "polkit rule left"
           sudo $ma apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee ag5.txt

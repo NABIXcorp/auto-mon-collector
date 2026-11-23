@@ -779,3 +779,36 @@ so changing it from that control plane is off by default and limited by ceilings
   non-zero number of the overlay replaces (max_probes clamped to the ceiling), ping when either allows it (the
   overlay's only with `allow_edit.ping`). With the switch off an installed overlay is ignored. The overlay counts
   only after root applied it: the probes of the same document are checked against the installed allowlist.
+
+### Disk scan (v0.29.0)
+
+Why: a console can see that a disk is 97 % full, but finding WHAT fills it meant logging in and running `du` /
+ncdu. The agent itself cannot do it: it has no capabilities and `ProtectHome=yes`, so most of /var/lib, Oracle's
+trees, /home and /root are unreadable to it.
+
+- **Host switch** (answers.yaml, root only; missing = off):
+
+  ```yaml
+  agent:
+    disk_scan:
+      allow: true
+      exclude: [/home/alice]   # absolute paths never walked (their size is not listed)
+  ```
+
+  With the switch on, apply installs the oneshot unit `monitoring-diskscan` (linked, never enabled) and the polkit
+  rule lets the agent START it (nothing else). The inventory reports `disk_scan`.
+- **The scanner** (`monitoring-agent disk-scan`, `internal/diskscan`): user monitoring-agent with ONLY
+  `CAP_DAC_READ_SEARCH` (list any folder, stat any entry), `NoNewPrivileges`, `ProtectSystem=strict`,
+  `ProtectHome=read-only`, `PrivateNetwork=yes`, writes only `<prefix>/agent`, Nice 19, idle IO, 50 % CPU, 200 MB,
+  10 min (then the result is marked partial). It never opens a regular file and never follows a symlink. Per local
+  filesystem (ext*, xfs, btrfs, zfs, vfat ...; one entry per device; fullest first, at most 16), like `du -x`:
+  allocated sizes, hard links once; a folder tree 4 levels deep (top 10 children per folder, only >= 0.5 % of the
+  used space) and the 20 biggest files >= 100 MiB (path, size, mtime). Result `agent/diskscan/result.json` <= 256 KB
+  (deeper levels pruned first).
+- **When** (the agent, every poll): never scanned or the last start >= 24 h ago (daily); a disk >= 85 % full and the
+  last start >= 6 h ago (full); or the signed document carries `disk_scan {id}` (request; not a root job, may come
+  with anything; answered as status `disk_scan {id, result: started | busy | refused | failed}`). The agent writes
+  `agent/diskscan/trigger.json {id, reason, at}` and starts the unit; the result names the trigger it answers
+  (`trigger_at`), so a running scan is "busy" for up to 11 min.
+- **Upload**: a result newer than the last one sent goes to `POST <url>v1/diskscan` (signed like the others); a 4xx
+  (an older control plane) is not retried. Paths may be personal: the control plane shows them to trusted roles only.

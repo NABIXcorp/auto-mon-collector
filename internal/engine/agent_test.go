@@ -159,6 +159,51 @@ func TestAgentApplyThenRemove(t *testing.T) {
 	}
 }
 
+// v0.29.0: agent.disk_scan.allow -> the disk scan unit is written and linked (never enabled or run by apply);
+// switched off again -> file and link gone, the agent stays.
+func TestAgentDiskScanOnThenOff(t *testing.T) {
+	needSymlinks(t)
+	h := agentHost(t)
+	d := withAgent(t, h, false)
+	d.Agent.DiskScan = true
+	r := &fakeRunner{readable: true}
+	res, out := runWith(t, h, r, true, true, true, false, d)
+	if res.Failures != 0 {
+		t.Fatalf("apply failed:\n%s", out)
+	}
+	if u := h.read("/opt/monitoring/systemd/monitoring-diskscan.service"); !strings.Contains(u, "AmbientCapabilities=CAP_DAC_READ_SEARCH") {
+		t.Errorf("disk scan unit:\n%s", u)
+	}
+	if l, err := os.Readlink(filepath.Join(h.root, "etc/systemd/system/monitoring-diskscan.service")); err != nil ||
+		l != "/opt/monitoring/systemd/monitoring-diskscan.service" {
+		t.Errorf("disk scan unit link: %q %v", l, err)
+	}
+	for _, c := range r.cmds {
+		if strings.Contains(c, "monitoring-diskscan") {
+			t.Errorf("apply ran a command on the disk scan unit: %s", c)
+		}
+	}
+	if rule := h.read(PolkitRule); !strings.Contains(rule, `"monitoring-diskscan.service"`) {
+		t.Errorf("polkit rule:\n%s", rule)
+	}
+	r2 := &fakeRunner{readable: true, probeVersion: "v" + cloudprober.Version}
+	res, out = runWith(t, h, r2, true, true, false, false, withAgent(t, h, false))
+	if res.Failures != 0 {
+		t.Fatalf("second apply failed:\n%s", out)
+	}
+	for _, want := range []string{"REMOVE systemd/monitoring-diskscan.service", "no disk scan: monitoring-diskscan.service unlinked"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(h.root, "etc/systemd/system/monitoring-diskscan.service")); err == nil {
+		t.Error("disk scan unit link left")
+	}
+	if h.read("/opt/monitoring/bin/monitoring-agent") != "AGENT-BINARY" {
+		t.Error("the agent must stay")
+	}
+}
+
 func TestUninstallRemovesTheAgent(t *testing.T) {
 	needSymlinks(t)
 	h := agentHost(t)

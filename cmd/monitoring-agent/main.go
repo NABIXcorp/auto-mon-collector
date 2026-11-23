@@ -17,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/NABIXcorp/auto-mon-collector/assets"
 	"github.com/NABIXcorp/auto-mon-collector/internal/agent"
 	"github.com/NABIXcorp/auto-mon-collector/internal/ask"
 	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
@@ -52,6 +53,9 @@ Usage:
   monitoring-agent self-update --request FILE [--prefix DIR]
         root: a signed update request saved by the agent: verify it, download + verify the signed release,
         install it, then update (run by the unit monitoring-update; answers: agent.update)
+  monitoring-agent disk-scan [--prefix DIR]
+        read-only: the biggest folders and files of each local disk for the console (run by the unit
+        monitoring-diskscan; answers: agent.disk_scan.allow)
   monitoring-agent uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]
         check mode unless --yes
   monitoring-agent version
@@ -146,6 +150,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return agentCmd(args, stdout, stderr)
 	case "self-update":
 		return selfUpdateCmd(args, stdout, stderr)
+	case "disk-scan":
+		return diskScanCmd(args, stdout, stderr)
 	case "generate":
 		return generateCmd(args, stdout, stderr)
 	case "sql":
@@ -510,7 +516,10 @@ func agentInputs(w io.Writer, h *generate.Host, a generate.Answers, in inputs) (
 	if err != nil {
 		return nil, err
 	}
-	return &engine.Agent{AllowTemplate: raw, Binary: exe}, nil
+	if a.Agent.DiskScan.Allow {
+		fmt.Fprintf(w, "  ok    agent: disk scan on (unit %s, read-only)\n", assets.DiskScanUnit)
+	}
+	return &engine.Agent{AllowTemplate: raw, Binary: exe, DiskScan: a.Agent.DiskScan.Allow}, nil
 }
 
 func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string, in inputs) (engine.Desired, error) {
