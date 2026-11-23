@@ -565,14 +565,17 @@ receivers:
           queries:
             - sql: |
                 SELECT * FROM (
-                  SELECT s.sql_id AS "sql_id", NVL(c.name, '-') AS "pdb", TO_CHAR(s.plan_hash_value) AS "plan",
-                         s.executions AS "executions", ROUND(s.elapsed_time / 1e6, 1) AS "elapsed_s",
-                         ROUND(s.cpu_time / 1e6, 1) AS "cpu_s", s.buffer_gets AS "buffer_gets",
-                         s.disk_reads AS "disk_reads", s.rows_processed AS "rows",
-                         TO_CHAR(s.last_active_time, 'YYYY-MM-DD HH24:MI:SS') AS "last_active",
-                         SUBSTR(s.sql_text, 1, 1000) AS "sql_text"
+                  SELECT s.sql_id AS "sql_id", NVL(c.name, '-') AS "pdb", NVL(TO_CHAR(s.plan_hash_value), '-') AS "plan",
+                         NVL(s.executions, 0) AS "executions", NVL(ROUND(s.elapsed_time / 1e6, 1), 0) AS "elapsed_s",
+                         NVL(ROUND(s.cpu_time / 1e6, 1), 0) AS "cpu_s", NVL(s.buffer_gets, 0) AS "buffer_gets",
+                         NVL(s.disk_reads, 0) AS "disk_reads", NVL(s.rows_processed, 0) AS "rows",
+                         NVL(TO_CHAR(s.last_active_time, 'YYYY-MM-DD HH24:MI:SS'), '-') AS "last_active",
+                         NVL(SUBSTR(s.sql_text, 1, 1000), '-') AS "sql_text"
                   FROM v$$sqlstats s LEFT JOIN v$$containers c ON c.con_id = s.con_id
-                  ORDER BY s.last_active_time DESC
+                  -- v0.30.1: last_active_time is NULL for many rows and a DESC order puts NULLs FIRST (dev-xtrade: the
+                  -- 100 rows were all NULL, the receiver refuses a NULL column = nothing sent)
+                  WHERE s.last_active_time IS NOT NULL
+                  ORDER BY s.last_active_time DESC NULLS LAST
                 ) WHERE ROWNUM <= 100
               logs:
                 - body_column: sql_text
