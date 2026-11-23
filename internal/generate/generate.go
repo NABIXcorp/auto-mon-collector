@@ -108,6 +108,12 @@ func Generate(h Host, a Answers) (Output, error) {
 		if ans.Capacity { // v0.22.0: receiver_creator/capacity, against the service itself (DBA_ views are per container)
 			env = append(env, "ORACLE_CAPACITY=on")
 		}
+		if ans.SessionsCDB { // v0.30.0: sql_query/oracle_sessions_cdb in the root replaces the PDB's session snapshot
+			env = append(env, "ORACLE_SESSIONS_CDB=on")
+		}
+		if ans.SQLText { // v0.30.0: receiver_creator/oracle_sql (V$SQLSTATS, root) -> stream oracle_sql
+			env = append(env, "ORACLE_SQL_TEXT=on")
+		}
 		if p := o.Values["ORACLE_ALERT_LOG"]; p != "" {
 			env = append(env, "ORACLE_ALERT_LOG="+p)
 			recv["file_log/oracle_alert"] = oracleAlertLog(p)

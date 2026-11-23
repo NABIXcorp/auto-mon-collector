@@ -70,6 +70,15 @@ type Service struct {
 	// high-water marks, partition waste, recycle bin -> log stream oracle_capacity (every 6 h, files daily).
 	// Grant the single DBA_ views first (see the comment of receiver_creator/capacity in config.yaml).
 	Capacity bool `yaml:"capacity,omitempty"`
+	// oracle (v0.30.0): read the active sessions (stream oracle_sessions) in the CDB ROOT instead of the PDB: every
+	// PDB with its name, parallel servers with their coordinator. Needs cdb_service and the root grants with
+	// CONTAINER_DATA = ALL on V_$SESSION, V_$PX_SESSION, V_$CONTAINERS.
+	SessionsCDB bool `yaml:"sessions_cdb,omitempty"`
+	// oracle (v0.30.0): every 5 min the 100 most recently active statements of V$SQLSTATS (sql_id, PDB, executions,
+	// elapsed / CPU time, buffer gets, the first 1000 characters of the text) -> log stream oracle_sql. The text may
+	// hold literal values: switch it on only where that is acceptable. Needs cdb_service and the root grants with
+	// CONTAINER_DATA = ALL on V_$SQLSTATS, V_$CONTAINERS. Not a Diagnostics Pack view.
+	SQLText bool `yaml:"sql_text,omitempty"`
 }
 
 // loginPathRE: a safe regular expression for an OTTL string (no quotes or backslashes).
@@ -186,8 +195,11 @@ func (a Answers) Validate() error {
 				return fmt.Errorf("services.tomcat.login_path: %v", err)
 			}
 		}
-		if name != "oracle" && (s.DataGuard || s.Backups || s.Capacity) {
-			return fmt.Errorf("services.%s: data_guard / backups / capacity are Oracle settings", name)
+		if name != "oracle" && (s.DataGuard || s.Backups || s.Capacity || s.SessionsCDB || s.SQLText) {
+			return fmt.Errorf("services.%s: data_guard / backups / capacity / sessions_cdb / sql_text are Oracle settings", name)
+		}
+		if (s.SessionsCDB || s.SQLText) && (s.CDBService == "" || s.CDBService == "-") {
+			return fmt.Errorf("services.%s: sessions_cdb / sql_text read the CDB root: set cdb_service too", name)
 		}
 		if name != "oracle" && s.CDBService != "" {
 			return fmt.Errorf("services.%s: cdb_service is an Oracle setting", name)
