@@ -419,6 +419,30 @@ func TestOracleCapacity(t *testing.T) {
 	}
 }
 
+// Sessions in the root + SQL text (v0.30.0): two switches, off by default, Oracle only, both need cdb_service.
+func TestOracleSessionsCDBAndSQLText(t *testing.T) {
+	h := Host{Findings: []detect.Finding{oracleFinding()}}
+	out, err := Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "apppdb", User: "C##OTEL_MON", CDBService: "orcl", SessionsCDB: true, SQLText: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := string(out.HostEnv); !strings.Contains(e, "ORACLE_SESSIONS_CDB=on\n") || !strings.Contains(e, "ORACLE_SQL_TEXT=on\n") || !strings.Contains(e, "ORACLE_CDB_SERVICE=orcl\n") {
+		t.Errorf("host.env: %s", e)
+	}
+	out, _ = Generate(h, Answers{Services: map[string]Service{"oracle": {Service: "apppdb", User: "C##OTEL_MON", CDBService: "orcl"}}})
+	if e := string(out.HostEnv); strings.Contains(e, "ORACLE_SESSIONS_CDB") || strings.Contains(e, "ORACLE_SQL_TEXT") {
+		t.Errorf("off by default:\n%s", e)
+	}
+	for _, s := range []Service{{Service: "orcl", SessionsCDB: true}, {Service: "orcl", SQLText: true, CDBService: "-"}} {
+		if err := (Answers{Services: map[string]Service{"oracle": s}}).Validate(); err == nil || !strings.Contains(err.Error(), "cdb_service") {
+			t.Errorf("without cdb_service must fail: %+v: %v", s, err)
+		}
+	}
+	if err := (Answers{Services: map[string]Service{"tomcat": {SQLText: true}}}).Validate(); err == nil {
+		t.Error("sql_text on tomcat must fail")
+	}
+}
+
 func TestTCPChecksToOtherHosts(t *testing.T) {
 	var a Answers
 	a.Checks.TCP = []TCPCheck{{Endpoint: "db.example.com:1521", Comment: "Oracle primary"}, {Endpoint: "[2001:db8::7]:443"}}

@@ -448,8 +448,9 @@ receivers:
       # Connections dashboard, part 2: snapshot of active + blocked + blocking sessions (one log record per
       # session per poll, stream oracle_sessions). sql_query logs output is "development" stability.
       # Log attributes arrive as strings -> try_cast() in OpenObserve SQL. NVL everywhere (NULL-safe).
+      # v0.30.0: off when ORACLE_SESSIONS_CDB reads the same snapshot in the root (oracle_sessions_cdb below)
       sql_query/oracle_sessions:
-        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on"
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_SESSIONS_CDB:-off}" != "on"
         config:
           driver: oracle
           host: localhost
@@ -490,6 +491,93 @@ receivers:
                   attribute_columns: [session, username, osuser, machine, program, module, action, client_id,
                                       status, sql_id, event, wait_class, wait_s, in_status_s, blocked_by,
                                       is_blocker, logon_time]
+
+      # v0.30.0 (answers services.oracle.sessions_cdb): the same snapshot read in the CDB ROOT, so every PDB is seen,
+      # with `pdb` (V$CONTAINERS name) and `qc_session` (a parallel server's query coordinator, V$PX_SESSION).
+      # Grants in the root: SELECT on V_$SESSION, V_$PX_SESSION, V_$CONTAINERS + CONTAINER_DATA = ALL for them.
+      sql_query/oracle_sessions_cdb:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_SESSIONS_CDB:-off}" == "on" && "${env:ORACLE_CDB_SERVICE:-off}" != "off"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_CDB_SERVICE:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 30s
+          timeout: 10s
+          queries:
+            - sql: |
+                SELECT s.sid || ',' || s.serial# AS "session",
+                       NVL(c.name, '-') AS "pdb",
+                       NVL(s.username, '-') AS "username", NVL(s.osuser, '-') AS "osuser",
+                       NVL(s.machine, '-') AS "machine", NVL(s.program, '-') AS "program",
+                       NVL(s.module, '-') AS "module", NVL(s.action, '-') AS "action",
+                       NVL(s.client_identifier, '-') AS "client_id", s.status AS "status",
+                       NVL(s.sql_id, '-') AS "sql_id",
+                       CASE WHEN s.state = 'WAITING' THEN s.event ELSE 'ON CPU' END AS "event",
+                       CASE WHEN s.state = 'WAITING' THEN s.wait_class ELSE 'CPU' END AS "wait_class",
+                       CASE WHEN s.state = 'WAITING' THEN ROUND(s.wait_time_micro / 1e6, 1) ELSE 0 END AS "wait_s",
+                       s.last_call_et AS "in_status_s",
+                       NVL(TO_CHAR(s.blocking_session), '-') AS "blocked_by",
+                       CASE WHEN b.blocker IS NOT NULL THEN 'yes' ELSE 'no' END AS "is_blocker",
+                       CASE WHEN p.qcsid IS NOT NULL AND p.qcsid <> s.sid THEN TO_CHAR(p.qcsid) ELSE '-' END AS "qc_session",
+                       TO_CHAR(s.logon_time, 'YYYY-MM-DD HH24:MI:SS') AS "logon_time",
+                       NVL(c.name, '-') || ' ' || NVL(s.username, '-') || '@' || NVL(s.machine, '-') || ' '
+                         || NVL(s.module, NVL(s.program, '-'))
+                         || ' | ' || CASE WHEN s.state = 'WAITING' THEN s.event ELSE 'ON CPU' END
+                         || ' | sql ' || NVL(s.sql_id, '-') AS "summary"
+                FROM v$$session s
+                LEFT JOIN v$$containers c ON c.con_id = s.con_id
+                LEFT JOIN v$$px_session p ON p.sid = s.sid AND p.serial# = s.serial#
+                LEFT JOIN (SELECT DISTINCT blocking_session AS blocker FROM v$$session
+                           WHERE blocking_session IS NOT NULL) b ON b.blocker = s.sid
+                WHERE s.type = 'USER' AND s.sid <> SYS_CONTEXT('USERENV','SID')
+                  AND NVL(s.program, '-') NOT IN ('otelcol-contrib', 'monitoring-collector')   -- our own monitoring queries = noise
+                  AND (   (s.status = 'ACTIVE' AND NOT (s.state = 'WAITING' AND s.wait_class = 'Idle'))
+                       OR s.blocking_session IS NOT NULL
+                       OR b.blocker IS NOT NULL)
+              logs:
+                - body_column: summary
+                  attribute_columns: [session, pdb, username, osuser, machine, program, module, action, client_id,
+                                      status, sql_id, event, wait_class, wait_s, in_status_s, blocked_by,
+                                      is_blocker, qc_session, logon_time]
+
+  # ---- Oracle SQL text (v0.30.0, answers services.oracle.sql_text): every 5 min the 100 most recently active
+  # statements of V$SQLSTATS in the CDB root (cumulative numbers since the statement was loaded; the read side takes
+  # differences), so a sql_id seen in the sessions has its text and cost. V$SQLSTATS is not a Diagnostics Pack view.
+  # Ordered, not filtered by time (no SYSDATE arithmetic: the DB clock zone differs from some V$ times). The text may
+  # hold literal values. Grants in the root: V_$SQLSTATS, V_$CONTAINERS + CONTAINER_DATA = ALL. Stream oracle_sql.
+  receiver_creator/oracle_sql:
+    watch_observers: [host_observer]
+    receivers:
+      sql_query/oracle_sql:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_SQL_TEXT:-off}" == "on" && "${env:ORACLE_CDB_SERVICE:-off}" != "off"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_CDB_SERVICE:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 5m
+          timeout: 60s
+          queries:
+            - sql: |
+                SELECT * FROM (
+                  SELECT s.sql_id AS "sql_id", NVL(c.name, '-') AS "pdb", TO_CHAR(s.plan_hash_value) AS "plan",
+                         s.executions AS "executions", ROUND(s.elapsed_time / 1e6, 1) AS "elapsed_s",
+                         ROUND(s.cpu_time / 1e6, 1) AS "cpu_s", s.buffer_gets AS "buffer_gets",
+                         s.disk_reads AS "disk_reads", s.rows_processed AS "rows",
+                         TO_CHAR(s.last_active_time, 'YYYY-MM-DD HH24:MI:SS') AS "last_active",
+                         SUBSTR(s.sql_text, 1, 1000) AS "sql_text"
+                  FROM v$$sqlstats s LEFT JOIN v$$containers c ON c.con_id = s.con_id
+                  ORDER BY s.last_active_time DESC
+                ) WHERE ROWNUM <= 100
+              logs:
+                - body_column: sql_text
+                  attribute_columns: [sql_id, pdb, plan, executions, elapsed_s, cpu_s, buffer_gets, disk_reads, rows,
+                                      last_active]
 
   # ---- Oracle capacity (v0.22.0, answers services.oracle.capacity): which TABLES take the space, in table terms.
   # Segments fold into the owning table (indexes via DBA_INDEXES, LOB segment + LOB index via DBA_LOBS, partitions by
@@ -748,6 +836,18 @@ exporters:
     retry_on_failure:
       max_elapsed_time: 1h
 
+  otlp_http/openobserve_oracle_sql:
+    endpoint: ${env:OO_ENDPOINT}
+    compression: gzip
+    headers:
+      Authorization: ${env:OO_AUTH}
+      stream-name: oracle_sql
+    sending_queue:
+      storage: file_storage
+      queue_size: 1000
+    retry_on_failure:
+      max_elapsed_time: 1h
+
   otlp_http/openobserve_netconn:
     endpoint: ${env:OO_ENDPOINT}
     compression: gzip
@@ -821,6 +921,10 @@ service:
       receivers: [receiver_creator/capacity]
       processors: [resource_detection, batch]
       exporters: [otlp_http/openobserve_oracle_capacity]
+    logs/oracle_sql:
+      receivers: [receiver_creator/oracle_sql]
+      processors: [resource_detection, batch]
+      exporters: [otlp_http/openobserve_oracle_sql]
     logs/netconn:
       receivers: [netconn]
       processors: [resource_detection, batch]
