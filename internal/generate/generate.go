@@ -20,6 +20,9 @@ type Host struct {
 	// the agent applied last (<prefix>/agent/state.json), so the generated Cloudprober files match the agent's
 	AgentAllow  Allow
 	AgentProbes Probes
+	// ServicesCP (v0.33.0, only with answers agent.services_edit.allow): the control plane's service switches
+	// (<prefix>/config/services.cp.yaml), merged over the answers by EffectiveServices (answers win)
+	ServicesCP ServicesSet
 }
 
 // Output is the generated host part plus what the operator should confirm.
@@ -39,6 +42,9 @@ const defaultOracleUser = "otel_mon"
 // Generate builds host.yaml and host.env.
 func Generate(h Host, a Answers) (Output, error) {
 	var out Output
+	if a.Agent != nil && a.Agent.ServicesEdit.Allow {
+		a.Services = EffectiveServices(a.Services, h.ServicesCP) // a copy: the caller's answers stay as they are
+	}
 	f := map[string]*detect.Finding{}
 	for i := range h.Findings {
 		if h.Findings[i].Profile {
@@ -54,8 +60,16 @@ func Generate(h Host, a Answers) (Output, error) {
 		}
 		return f[id].Confidence == "high" || f[id].Confidence == "medium"
 	}
-	for _, id := range []string{"caddy", "oracle", "redis", "tomcat"} {
-		if on(id) {
+	// nginx (v0.33.0): seen by the scan without a default profile (its stub_status page is the owner's config):
+	// monitored only when switched on explicitly (answers enabled: true, or the control plane's switch)
+	nginxOn := false
+	for _, fd := range h.Findings {
+		if s, ok := a.Services["nginx"]; fd.ID == "nginx" && ok && s.Enabled != nil && *s.Enabled {
+			nginxOn = true
+		}
+	}
+	for _, id := range []string{"caddy", "nginx", "oracle", "redis", "tomcat"} {
+		if on(id) || (id == "nginx" && nginxOn) {
 			out.Enabled = append(out.Enabled, id)
 		}
 	}
@@ -191,6 +205,9 @@ func Generate(h Host, a Answers) (Output, error) {
 		if len(r.Ports) > 0 {
 			port = r.Ports[0]
 		}
+		if p := a.Services["redis"].Port; p != 0 { // v0.33.0: answers / the control plane's switch
+			port = p
+		}
 		switch {
 		case on("redis") && port != 6379:
 			env = append(env, "REDIS_PORT="+strconv.Itoa(port))
@@ -200,6 +217,20 @@ func Generate(h Host, a Answers) (Output, error) {
 		if on("redis") {
 			netconn = append(netconn, port)
 		}
+	}
+
+	// ---- nginx (v0.33.0): the stub_status page on 127.0.0.1 (receiver_creator rule in config.yaml)
+	if nginxOn {
+		s := a.Services["nginx"]
+		port, path := s.Port, s.StatusPath
+		if port == 0 {
+			port = 80
+		}
+		if path == "" {
+			path = DefaultNginxStatusPath
+		}
+		env = append(env, "NGINX_MON=on", "NGINX_PORT="+strconv.Itoa(port), "NGINX_STATUS_PATH="+path)
+		netconn = append(netconn, port)
 	}
 
 	// ---- seen services without a profile still count for connection statistics (e.g. nginx 443)

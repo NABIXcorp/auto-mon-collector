@@ -71,6 +71,14 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > services changed (no config, unit or restart); a service installed later shows in the console without an update.
 > Root uid with only `CAP_DAC_READ_SEARCH` + `CAP_SYS_PTRACE` (ptrace calls blocked), no network. The inventory reports
 > `rescan_allowed` and `services_at` (the time of the last completed scan, also when nothing changed). See [docs/design.md](docs/design.md#service-re-scan-v0320).
+> v0.33.0: switch a found service on from the control plane, OFF by default (`answers.yaml agent.services_edit:
+> {allow: true}`). Only Redis and nginx (a fixed list); the signed `services {revision, set}` becomes
+> `config/services.cp.yaml` through `monitoring-agent update` (smoke run, automatic rollback) after root checked that
+> the service answers on 127.0.0.1. Answers win: `services.<kind>.locked: true` = never by the control plane;
+> `enabled: true` = on anyway; absent or `enabled: false` without `locked` may be switched on. New answers keys:
+> `services.redis.port`, `services.nginx {enabled, port, status_path}` (nginx `stub_status`, new collector receiver
+> `nginx`, off unless enabled), `services.<kind>.locked`. The inventory reports `services_edit` and `services_cp`. See
+> [docs/design.md](docs/design.md#switch-a-service-on-v0330-off-by-default).
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and

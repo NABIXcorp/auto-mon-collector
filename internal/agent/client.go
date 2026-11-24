@@ -124,6 +124,7 @@ type Status struct {
 	Allow    *AllowStatus      `json:"allow,omitempty"`     // v0.26.0: about an allowlist overlay (see AllowStatus)
 	DiskScan *DiskScanStatus   `json:"disk_scan,omitempty"` // v0.29.0: about a disk scan request
 	Rescan   *RescanStatus     `json:"rescan,omitempty"`    // v0.32.0: about a service re-scan request
+	Services *ServicesStatus   `json:"services,omitempty"`  // v0.33.0: about the service switches
 	// v0.27.0: probes left out because the allowlist does not cover them (the others run)
 	Refused []generate.Refused `json:"refused,omitempty"`
 }
@@ -131,6 +132,14 @@ type Status struct {
 // AllowStatus (v0.26.0) reports an allowlist overlay like SiteStatus: "started" / "refused" / "failed" from the
 // agent, then root's result once (ok | failed | rolled_back | refused).
 type AllowStatus struct {
+	Revision int64  `json:"revision"`
+	Result   string `json:"result"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+// ServicesStatus (v0.33.0) reports the service switches like AllowStatus: "started" / "refused" / "failed" from the
+// agent, then root's result once (applied | rolled_back | refused | failed).
+type ServicesStatus struct {
 	Revision int64  `json:"revision"`
 	Result   string `json:"result"`
 	Detail   string `json:"detail,omitempty"`
@@ -186,6 +195,12 @@ type Inventory struct {
 	// ServicesAt (v0.32.0): unix seconds, the mtime of inventory.json = the last completed scan (apply / update, or
 	// the scan unit, which sets the mtime also when the content did not change); 0 = no file
 	ServicesAt int64 `json:"services_at,omitempty"`
+	// ServicesEdit (v0.33.0): answers.yaml agent.services_edit.allow (the control plane offers "Switch on" and sends
+	// service switches only then)
+	ServicesEdit bool `json:"services_edit"`
+	// ServicesCP (v0.33.0): the installed control-plane set (config/services.cp.yaml) with its revision; revision 0
+	// and an empty set = none
+	ServicesCP *generate.ServicesOverlay `json:"services_cp,omitempty"`
 }
 
 // InvAddress: one IP of the host. Kind: private (RFC 1918, 100.64/10, fc00::/7) | public (any other global unicast).
@@ -246,6 +261,11 @@ func (c *Client) Report(ctx context.Context, s Status) error {
 		a := *s.Allow
 		a.Detail = a.Detail[:500]
 		s.Allow = &a
+	}
+	if s.Services != nil && len(s.Services.Detail) > 500 {
+		v := *s.Services
+		v.Detail = v.Detail[:500]
+		s.Services = &v
 	}
 	if s.Update != nil && len(s.Update.Detail) > 500 {
 		u := *s.Update

@@ -507,6 +507,16 @@ func agentInputs(w io.Writer, h *generate.Host, a generate.Answers, in inputs) (
 	} else {
 		fmt.Fprintf(w, "  ok    agent allowlist: %s\n", h.AgentAllow)
 	}
+	// v0.33.0: the control plane's service switches (config/services.cp.yaml, written by root's services job), when
+	// answers.yaml agent.services_edit.allow is on; merged over the answers in generate.Generate (answers win)
+	sv, err := generate.LocalServices(a.Agent, in.prefix)
+	if err != nil {
+		return nil, err
+	}
+	h.ServicesCP = sv.Set
+	if len(sv.Set) > 0 {
+		fmt.Fprintf(w, "  ok    agent: the control plane's service switches (%s, revision %d): %s\n", generate.ServicesFile, sv.Revision, sv.Set)
+	}
 	if in.prefix != "" {
 		st, err := agent.LoadState(in.prefix)
 		if err != nil {

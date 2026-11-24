@@ -72,7 +72,8 @@ func (o *Options) runAllow(ctx context.Context, r request) (res agent.AllowResul
 		return set("refused", "%v", err)
 	}
 	defer lk.Release()
-	rec := record{ID: r.last.ID, Revision: r.doc.Revision, SiteRevision: r.last.SiteRevision, AllowRevision: a.Revision, At: o.Now().Unix()}
+	rec := r.last
+	rec.Revision, rec.AllowRevision, rec.At = r.doc.Revision, a.Revision, o.Now().Unix()
 	if err := writeRoot(filepath.Join(o.Prefix, RecordFile), marshal(rec), 0o644); err != nil {
 		return set("failed", "nothing changed: write %s: %v", RecordFile, err)
 	}

@@ -70,6 +70,8 @@ type Options struct {
 	Run     Runner
 	Out     io.Writer
 	RootUID int // uid that must own answers.yaml: 0 = root (tests use their own uid)
+	// CheckService (v0.33.0): does a kind switched on answer on 127.0.0.1? nil = the real check (tests replace it)
+	CheckService func(ctx context.Context, kind string, sw generate.ServiceSwitch) error
 
 	mirror string // answers release_mirror (set by loadRequest)
 }
@@ -122,6 +124,10 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 		// v0.26.0: or the control plane's allowlist overlay (allow.go)
 		ar := o.runAllow(ctx, req)
 		return agent.UpdateResult{Result: ar.Result, Detail: ar.Detail, At: ar.At}
+	} else if err == nil && servicesJob(req) {
+		// v0.33.0: or the control plane's service switches (services.go)
+		sr := o.runServices(ctx, req)
+		return agent.UpdateResult{Result: sr.Result, Detail: sr.Detail, At: sr.At}
 	}
 	doc, pol, last, err := o.verifyRequest(&res)
 	if errors.Is(err, errHandled) {
@@ -144,7 +150,8 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	}
 	defer lk.Release()
 	// from here on the request counts as handled: it never runs a second time
-	rec := record{ID: res.ID, Revision: doc.Revision, SiteRevision: last.SiteRevision, AllowRevision: last.AllowRevision, At: o.Now().Unix()}
+	rec := last
+	rec.ID, rec.Revision, rec.At = res.ID, doc.Revision, o.Now().Unix()
 	if err := writeRoot(filepath.Join(o.Prefix, RecordFile), marshal(rec), 0o644); err != nil {
 		return set("failed", "nothing changed: write %s: %v", RecordFile, err)
 	}
@@ -251,7 +258,9 @@ type record struct {
 	SiteRevision int64 `json:"site_revision,omitempty"`
 	// v0.26.0: the last allowlist overlay root handled
 	AllowRevision int64 `json:"allow_revision,omitempty"`
-	At            int64 `json:"at"`
+	// v0.33.0: the last service switch set root handled
+	ServicesRevision int64 `json:"services_revision,omitempty"`
+	At               int64 `json:"at"`
 }
 
 // request is a verified request: the signed document, the root-owned answers and root's record of the last one.
@@ -312,7 +321,7 @@ func (o *Options) verifyRequest(res *agent.UpdateResult) (agent.Doc, generate.Ag
 	doc, last := req.doc, req.last
 	u := doc.Update
 	if u == nil {
-		return doc, none, last, errors.New("request: the signed document asks for no update (and no new overlay set or allowlist)")
+		return doc, none, last, errors.New("request: the signed document asks for no update (and no new overlay set, allowlist or service switches)")
 	}
 	if !agent.ValidUpdateID(u.ID) {
 		return doc, none, last, errors.New("request: update id malformed")

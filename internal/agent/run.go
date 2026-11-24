@@ -45,8 +45,9 @@ type Local struct {
 	HostName string // answers host_name ("" = the OS hostname): the name the agent enrols and reports as
 	Probes   generate.Probes
 	Agent    generate.Agent
-	Allow    generate.Allow // effective: template + answers extras + the control plane's overlay (v0.26.0)
-	Base     generate.Allow // template + answers extras (what the overlay is checked against)
+	Allow    generate.Allow              // effective: template + answers extras + the control plane's overlay (v0.26.0)
+	Base     generate.Allow              // template + answers extras (what the overlay is checked against)
+	Services map[string]generate.Service // v0.33.0: the answers' services (a locked kind refuses a switch)
 }
 
 // LoadLocal reads <prefix>/answers.yaml, the project template <prefix>/config/agent-allow.yaml (if any) and the
@@ -71,7 +72,7 @@ func LoadLocal(prefix string) (Local, error) {
 	if err != nil {
 		return l, err
 	}
-	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base}, nil
+	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base, Services: a.Services}, nil
 }
 
 func (c *Config) defaults() {
@@ -163,14 +164,16 @@ func Run(ctx context.Context, cfg Config) error {
 		seen = max(seen, st.Revision)
 		host := hostOf(cfg.Host, local)
 		cl := &Client{Base: local.Agent.URL, Host: host, Key: key, HTTP: cfg.HTTP, Now: cfg.Now}
-		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) || !reportAllowResult(ctx, cfg, cl, &st) {
+		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) || !reportAllowResult(ctx, cfg, cl, &st) ||
+			!reportServicesResult(ctx, cfg, cl, &st) {
 			return nil
 		}
 		if !diskScanTick(ctx, cfg, cl, local.Agent.DiskScan.Allow, &st) {
 			return nil
 		}
 		rescanTick(cfg, local.Agent.Rescan.Allow, boot, &st)
-		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit, local.Agent.DiskScan.Allow, local.Agent.Rescan.Allow); sum != sentInv {
+		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit, local.Agent.DiskScan.Allow, local.Agent.Rescan.Allow,
+			local.Agent.ServicesEdit.Allow, invServices(cfg.Prefix, local.Agent)); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -235,6 +238,7 @@ func Run(ctx context.Context, cfg Config) error {
 				var upd *UpdateStatus
 				var site *SiteStatus
 				var alw *AllowStatus
+				var svc *ServicesStatus
 				start := false
 				if u := doc.Update; u != nil && u.ID != st.UpdateID {
 					us, ok := prepareUpdate(cfg.Prefix, local.Agent.Update, cfg.Versions[VersionKey], u, raw)
@@ -247,6 +251,11 @@ func Run(ctx context.Context, cfg Config) error {
 					// v0.26.0: the allowlist overlay, also one root job per document (after an update or an overlay set)
 					as, ok := prepareAllow(cfg.Prefix, local, a, raw)
 					alw, start, next.AllowRevision = &as, ok, a.Revision
+				} else if sv := doc.Services; sv != nil && sv.Revision != st.ServicesRevision {
+					// v0.33.0: the service switches, also one root job per document (after an update, an overlay
+					// set or an allowlist overlay)
+					ss, ok := prepareServices(cfg.Prefix, local, sv, raw)
+					svc, start, next.ServicesRevision = &ss, ok, sv.Revision
 				}
 				// v0.29.0: a disk scan request is not a root job: handled with anything else, once per id
 				var dsc *DiskScanStatus
@@ -287,6 +296,10 @@ func Run(ctx context.Context, cfg Config) error {
 					as := startAllow(cfg.Run, *alw)
 					alw = &as
 				}
+				if start && svc != nil {
+					ss := startServices(cfg.Run, *svc)
+					svc = &ss
+				}
 				if dsc != nil {
 					status.DiskScan = dsc
 					lg.Printf("agent: disk scan request %s: %s: %s", dsc.ID, dsc.Result, dsc.Detail)
@@ -294,6 +307,10 @@ func Run(ctx context.Context, cfg Config) error {
 				if rsc != nil {
 					status.Rescan = rsc
 					lg.Printf("agent: service scan request %s: %s: %s", rsc.ID, rsc.Result, rsc.Detail)
+				}
+				if svc != nil {
+					status.Services = svc
+					lg.Printf("agent: services revision %d: %s: %s", svc.Revision, svc.Result, svc.Detail)
 				}
 				if alw != nil {
 					status.Allow = alw
@@ -379,10 +396,11 @@ const maxInventory = 48 << 10
 
 // inventoryBody builds the inventory request and its hash. v0.32.0: services_at (the file's mtime) is part of the
 // body, so a scan that rewrote inventory.json is sent once even when only the time changed.
-func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit, diskScan, rescan bool) ([]byte, string) {
+func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit, diskScan, rescan bool,
+	servicesEdit bool, servicesCP *generate.ServicesOverlay) ([]byte, string) {
 	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
 		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}, Addresses: hostAddrs(),
-		DiskScan: diskScan, RescanAllowed: rescan}
+		DiskScan: diskScan, RescanAllowed: rescan, ServicesEdit: servicesEdit, ServicesCP: servicesCP}
 	p := filepath.Join(prefix, generate.InventoryFile)
 	if fi, err := os.Stat(p); err == nil {
 		inv.ServicesAt = fi.ModTime().Unix() // v0.32.0
