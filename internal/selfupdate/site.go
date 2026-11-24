@@ -58,7 +58,8 @@ func (o *Options) runSite(ctx context.Context, r request) (res agent.SiteResult)
 		return set("refused", "%v", err)
 	}
 	defer lk.Release()
-	rec := record{ID: r.last.ID, Revision: r.doc.Revision, SiteRevision: s.Revision, AllowRevision: r.last.AllowRevision, At: o.Now().Unix()}
+	rec := r.last
+	rec.Revision, rec.SiteRevision, rec.At = r.doc.Revision, s.Revision, o.Now().Unix()
 	if err := writeRoot(filepath.Join(o.Prefix, RecordFile), marshal(rec), 0o644); err != nil {
 		return set("failed", "nothing changed: write %s: %v", RecordFile, err)
 	}

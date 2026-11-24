@@ -318,7 +318,8 @@ backend:
 services:
   oracle:  { enabled: true, ORACLE_SERVICE: orcl, ORACLE_MON_USER: otel_mon }
   tomcat:  { enabled: true }
-  redis:   { enabled: false }
+  redis:   { enabled: false }           # v0.33.0: + port; locked: true = never switched on by the control plane
+  nginx:   { enabled: true, port: 80, status_path: /nginx_status }   # v0.33.0: stub_status, off unless enabled
 checks:
   http: [http://127.0.0.1:8080/app/]
   tcp:                                  # v0.11.0: connect checks to other hosts
@@ -857,3 +858,48 @@ Why: the service scan (`internal/detect`) ran only in `plan` / `apply` / `update
 - **Result**: nothing is uploaded separately. The agent re-reads inventory.json every poll and sends the inventory
   only on a change; it carries `services_at` (unix seconds, the mtime of inventory.json = the last completed scan:
   apply / update, or `monitoring-agent scan` with or without a change), so every scan sends one inventory.
+
+### Switch a service on (v0.33.0, OFF by default)
+
+Why: the scan finds services (inventory.json), but answers.yaml is root's: the console could show "Redis found, not
+monitored" and nothing more. Like the allowlist overlay, the control plane may switch on a FOUND service whose
+profile needs no login and no new secret, inside the host owner's switch, with the normal update path (validate,
+smoke run, automatic rollback).
+
+- **Host switch** (answers.yaml, root only; missing = off):
+
+  ```yaml
+  agent:
+    services_edit:
+      allow: true
+  ```
+
+  The inventory reports `services_edit` (the switch) and `services_cp {revision, set}` (the installed set; revision 0
+  and `{}` = none).
+- **Kinds**: a FIXED list in the code (`generate.CPServiceKinds`): `redis` and `nginx`. Anything else is refused.
+  - **Redis**: the existing profile (`receiver_creator` rule, `REDIS_PORT`, `REDIS_PASSWORD` from the secrets); the
+    set's port becomes `REDIS_PORT`. No password handling here: when Redis answers `NOAUTH` and the secrets have no
+    `REDIS_PASSWORD`, root refuses with "Redis needs a password: put it in Secrets (REDIS_PASSWORD)" (a wrong
+    password is not caught by this check).
+  - **nginx** (new profile, contrib `nginx` receiver, beta): the `stub_status` page on `127.0.0.1:<port><status_path>`
+    (`NGINX_MON`, `NGINX_PORT`, `NGINX_STATUS_PATH`; default path `/nginx_status`). Never on by default: only with
+    answers `services.nginx.enabled: true` or the control plane's switch, and only when the scan found nginx.
+    Before applying, root GETs the page (2 s, no redirects) and expects `Active connections:`; otherwise refused
+    "nginx stub_status not answering at http://127.0.0.1:80/nginx_status: add the location (see the console steps)".
+- **Merge rule** (generator, `generate.EffectiveServices`), answers win:
+  - `services.<kind>.locked: true` = never by the control plane (a request switching it on is refused, an installed
+    set is ignored for it);
+  - `services.<kind>.enabled: true` = on anyway, with the answers' own port / path (the set changes nothing);
+  - absent, or `enabled: false` WITHOUT `locked` = the control plane's `on: true` switches it on with its port (and
+    path). `enabled: false` alone is today's "not decided yet" state on many hosts, so it does not lock a kind.
+  - `on: false` = the control plane's switch is withdrawn (the answers decide again). The set is merged at generate
+    time only: answers.yaml is never edited, and apply never saves the merged result into it.
+- **Flow:** the signed document carries `services {revision, set {<kind>: {on, port, status_path}}}` = the control
+  plane's COMPLETE set (empty = remove the file), never together with a new update, overlay set or allowlist overlay
+  (one root job per document; those go first). The agent checks the switch, the kinds, the bounds (port 1-65535;
+  `status_path` nginx only, `^/[A-Za-z0-9_./-]{1,64}$`) and `locked`, and hands a new revision to root (same request
+  file and unit). Root: the request again (`self-update.json` also keeps `services_revision`), the switch and the
+  answers re-read, the bounds again, the service check for each kind this set switches on, the lock, the record; then
+  it writes `config/services.cp.yaml` (root 644; empty set = file removed) and runs `monitoring-agent update
+  --no-fetch` (smoke run, automatic rollback; on failure the previous file is put back). Result in
+  `agent/services-result.json` (applied | failed | rolled_back | refused), reported once as status `services`.

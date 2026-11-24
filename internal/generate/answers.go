@@ -82,6 +82,14 @@ type Service struct {
 	// oracle (v0.31.0): up to 3 MORE PDB service names for the capacity queries (DBA_ views see only their own
 	// container); each gets its own receivers. Needs capacity: true and the capacity grants inside each PDB.
 	CapacityPDBs []string `yaml:"capacity_pdbs,omitempty"`
+	// redis / nginx (v0.33.0): the port on 127.0.0.1 (0 = redis: the scan's port, else 6379; nginx: 80)
+	Port int `yaml:"port,omitempty"`
+	// nginx (v0.33.0): the path of the stub_status page (empty = /nginx_status)
+	StatusPath string `yaml:"status_path,omitempty"`
+	// v0.33.0: true = the control plane may never switch this service on (services.cp.yaml is ignored for it and a
+	// request naming it is refused). Without it the control plane may switch on a kind whose entry here is absent or
+	// enabled: false (agent.services_edit.allow); an entry with enabled: true is on anyway.
+	Locked bool `yaml:"locked,omitempty"`
 }
 
 // maxCapacityPDBs: the PDB slots of receiver_creator/capacity in config.yaml (ORACLE_CAPACITY_PDB2..4).
@@ -183,9 +191,18 @@ func (a Answers) Validate() error {
 	}
 	for name, s := range a.Services {
 		switch name {
-		case "oracle", "tomcat", "redis", "caddy":
+		case "oracle", "tomcat", "redis", "caddy", "nginx":
 		default:
-			return fmt.Errorf("services: unknown service %q (known: oracle, tomcat, redis, caddy)", name)
+			return fmt.Errorf("services: unknown service %q (known: oracle, tomcat, redis, caddy, nginx)", name)
+		}
+		if s.Port != 0 && name != "redis" && name != "nginx" {
+			return fmt.Errorf("services.%s: port is a Redis / nginx setting", name)
+		}
+		if s.Port < 0 || s.Port > 65535 {
+			return fmt.Errorf("services.%s.port %d: 1-65535 (0 = the default)", name, s.Port)
+		}
+		if s.StatusPath != "" && (name != "nginx" || !StatusPathRE.MatchString(s.StatusPath)) {
+			return fmt.Errorf("services.%s.status_path %q: an nginx setting, /path of letters, digits and _ . / - (at most 64)", name, s.StatusPath)
 		}
 		if name != "tomcat" && (s.AccessLog != "" || len(s.Logs) > 0 || s.TimeZone != "") {
 			return fmt.Errorf("services.%s: access_log / logs / time_zone are Tomcat settings", name)

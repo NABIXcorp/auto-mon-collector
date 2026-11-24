@@ -101,3 +101,33 @@ func TestSiteForKeepsTheInstalledOverlays(t *testing.T) {
 		t.Fatalf("a given directory wins: %q %v", d, kept)
 	}
 }
+
+// v0.33.0: plan / apply / update read the control plane's service switches (switch on only) and the answers saved
+// by apply stay the host owner's (the set is never merged into answers.yaml)
+func TestAgentInputsWithTheServiceSwitches(t *testing.T) {
+	prefix := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(prefix, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ov, _ := generate.MarshalServicesOverlay(generate.ServicesOverlay{Revision: 4, Set: generate.ServicesSet{"redis": {On: true, Port: 6380}}})
+	if err := os.WriteFile(filepath.Join(prefix, filepath.FromSlash(generate.ServicesFile)), ov, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, on := range []bool{false, true} {
+		var h generate.Host
+		var out bytes.Buffer
+		a := generate.Answers{Agent: &generate.Agent{ServicesEdit: generate.AgentServicesEdit{Allow: on}}}
+		if _, err := agentInputs(&out, &h, a, inputs{prefix: prefix}); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.ServicesCP.String(); (on && got != "redis on :6380") || (!on && got != "") {
+			t.Errorf("switch %v: %q", on, got)
+		}
+		if on != strings.Contains(out.String(), "service switches (config/services.cp.yaml, revision 4): redis on :6380") {
+			t.Errorf("switch %v: %s", on, out.String())
+		}
+		if a.Services != nil {
+			t.Errorf("the answers were changed: %+v", a.Services)
+		}
+	}
+}

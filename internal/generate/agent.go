@@ -38,6 +38,9 @@ type Agent struct {
 	// Rescan (v0.32.0): may the agent re-run the service scan every 15 min (unit monitoring-scan, read-only, writes
 	// only inventory.json)? Read ONLY from answers.yaml (root), like Update.
 	Rescan AgentRescan `yaml:"rescan,omitempty"`
+	// ServicesEdit (v0.33.0): may the control plane switch a found service on (config/services.cp.yaml: a FIXED list
+	// of kinds that need no login)? Read ONLY from answers.yaml (root), like Update. See servicesedit.go.
+	ServicesEdit AgentServicesEdit `yaml:"services_edit,omitempty"`
 }
 
 // AgentRescan is the host owner's switch for the periodic service re-scan (`monitoring-agent scan`). Default: off.

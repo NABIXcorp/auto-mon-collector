@@ -430,6 +430,14 @@ receivers:
           password: "${env:REDIS_PASSWORD:-}${env:FORCE_STRING:-}"
           collection_interval: 60s
 
+      # nginx (v0.33.0): the stub_status page (connections, requests). Off unless NGINX_MON=on in host.env (answers
+      # services.nginx.enabled: true, or the control plane's switch); NGINX_PORT / NGINX_STATUS_PATH where it answers.
+      nginx:
+        rule: type == "hostport" && port == ${env:NGINX_PORT:-80} && host != "::1" && "${env:NGINX_MON:-off}" == "on"
+        config:
+          endpoint: http://127.0.0.1:${env:NGINX_PORT:-80}${env:NGINX_STATUS_PATH:-/nginx_status}
+          collection_interval: 60s
+
       # Caddy: Prometheus metrics on the admin endpoint 127.0.0.1:2019/metrics.
       prometheus/caddy:
         rule: type == "hostport" && port == 2019 && host != "::1"

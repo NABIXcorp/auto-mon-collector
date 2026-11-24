@@ -99,6 +99,19 @@ func (s *Server) PublishAllow(host string, p generate.Probes, allowRev int64, al
 	return s.publish(host, 0, p, 0, false, false, x)
 }
 
+// PublishServices (v0.33.0) signs a newer document for host that also carries the service switches (set: kind ->
+// {"on","port","status_path"}; nil = empty) and the extra fields given (e.g. "update" or "allow").
+func (s *Server) PublishServices(host string, p generate.Probes, rev int64, set map[string]any, extra map[string]any) int64 {
+	if set == nil {
+		set = map[string]any{}
+	}
+	x := map[string]any{"services": map[string]any{"revision": rev, "set": set}}
+	for k, v := range extra {
+		x[k] = v
+	}
+	return s.publish(host, 0, p, 0, false, false, x)
+}
+
 func (s *Server) publish(host string, rev int64, p generate.Probes, expires int64, tamper, otherKey bool, extra map[string]any) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()

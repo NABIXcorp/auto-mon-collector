@@ -607,6 +607,46 @@ jobs:
           must 'no service re-scan: monitoring-scan.service unlinked' rs1.txt
           must 'REMOVE systemd/monitoring-scan.service' rs1.txt
           [ ! -e /etc/systemd/system/monitoring-scan.service ] || die "scan unit link left"
+          # v0.33.0: service switches from the control plane (agent.services_edit.allow): nginx without a stub_status
+          # page (port 18080 = the probe target's http.server, /nginx_status is a 404) -> refused by root's check,
+          # nothing written; Redis with a fake server answering PING on 127.0.0.1:16380 -> root writes
+          # config/services.cp.yaml (root 644) and runs update (no redis-server process on this runner: the generator
+          # leaves it off; the path is the point) -> applied, the inventory reports services_edit + services_cp; an
+          # empty set removes the file.
+          { cat agent.yaml; printf '  services_edit:\n    allow: true\n'; } > agent-sv.yaml
+          sudo $ma apply --answers agent-sv.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke > sv0.txt || { cat sv0.txt; die "apply with services_edit failed"; }
+          svres() { curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; r=[s["services"] for s in json.load(sys.stdin) if s.get("services")]; print(*((r[-1]["revision"], r[-1]["result"], r[-1].get("detail","")) if r else ("none",)))'; }
+          waitsv() { for i in $(seq 1 180); do svres | grep -q "^$1 $2" && return 0; sleep 1; done; svres; sudo journalctl -u monitoring-update -n 40 --no-pager; die "services $1: no result $2"; }
+          svinv() { curl -fsS http://127.0.0.1:18091/_test/inventories | python3 -c 'import json,sys; r=json.load(sys.stdin) or [{}]; x=r[-1]; c=x.get("services_cp") or {}; print(x.get("services_edit"), c.get("revision"), sorted((c.get("set") or {}).keys()))'; }
+          for i in $(seq 1 60); do svinv | grep -q '^True 0 \[\]' && break; sleep 1; done
+          svinv | grep -q '^True 0 \[\]' || die "inventory lacks services_edit / an empty services_cp: $(svinv)"
+          publish "{\"host\":\"$host\",$P,\"services\":{\"revision\":1,\"set\":{\"nginx\":{\"on\":true,\"port\":18080}}}}"
+          waitsv 1 refused
+          svres | grep -q 'stub_status not answering at http://127.0.0.1:18080/nginx_status' || die "nginx refusal without the reason: $(svres)"
+          sudo test -e /opt/monitoring/config/services.cp.yaml && die "a refused set wrote config/services.cp.yaml"
+          python3 -c '
+          import socketserver
+          class H(socketserver.BaseRequestHandler):
+              def handle(self):
+                  self.request.recv(64); self.request.sendall(b"+PONG\r\n")
+          socketserver.TCPServer.allow_reuse_address = True
+          socketserver.TCPServer(("127.0.0.1", 16380), H).serve_forever()' > /dev/null 2>&1 &
+          fakeredis=$!
+          sleep 1
+          publish "{\"host\":\"$host\",$P,\"services\":{\"revision\":2,\"set\":{\"redis\":{\"on\":true,\"port\":16380}}}}"
+          waitsv 2 applied
+          sudo grep -q 'port: 16380' /opt/monitoring/config/services.cp.yaml || die "services.cp.yaml lacks the Redis port"
+          [ "$(sudo stat -c '%a %U' /opt/monitoring/config/services.cp.yaml)" = "644 root" ] || die "services.cp.yaml not root 644"
+          sudo grep -q 'services_edit' /opt/monitoring/answers.yaml || die "answers.yaml lost services_edit"
+          sudo grep -q '16380' /opt/monitoring/answers.yaml && die "the set was merged into answers.yaml"
+          for i in $(seq 1 60); do svinv | grep -q "^True 2 \['redis'\]" && break; sleep 1; done
+          svinv | grep -q "^True 2 \['redis'\]" || die "inventory lacks the installed set: $(svinv)"
+          publish "{\"host\":\"$host\",$P,\"services\":{\"revision\":3,\"set\":{}}}"
+          waitsv 3 applied
+          sudo test -e /opt/monitoring/config/services.cp.yaml && die "an empty set did not remove services.cp.yaml"
+          kill $fakeredis || true
+          # root's job ran `update` with a real scan of this runner: back to the example's scan for the plans below
+          sudo $ma apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke > sv1.txt || { cat sv1.txt; die "re-apply after the service switches failed"; }
           # control plane gone: the agent keeps running, the probes keep running
           pkill -f "fakecp -listen" || true
           before=$(curl -fsS http://127.0.0.1:9313/metrics | grep -E '^cloudprober_total\{.*target="link_ci_tcp"' | awk '{print $2}')

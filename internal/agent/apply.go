@@ -141,6 +141,9 @@ type State struct {
 	RescanID      string `json:"rescan_id,omitempty"`
 	RescanStarted int64  `json:"rescan_started,omitempty"`
 	RescanFailed  int64  `json:"rescan_failed,omitempty"`
+	// v0.33.0: the last service switch set handed to root and the last root result reported (services revisions)
+	ServicesRevision int64 `json:"services_revision,omitempty"`
+	ServicesReported int64 `json:"services_reported,omitempty"`
 }
 
 // StateFile below the prefix.

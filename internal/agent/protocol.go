@@ -37,6 +37,14 @@
 //     scan = the mtime of inventory.json, set by apply / update and by every scan, also one without a change; 0 /
 //     missing = no file; a console "scan now" is done when it advances). Send it only to agents that report
 //     rescan_allowed.
+//   - v0.33.0: the document may carry "services":{"revision":N,"set":{"redis":{"on":true,"port":6380},"nginx":{"on":true,
+//     "port":80,"status_path":"/nginx_status"}}} (the control plane's COMPLETE service switches, kinds in
+//     generate.CPServiceKinds only, inside generate.CheckServicesSet; an empty set removes them; on false = withdrawn);
+//     the status may carry "services":{"revision","result","detail"} (started | refused | failed from the agent, then
+//     root's applied | rolled_back | refused | failed once); the inventory "services_edit" (answers
+//     agent.services_edit.allow) and "services_cp" ({"revision","set"}: the installed set, revision 0 = none). Send it
+//     only to agents that report services_edit true, never together with a new update, overlay set or allowlist
+//     overlay (one root job per document: those go first).
 package agent
 
 import (
@@ -140,17 +148,18 @@ func EncodeKey(p ed25519.PublicKey) string { return "ed25519:" + base64.StdEncod
 
 // Doc is the control plane's desired state for one host.
 type Doc struct {
-	Host     string           `json:"host"`
-	Revision int64            `json:"revision"`
-	Issued   int64            `json:"issued_at"`
-	Expires  int64            `json:"expires_at"`
-	Probes   generate.Probes  `json:"probes"`
-	Update   *UpdateRequest   `json:"update,omitempty"`    // v0.16.0: remote monitoring-agent update (nil = none)
-	Site     *SiteRequest     `json:"site,omitempty"`      // v0.23.0: the control plane's collector overlays (nil = none)
-	Allow    *DocAllow        `json:"allow,omitempty"`     // v0.26.0: the control plane's allowlist overlay (nil = none)
-	DiskScan *DiskScanRequest `json:"disk_scan,omitempty"` // v0.29.0: "scan the disks now" (an id only)
-	Rescan   *RescanRequest   `json:"rescan,omitempty"`    // v0.32.0: "scan the services now" (an id only)
-	Sig      string           `json:"sig"`
+	Host     string                    `json:"host"`
+	Revision int64                     `json:"revision"`
+	Issued   int64                     `json:"issued_at"`
+	Expires  int64                     `json:"expires_at"`
+	Probes   generate.Probes           `json:"probes"`
+	Update   *UpdateRequest            `json:"update,omitempty"`    // v0.16.0: remote monitoring-agent update (nil = none)
+	Site     *SiteRequest              `json:"site,omitempty"`      // v0.23.0: the control plane's collector overlays (nil = none)
+	Allow    *DocAllow                 `json:"allow,omitempty"`     // v0.26.0: the control plane's allowlist overlay (nil = none)
+	DiskScan *DiskScanRequest          `json:"disk_scan,omitempty"` // v0.29.0: "scan the disks now" (an id only)
+	Rescan   *RescanRequest            `json:"rescan,omitempty"`    // v0.32.0: "scan the services now" (an id only)
+	Services *generate.ServicesOverlay `json:"services,omitempty"`  // v0.33.0: the control plane's service switches (nil = none)
+	Sig      string                    `json:"sig"`
 }
 
 // UpdateRequest (v0.16.0): "update monitoring-agent to this signed release". The only argument is the version: the download

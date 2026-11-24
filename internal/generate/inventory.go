@@ -51,7 +51,7 @@ func Inventory(h Host, enabled []string) []byte {
 	doc := InventoryDoc{Schema: InventorySchema, OS: h.OS, Services: []InventoryService{}, Listen: []InventorySocket{}}
 	owner := map[int]string{}
 	for _, f := range h.Findings {
-		s := InventoryService{ID: f.ID, Monitored: f.Profile && slices.Contains(enabled, f.ID),
+		s := InventoryService{ID: f.ID, Monitored: slices.Contains(enabled, f.ID), // v0.33.0: nginx has no default profile
 			Ports: sortedInts(f.Ports), Instances: f.Instances, Apps: f.Apps}
 		if f.ID == "tomcat" {
 			s.HTTPPort, _ = strconv.Atoi(f.Values["TOMCAT_HTTP_PORT"])
