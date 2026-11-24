@@ -56,6 +56,9 @@ Usage:
   monitoring-agent disk-scan [--prefix DIR]
         read-only: the biggest folders and files of each local disk for the console (run by the unit
         monitoring-diskscan; answers: agent.disk_scan.allow)
+  monitoring-agent scan [--prefix DIR]
+        the service scan again; rewrites only inventory.json when the services changed (run by the unit
+        monitoring-scan; answers: agent.rescan.allow)
   monitoring-agent uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]
         check mode unless --yes
   monitoring-agent version
@@ -152,6 +155,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return selfUpdateCmd(args, stdout, stderr)
 	case "disk-scan":
 		return diskScanCmd(args, stdout, stderr)
+	case "scan":
+		return scanCmd(args, stdout, stderr)
 	case "generate":
 		return generateCmd(args, stdout, stderr)
 	case "sql":
@@ -519,7 +524,10 @@ func agentInputs(w io.Writer, h *generate.Host, a generate.Answers, in inputs) (
 	if a.Agent.DiskScan.Allow {
 		fmt.Fprintf(w, "  ok    agent: disk scan on (unit %s, read-only)\n", assets.DiskScanUnit)
 	}
-	return &engine.Agent{AllowTemplate: raw, Binary: exe, DiskScan: a.Agent.DiskScan.Allow}, nil
+	if a.Agent.Rescan.Allow {
+		fmt.Fprintf(w, "  ok    agent: service re-scan on (unit %s, every 15 min, writes only %s)\n", assets.ScanUnit, generate.InventoryFile)
+	}
+	return &engine.Agent{AllowTemplate: raw, Binary: exe, DiskScan: a.Agent.DiskScan.Allow, Rescan: a.Agent.Rescan.Allow}, nil
 }
 
 func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string, in inputs) (engine.Desired, error) {

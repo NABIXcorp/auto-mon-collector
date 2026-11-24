@@ -4,6 +4,7 @@
 //	POST /_test/publish  {"host","revision","probes",...,"tamper","other_key","expires_at","site"}  -> {"revision"}
 //	GET  /_test/status   reported statuses (JSON list)
 //	GET  /_test/diskscans  disk scan results received (JSON list)
+//	GET  /_test/inventories  inventories received (JSON list)
 //	GET  /_test/enrolled?host=H   200 when enrolled
 package main
 
@@ -43,13 +44,17 @@ func main() {
 			Site *agent.SiteRequest `json:"site"`
 			// v0.29.0: a disk scan request
 			DiskScan *agent.DiskScanRequest `json:"disk_scan"`
+			// v0.32.0: a service re-scan request
+			Rescan *agent.RescanRequest `json:"rescan"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		var rev int64
-		if in.DiskScan != nil {
+		if in.Rescan != nil {
+			rev = s.PublishRescan(in.Host, in.Probes, in.Rescan.ID)
+		} else if in.DiskScan != nil {
 			rev = s.PublishDiskScan(in.Host, in.Probes, in.DiskScan.ID)
 		} else if in.Site != nil {
 			rev = s.PublishSite(in.Host, in.Probes, in.Site.Revision, in.Site.Files, nil)
@@ -68,6 +73,11 @@ func main() {
 			out = append(out, b)
 		}
 		_ = json.NewEncoder(w).Encode(out)
+	})
+	// v0.32.0: the inventories received (rescan_allowed, services_at, the services)
+	mux.HandleFunc("GET /_test/inventories", func(w http.ResponseWriter, r *http.Request) {
+		invs, _ := s.Inventories()
+		_ = json.NewEncoder(w).Encode(invs)
 	})
 	mux.HandleFunc("GET /_test/enrolled", func(w http.ResponseWriter, r *http.Request) {
 		if !s.Enrolled(r.URL.Query().Get("host")) {

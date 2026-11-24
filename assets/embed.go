@@ -71,6 +71,11 @@ const UpdateUnit = "monitoring-update"
 // linked but never enabled, like UpdateUnit.
 const DiskScanUnit = "monitoring-diskscan"
 
+// ScanUnit (v0.32.0) is the oneshot `monitoring-agent scan` (root uid, only CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE, no
+// network): the service scan again, writes only inventory.json. Started by the agent (polkit: start only). Managed
+// with the agent when agent.rescan.allow; linked but never enabled, like UpdateUnit.
+const ScanUnit = "monitoring-scan"
+
 // AgentPolkit is the polkit rule that lets the agent restart Cloudprober and start the self-update unit (only those
 // units, only those verbs).
 func AgentPolkit() []byte { return mustRead("polkit/50-monitoring-agent.rules") }

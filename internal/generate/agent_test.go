@@ -89,3 +89,37 @@ func TestGenerateWithAgent(t *testing.T) {
 		t.Fatalf("list outside the allowlist was installed: %v", out.Defaults)
 	}
 }
+
+// v0.32.0: agent.rescan {allow} is read strictly (only allow, a mapping, a bool); missing = off; it survives the
+// answers.yaml round trip.
+func TestAgentRescanAnswers(t *testing.T) {
+	base := "agent:\n  url: https://agent.example.com/agent/\n  control_plane_key: \"" + testKey + "\"\n"
+	load := func(extra string) (Answers, error) {
+		p := filepath.Join(t.TempDir(), "answers.yaml")
+		if err := os.WriteFile(p, []byte(base+extra), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return LoadAnswers(p)
+	}
+	a, err := load("")
+	if err != nil || a.Agent.Rescan.Allow {
+		t.Fatalf("default: %v %+v", err, a.Agent.Rescan)
+	}
+	a, err = load("  rescan:\n    allow: true\n")
+	if err != nil || !a.Agent.Rescan.Allow {
+		t.Fatalf("allow: %v %+v", err, a.Agent.Rescan)
+	}
+	b, err := a.Marshal()
+	if err != nil || !strings.Contains(string(b), "rescan:\n        allow: true") && !strings.Contains(string(b), "rescan:\n    allow: true") {
+		t.Errorf("round trip lost rescan: %v\n%s", err, b)
+	}
+	for name, extra := range map[string]string{
+		"unknown key": "  rescan:\n    allow: true\n    every: 5m\n",
+		"scalar":      "  rescan: true\n",
+		"not a bool":  "  rescan:\n    allow: sometimes\n",
+	} {
+		if _, err := load(extra); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

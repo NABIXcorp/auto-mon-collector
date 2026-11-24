@@ -816,3 +816,44 @@ trees, /home and /root are unreadable to it.
   (`trigger_at`), so a running scan is "busy" for up to 11 min.
 - **Upload**: a result newer than the last one sent goes to `POST <url>v1/diskscan` (signed like the others); a 4xx
   (an older control plane) is not retried. Paths may be personal: the control plane shows them to trusted roles only.
+
+### Service re-scan (v0.32.0)
+
+Why: the service scan (`internal/detect`) ran only in `plan` / `apply` / `update`, so a service installed later
+(a new Tomcat, a database) stayed invisible in the console's inventory until someone ran an update by hand.
+
+- **Host switch** (answers.yaml, root only; missing = off; read strictly: only `allow`, a bool):
+
+  ```yaml
+  agent:
+    rescan:
+      allow: true
+  ```
+
+  With the switch on, apply installs the oneshot unit `monitoring-scan` (linked, never enabled) and the polkit rule
+  lets the agent START it (nothing else). The inventory reports `rescan_allowed`.
+- **The scanner** (`monitoring-agent scan`): the same code path as `update` builds inventory.json with (live
+  detection, the saved answers, the installed allowlist template + the agent's last probe list, `generate.Generate`),
+  but it writes ONLY `<prefix>/inventory.json`: atomically (temp file in the prefix + rename), mode 644, owner root,
+  and only when the bytes differ (the file has no volatile fields); an unchanged scan keeps the content and only sets
+  the file's mtime to the scan time (`services_at` = the last COMPLETED scan: a console "scan now" is done when
+  `services_at` advances, also when nothing changed). No
+  configuration, unit or answers change, nothing is restarted. It takes the install lock (`.monitoring.lock`): while
+  an apply / update runs it skips (they write inventory.json themselves).
+- **Unit hardening**: root uid (the file and the prefix are root's) but `CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+  CAP_SYS_PTRACE` only, no `CAP_DAC_OVERRIDE` / `CAP_CHOWN` / `CAP_SYS_ADMIN`. What the detection reads and why:
+  `CAP_DAC_READ_SEARCH` lists other users' `/proc/<pid>/fd` and the Oracle / Tomcat folders (alert log, logs,
+  webapps) and reads the agent state; `CAP_SYS_PTRACE` is what the kernel asks for to read another user's
+  `/proc/<pid>/fd/*` links (socket -> process -> port) and `/proc/<pid>/environ` (ORACLE_HOME, CATALINA_BASE ...).
+  ptrace itself and `process_vm_readv/writev` are blocked by `SystemCallFilter`. No network (`IPAddressDeny=any`,
+  `AF_UNIX` only); not `PrivateNetwork`: `/proc/net/tcp` must stay the host's. `ProtectSystem=strict`, the prefix
+  writable except `bin`, `config`, `systemd`, `agent`, `data`, `backup` (read-only) and `secrets` (inaccessible),
+  `ProtectHome=read-only`, Nice 19, idle IO, 50 % CPU, 200 MB, 4 min.
+- **When** (the agent, every poll): the first poll after the agent started, then every 15 min after the last start;
+  or the signed document carries `rescan {id}` (request; not a root job, may come with anything; answered as status
+  `rescan {id, result: started | busy | refused | failed}`, once per id). A started scan counts as running for 5 min
+  ("busy"). A start that fails (e.g. the unit not linked yet) is saved as `rescan_failed`, never counted as running,
+  and tried again after 15 min.
+- **Result**: nothing is uploaded separately. The agent re-reads inventory.json every poll and sends the inventory
+  only on a change; it carries `services_at` (unix seconds, the mtime of inventory.json = the last completed scan:
+  apply / update, or `monitoring-agent scan` with or without a change), so every scan sends one inventory.
