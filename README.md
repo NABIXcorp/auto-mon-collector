@@ -65,6 +65,12 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > monitoring-agent + `CAP_DAC_READ_SEARCH` only, no network, idle IO, 10 min) started by the agent daily, when a disk is
 > >= 85 % full, or on a signed request that carries only an id. It never opens a file. See
 > [docs/design.md](docs/design.md#disk-scan-v0290).
+> v0.32.0: service re-scan, OFF by default (`answers.yaml agent.rescan: {allow: true}`): the agent starts the oneshot
+> unit `monitoring-scan` (`monitoring-agent scan`) after its start, every 15 min and on a signed console request
+> (`rescan {id}`). It runs the installer's own service detection and rewrites only `inventory.json`, and only when the
+> services changed (no config, unit or restart); a service installed later shows in the console without an update.
+> Root uid with only `CAP_DAC_READ_SEARCH` + `CAP_SYS_PTRACE` (ptrace calls blocked), no network. The inventory reports
+> `rescan_allowed` and `services_at` (the time of the last completed scan, also when nothing changed). See [docs/design.md](docs/design.md#service-re-scan-v0320).
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and

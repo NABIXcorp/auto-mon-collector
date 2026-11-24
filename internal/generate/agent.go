@@ -35,6 +35,14 @@ type Agent struct {
 	// DiskScan (v0.29.0): may this host list its biggest folders / files for the console (unit monitoring-diskscan,
 	// read-only, CAP_DAC_READ_SEARCH)? Read ONLY from answers.yaml (root), like Update.
 	DiskScan AgentDiskScan `yaml:"disk_scan,omitempty"`
+	// Rescan (v0.32.0): may the agent re-run the service scan every 15 min (unit monitoring-scan, read-only, writes
+	// only inventory.json)? Read ONLY from answers.yaml (root), like Update.
+	Rescan AgentRescan `yaml:"rescan,omitempty"`
+}
+
+// AgentRescan is the host owner's switch for the periodic service re-scan (`monitoring-agent scan`). Default: off.
+type AgentRescan struct {
+	Allow bool `yaml:"allow,omitempty"` // false (default) = no scan unit, every request refused
 }
 
 // AgentDiskScan is the host owner's switch for the disk scan (internal/diskscan). Default: off.

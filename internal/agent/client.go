@@ -123,6 +123,7 @@ type Status struct {
 	Site     *SiteStatus       `json:"site,omitempty"`      // v0.23.0: about an overlay set (see SiteStatus)
 	Allow    *AllowStatus      `json:"allow,omitempty"`     // v0.26.0: about an allowlist overlay (see AllowStatus)
 	DiskScan *DiskScanStatus   `json:"disk_scan,omitempty"` // v0.29.0: about a disk scan request
+	Rescan   *RescanStatus     `json:"rescan,omitempty"`    // v0.32.0: about a service re-scan request
 	// v0.27.0: probes left out because the allowlist does not cover them (the others run)
 	Refused []generate.Refused `json:"refused,omitempty"`
 }
@@ -179,6 +180,12 @@ type Inventory struct {
 	// DiskScan (v0.29.0): answers.yaml agent.disk_scan.allow (the control plane shows "Scan now" and sends requests
 	// only then)
 	DiskScan bool `json:"disk_scan"`
+	// RescanAllowed (v0.32.0): answers.yaml agent.rescan.allow (the control plane shows "Scan services now" and
+	// sends requests only then)
+	RescanAllowed bool `json:"rescan_allowed"`
+	// ServicesAt (v0.32.0): unix seconds, the mtime of inventory.json = the last completed scan (apply / update, or
+	// the scan unit, which sets the mtime also when the content did not change); 0 = no file
+	ServicesAt int64 `json:"services_at,omitempty"`
 }
 
 // InvAddress: one IP of the host. Kind: private (RFC 1918, 100.64/10, fc00::/7) | public (any other global unicast).

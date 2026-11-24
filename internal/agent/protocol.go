@@ -31,6 +31,12 @@
 //     failed); the inventory "disk_scan" (answers agent.disk_scan.allow). The result goes to POST <url>v1/diskscan
 //     (signed like the others; body = internal/diskscan.Result, <= 256 KB). Send it only to agents that report
 //     disk_scan.
+//   - v0.32.0: the document may carry "rescan":{"id":"..."} (start the service scan unit; not a root job, may come with
+//     anything); the status may carry "rescan":{"id","result","detail"} (started | busy | refused | failed); the
+//     inventory "rescan_allowed" (answers agent.rescan.allow) and "services_at" (unix seconds: the last completed
+//     scan = the mtime of inventory.json, set by apply / update and by every scan, also one without a change; 0 /
+//     missing = no file; a console "scan now" is done when it advances). Send it only to agents that report
+//     rescan_allowed.
 package agent
 
 import (
@@ -143,6 +149,7 @@ type Doc struct {
 	Site     *SiteRequest     `json:"site,omitempty"`      // v0.23.0: the control plane's collector overlays (nil = none)
 	Allow    *DocAllow        `json:"allow,omitempty"`     // v0.26.0: the control plane's allowlist overlay (nil = none)
 	DiskScan *DiskScanRequest `json:"disk_scan,omitempty"` // v0.29.0: "scan the disks now" (an id only)
+	Rescan   *RescanRequest   `json:"rescan,omitempty"`    // v0.32.0: "scan the services now" (an id only)
 	Sig      string           `json:"sig"`
 }
 

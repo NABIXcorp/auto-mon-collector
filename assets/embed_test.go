@@ -123,7 +123,7 @@ func TestAgentUnitAndPolkitRule(t *testing.T) {
 			t.Errorf("polkit rule lacks %q:\n%s", want, r)
 		}
 	}
-	if strings.Count(r, "polkit.Result.YES") != 3 || strings.Count(r, `subject.user == "monitoring-agent"`) != 3 {
+	if strings.Count(r, "polkit.Result.YES") != 4 || strings.Count(r, `subject.user == "monitoring-agent"`) != 4 {
 		t.Errorf("polkit rule: every YES must be bound to monitoring-agent, one unit and one verb:\n%s", r)
 	}
 }
@@ -146,6 +146,32 @@ func TestDiskScanUnit(t *testing.T) {
 	}
 	if strings.Contains(s, "[Install]") || strings.Count(s, "=CAP_") != 2 || strings.Contains(s, " CAP_") {
 		t.Errorf("disk scan unit: no [Install], only CAP_DAC_READ_SEARCH:\n%s", s)
+	}
+}
+
+// Service scan unit (v0.32.0): oneshot, root uid with ONLY CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE, ptrace blocked,
+// no network but the host's network namespace (detect reads /proc/net/tcp), secrets hidden, the installed
+// configuration read-only; never enabled (no [Install]).
+func TestScanUnit(t *testing.T) {
+	b, err := Unit(ScanUnit, UnitData{Prefix: "/opt/monitoring", User: "monitoring"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{"Type=oneshot\n", "User=root\n", "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE\n",
+		"NoNewPrivileges=yes\n", "ProtectSystem=strict\n", "ReadWritePaths=/opt/monitoring\n",
+		"ReadOnlyPaths=-/opt/monitoring/bin -/opt/monitoring/config -/opt/monitoring/systemd -/opt/monitoring/agent",
+		"InaccessiblePaths=-/opt/monitoring/secrets\n", "ProtectHome=read-only\n", "IPAddressDeny=any\n",
+		"RestrictAddressFamilies=AF_UNIX\n", "SystemCallFilter=~@debug process_vm_readv process_vm_writev ",
+		"IOSchedulingClass=idle\n", "TimeoutStartSec=4min\n",
+		"ExecStart=/opt/monitoring/bin/monitoring-agent scan --prefix /opt/monitoring\n"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("scan unit lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "[Install]") || strings.Contains(s, "PrivateNetwork=") || strings.Contains(s, "AmbientCapabilities=") ||
+		strings.Count(s, "=CAP_") != 1 || strings.Contains(s, "{{") {
+		t.Errorf("scan unit: no [Install], no PrivateNetwork (own /proc/net), one capability line:\n%s", s)
 	}
 }
 

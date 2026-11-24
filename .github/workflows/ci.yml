@@ -561,6 +561,52 @@ jobs:
           curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; s=json.load(sys.stdin)[-1].get("disk_scan") or {}; print(s.get("id"), s.get("result"))' | grep -qx 'ci-scan-0001 started' || die "disk scan request not started"
           waitds 2 request
           dsr | grep -q '^2 request ci-scan-0001 True' || die "requested scan result wrong: $(dsr)"
+          # v0.32.0: service re-scan (agent.rescan.allow, own answers file: the plans below use the example's scan and
+          # must stay clean). The apply restarts the agent; its first poll starts monitoring-scan (root uid, only
+          # CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE, no network; it waits for the apply's lock), a REAL scan of this
+          # runner: inventory.json changes from the example's to this runner's (fakecp's port 18091 proves the host's
+          # /proc/net/tcp), root 644, and the next inventory carries rescan_allowed + services_at. Every later scan
+          # advances services_at (the file's mtime), also when its content stays.
+          { cat agent.yaml; printf '  rescan:\n    allow: true\n'; } > agent-rs.yaml
+          inv0=$(sudo sha256sum /opt/monitoring/inventory.json)  # the example's (the apply below writes the same)
+          sudo $ma apply --answers agent-rs.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee rs0.txt
+          must 'service re-scan on (unit monitoring-scan' rs0.txt
+          must 'monitoring-agent.service active' rs0.txt
+          [ -L /etc/systemd/system/monitoring-scan.service ] || die "scan unit not linked"
+          systemctl is-enabled -q monitoring-scan 2>/dev/null && die "scan unit enabled (must be start-on-demand only)"
+          sudo grep -q '"monitoring-scan.service"' /etc/polkit-1/rules.d/50-monitoring-agent.rules || die "polkit rule lacks the scan unit"
+          for i in $(seq 1 120); do [ "$(sudo sha256sum /opt/monitoring/inventory.json)" != "$inv0" ] && break; sleep 1; done
+          [ "$(sudo sha256sum /opt/monitoring/inventory.json)" != "$inv0" ] || { sudo journalctl -u monitoring-scan -u monitoring-agent -n 40 --no-pager; die "the agent's service scan did not rewrite inventory.json"; }
+          for i in $(seq 1 30); do [ "$(systemctl show -p ActiveState --value monitoring-scan)" = inactive ] && break; sleep 1; done
+          [ "$(systemctl show -p Result --value monitoring-scan)" = success ] || die "scan unit did not succeed"
+          systemctl show -p User --value monitoring-scan | grep -qx root || die "scan unit not run as root uid"
+          sudo journalctl -u monitoring-scan --no-pager | grep -q 'scan: the services changed' || die "scan unit: no 'services changed' line"
+          [ "$(sudo stat -c '%a %U %G' /opt/monitoring/inventory.json)" = "644 root root" ] || die "inventory.json not root 644: $(sudo stat -c '%a %U %G' /opt/monitoring/inventory.json)"
+          sudo python3 -c 'import json; d=json.load(open("/opt/monitoring/inventory.json")); import sys; sys.exit(0 if any(l["port"]==18091 for l in d["listen"]) else 1)' || die "scan did not see the host's listening sockets (own network namespace?)"
+          ls -a /opt/monitoring | grep -q '^\.inventory-' && die "temp file left in the prefix"
+          mt=$(sudo stat -c %Y /opt/monitoring/inventory.json)
+          invq() { curl -fsS http://127.0.0.1:18091/_test/inventories | python3 -c 'import json,sys; r=json.load(sys.stdin) or [{}]; x=r[-1]; print(x.get("rescan_allowed"), x.get("services_at", 0))'; }
+          for i in $(seq 1 90); do invq | grep -qx "True $mt" && break; sleep 1; done
+          invq | grep -qx "True $mt" || die "inventory lacks rescan_allowed / services_at $mt: $(invq)"
+          # a console request: answered (busy = the automatic scan of a moment ago counts as running for 5 min)
+          n=$(nstatus)
+          publish "{\"host\":\"$host\",$P,\"rescan\":{\"id\":\"ci-rescan-0001\"}}"
+          waitn $((n+1))
+          curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; s=json.load(sys.stdin)[-1].get("rescan") or {}; print(s.get("id"), s.get("result"))' | grep -Eqx 'ci-rescan-0001 (started|busy)' || die "rescan request not answered started / busy"
+          # every completed scan records its time: services_at advances also when nothing changed (the console marks a
+          # "scan now" done on a newer services_at); the runner's sockets may differ between runs, so either line is ok
+          sleep 2
+          sudo systemctl start monitoring-scan
+          mt2=$(sudo stat -c %Y /opt/monitoring/inventory.json)
+          [ "$mt2" -gt "$mt" ] || die "a completed scan did not advance services_at ($mt -> $mt2)"
+          sudo journalctl -u monitoring-scan --no-pager | grep -Eq 'scan: (no change|the services changed)' || die "scan unit: no result line"
+          for i in $(seq 1 90); do invq | grep -qx "True $mt2" && break; sleep 1; done
+          invq | grep -qx "True $mt2" || die "inventory lacks the new services_at $mt2: $(invq)"
+          # switched off again (agent.yaml): unit unlinked, the example's inventory.json back for the plans below
+          sudo $ma apply --answers agent.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke | tee rs1.txt
+          must 'no service re-scan: monitoring-scan.service unlinked' rs1.txt
+          must 'REMOVE systemd/monitoring-scan.service' rs1.txt
+          [ ! -e /etc/systemd/system/monitoring-scan.service ] || die "scan unit link left"
           # control plane gone: the agent keeps running, the probes keep running
           pkill -f "fakecp -listen" || true
           before=$(curl -fsS http://127.0.0.1:9313/metrics | grep -E '^cloudprober_total\{.*target="link_ci_tcp"' | awk '{print $2}')

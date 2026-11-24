@@ -158,6 +158,11 @@ func (s *Server) PublishDiskScan(host string, p generate.Probes, id string) int6
 	return s.publish(host, 0, p, 0, false, false, map[string]any{"disk_scan": map[string]any{"id": id}})
 }
 
+// PublishRescan (v0.32.0) signs a newer document for host that also asks for a service re-scan.
+func (s *Server) PublishRescan(host string, p generate.Probes, id string) int64 {
+	return s.publish(host, 0, p, 0, false, false, map[string]any{"rescan": map[string]any{"id": id}})
+}
+
 // Enrolled reports whether host has a key.
 func (s *Server) Enrolled(host string) bool {
 	s.mu.Lock()

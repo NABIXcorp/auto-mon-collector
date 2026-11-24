@@ -134,9 +134,10 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		return sleep(ctx, backoff/2+time.Duration(mrand.Int64N(int64(backoff/2)+1))) // jitter
 	}
-	seen := int64(0) // highest revision handled (applied or rejected): never fetch the same one again
-	unauth := 0      // 401s in a row
-	sentInv := ""    // hash of the last inventory the control plane took (or refused): sent again only when it changes
+	seen := int64(0)  // highest revision handled (applied or rejected): never fetch the same one again
+	unauth := 0       // 401s in a row
+	sentInv := ""     // hash of the last inventory the control plane took (or refused): sent again only when it changes
+	boot := cfg.Now() // v0.32.0: the first poll of this process starts a service scan
 	for ctx.Err() == nil {
 		local, err := LoadLocal(cfg.Prefix)
 		if err != nil {
@@ -168,7 +169,8 @@ func Run(ctx context.Context, cfg Config) error {
 		if !diskScanTick(ctx, cfg, cl, local.Agent.DiskScan.Allow, &st) {
 			return nil
 		}
-		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit, local.Agent.DiskScan.Allow); sum != sentInv {
+		rescanTick(cfg, local.Agent.Rescan.Allow, boot, &st)
+		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit, local.Agent.DiskScan.Allow, local.Agent.Rescan.Allow); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -252,6 +254,12 @@ func Run(ctx context.Context, cfg Config) error {
 					ds := requestDiskScan(cfg, local.Agent.DiskScan.Allow, d, &next)
 					dsc = &ds
 				}
+				// v0.32.0: a service re-scan request, the same way (not a root job, once per id)
+				var rsc *RescanStatus
+				if r := doc.Rescan; r != nil && r.ID != st.RescanID {
+					rs := requestRescan(cfg, local.Agent.Rescan.Allow, r, &next)
+					rsc = &rs
+				}
 				if err := saveState(cfg.Prefix, next); err != nil {
 					status.Result, status.Detail = "error", "applied, but "+StateFile+": "+err.Error()
 					break
@@ -282,6 +290,10 @@ func Run(ctx context.Context, cfg Config) error {
 				if dsc != nil {
 					status.DiskScan = dsc
 					lg.Printf("agent: disk scan request %s: %s: %s", dsc.ID, dsc.Result, dsc.Detail)
+				}
+				if rsc != nil {
+					status.Rescan = rsc
+					lg.Printf("agent: service scan request %s: %s: %s", rsc.ID, rsc.Result, rsc.Detail)
 				}
 				if alw != nil {
 					status.Allow = alw
@@ -365,12 +377,17 @@ func invAllow(a generate.Allow) *InvAllow {
 // maxInventory: a larger inventory.json is not sent (the control plane caps request bodies).
 const maxInventory = 48 << 10
 
-// inventoryBody builds the inventory request and its hash.
-func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit, diskScan bool) ([]byte, string) {
+// inventoryBody builds the inventory request and its hash. v0.32.0: services_at (the file's mtime) is part of the
+// body, so a scan that rewrote inventory.json is sent once even when only the time changed.
+func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit, diskScan, rescan bool) ([]byte, string) {
 	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
 		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}, Addresses: hostAddrs(),
-		DiskScan: diskScan}
-	b, err := os.ReadFile(filepath.Join(prefix, generate.InventoryFile))
+		DiskScan: diskScan, RescanAllowed: rescan}
+	p := filepath.Join(prefix, generate.InventoryFile)
+	if fi, err := os.Stat(p); err == nil {
+		inv.ServicesAt = fi.ModTime().Unix() // v0.32.0
+	}
+	b, err := os.ReadFile(p)
 	switch {
 	case os.IsNotExist(err):
 		inv.Error = generate.InventoryFile + " missing: run `monitoring-agent update` (v0.15.0+)"

@@ -204,6 +204,59 @@ func TestAgentDiskScanOnThenOff(t *testing.T) {
 	}
 }
 
+// v0.32.0: agent.rescan.allow -> the service scan unit is written and linked (never enabled or run by apply);
+// switched off again -> file and link gone, the agent and the disk scan unit stay.
+func TestAgentRescanOnThenOff(t *testing.T) {
+	needSymlinks(t)
+	h := agentHost(t)
+	d := withAgent(t, h, false)
+	d.Agent.Rescan, d.Agent.DiskScan = true, true
+	r := &fakeRunner{readable: true}
+	res, out := runWith(t, h, r, true, true, true, false, d)
+	if res.Failures != 0 {
+		t.Fatalf("apply failed:\n%s", out)
+	}
+	if u := h.read("/opt/monitoring/systemd/monitoring-scan.service"); !strings.Contains(u, "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE") {
+		t.Errorf("scan unit:\n%s", u)
+	}
+	if l, err := os.Readlink(filepath.Join(h.root, "etc/systemd/system/monitoring-scan.service")); err != nil ||
+		l != "/opt/monitoring/systemd/monitoring-scan.service" {
+		t.Errorf("scan unit link: %q %v", l, err)
+	}
+	for _, c := range r.cmds {
+		if strings.Contains(c, "monitoring-scan") {
+			t.Errorf("apply ran a command on the scan unit: %s", c)
+		}
+	}
+	if !strings.Contains(out, "linked (started on demand, not enabled): monitoring-update.service monitoring-diskscan.service monitoring-scan.service") {
+		t.Errorf("output lacks the link-only units:\n%s", out)
+	}
+	if rule := h.read(PolkitRule); !strings.Contains(rule, `"monitoring-scan.service"`) {
+		t.Errorf("polkit rule:\n%s", rule)
+	}
+	if !strings.Contains(h.read("/opt/monitoring/"+StateFile), "monitoring-scan.service") {
+		t.Error("scan unit not in the state (uninstall would leave it)")
+	}
+	d2 := withAgent(t, h, false)
+	d2.Agent.DiskScan = true
+	r2 := &fakeRunner{readable: true, probeVersion: "v" + cloudprober.Version}
+	res, out = runWith(t, h, r2, true, true, false, false, d2)
+	if res.Failures != 0 {
+		t.Fatalf("second apply failed:\n%s", out)
+	}
+	for _, want := range []string{"REMOVE systemd/monitoring-scan.service", "no service re-scan: monitoring-scan.service unlinked"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(h.root, "etc/systemd/system/monitoring-scan.service")); err == nil {
+		t.Error("scan unit link left")
+	}
+	if _, err := os.Lstat(filepath.Join(h.root, "etc/systemd/system/monitoring-diskscan.service")); err != nil {
+		t.Error("disk scan unit link gone")
+	}
+}
+
 func TestUninstallRemovesTheAgent(t *testing.T) {
 	needSymlinks(t)
 	h := agentHost(t)

@@ -34,7 +34,7 @@ func TestInventoryAddresses(t *testing.T) {
 	old := hostAddrs
 	defer func() { hostAddrs = old }()
 	hostAddrs = func() []InvAddress { return []InvAddress{{Kind: "private", Address: "10.0.0.5", Interface: "ens10"}} }
-	body, _ := inventoryBody(t.TempDir(), nil, 1, false, false, generate.Allow{}, generate.AgentAllowEdit{}, false)
+	body, _ := inventoryBody(t.TempDir(), nil, 1, false, false, generate.Allow{}, generate.AgentAllowEdit{}, false, false)
 	var inv struct {
 		Addresses []InvAddress `json:"addresses"`
 	}
