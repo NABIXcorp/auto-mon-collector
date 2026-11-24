@@ -79,7 +79,13 @@ type Service struct {
 	// hold literal values: switch it on only where that is acceptable. Needs cdb_service and the root grants with
 	// CONTAINER_DATA = ALL on V_$SQLSTATS, V_$CONTAINERS. Not a Diagnostics Pack view.
 	SQLText bool `yaml:"sql_text,omitempty"`
+	// oracle (v0.31.0): up to 3 MORE PDB service names for the capacity queries (DBA_ views see only their own
+	// container); each gets its own receivers. Needs capacity: true and the capacity grants inside each PDB.
+	CapacityPDBs []string `yaml:"capacity_pdbs,omitempty"`
 }
+
+// maxCapacityPDBs: the PDB slots of receiver_creator/capacity in config.yaml (ORACLE_CAPACITY_PDB2..4).
+const maxCapacityPDBs = 3
 
 // loginPathRE: a safe regular expression for an OTTL string (no quotes or backslashes).
 var loginPathRE = regexp.MustCompile(`^[A-Za-z0-9^$/._*+?()|\[\]-]{1,200}$`)
@@ -212,6 +218,27 @@ func (a Answers) Validate() error {
 		}
 		if s.NonCDB && strings.HasPrefix(strings.ToUpper(s.User), "C##") {
 			return fmt.Errorf("services.oracle: non_cdb with a common user (%q): common users exist only in a CDB", s.User)
+		}
+		if len(s.CapacityPDBs) > 0 {
+			if name != "oracle" || !s.Capacity {
+				return fmt.Errorf("services.%s.capacity_pdbs needs services.oracle.capacity: true", name)
+			}
+			if s.NonCDB {
+				return fmt.Errorf("services.oracle.capacity_pdbs: a non-CDB has no other PDBs")
+			}
+			if len(s.CapacityPDBs) > maxCapacityPDBs {
+				return fmt.Errorf("services.oracle.capacity_pdbs: at most %d PDBs (got %d)", maxCapacityPDBs, len(s.CapacityPDBs))
+			}
+			seen := map[string]bool{strings.ToLower(s.Service): true}
+			for _, p := range s.CapacityPDBs {
+				if !serviceRE.MatchString(p) {
+					return fmt.Errorf("services.oracle.capacity_pdbs: %q is not a service name", p)
+				}
+				if seen[strings.ToLower(p)] {
+					return fmt.Errorf("services.oracle.capacity_pdbs: %q twice (or the same as service)", p)
+				}
+				seen[strings.ToLower(p)] = true
+			}
 		}
 		if s.CDBService != "" && s.CDBService != "-" && !serviceRE.MatchString(s.CDBService) {
 			return fmt.Errorf("services.oracle.cdb_service: %q is not a service name", s.CDBService)

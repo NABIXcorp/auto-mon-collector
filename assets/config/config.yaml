@@ -572,7 +572,7 @@ receivers:
                          NVL(TO_CHAR(s.last_active_time, 'YYYY-MM-DD HH24:MI:SS'), '-') AS "last_active",
                          NVL(SUBSTR(s.sql_text, 1, 1000), '-') AS "sql_text"
                   FROM v$$sqlstats s LEFT JOIN v$$containers c ON c.con_id = s.con_id
-                  -- v0.30.1: last_active_time is NULL for many rows and a DESC order puts NULLs FIRST (dev-xtrade: the
+                  -- v0.30.1: last_active_time is NULL for many rows and a DESC order puts NULLs FIRST (on a test host the
                   -- 100 rows were all NULL, the receiver refuses a NULL column = nothing sent)
                   WHERE s.last_active_time IS NOT NULL
                   ORDER BY s.last_active_time DESC NULLS LAST
@@ -602,7 +602,7 @@ receivers:
           password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
           collection_interval: 6h
           timeout: 900s   # the whole scrape: the table query ran > 120 s on a big non-CDB (v0.22.1)
-          queries:
+          queries: &capacity_queries   # v0.31.0: the same list for every extra PDB (capacity_pdbs) below
             # top 50 tables (data + indexes + LOBs + partitions) + one "(others)" row with the rest
             - sql: |
                 SELECT 'table' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container",
@@ -703,7 +703,7 @@ receivers:
           # the whole scrape: DBA_EXTENTS did not finish in 300 s for the monitoring user on a real PDB (v0.22.0)
           collection_interval: 24h
           timeout: 900s
-          queries:
+          queries: &capacity_files_queries
             # 1. data + temp files: size, autoextend, max (fast; first, so a slow query 2 cannot take it down)
             - sql: |
                 SELECT 'file' AS "kind", SYS_CONTEXT('USERENV', 'CON_NAME') AS "container", 'data' AS "file_type",
@@ -735,6 +735,81 @@ receivers:
               logs:
                 - body_column: summary
                   attribute_columns: [kind, container, file, tablespace, size_b, hwm_b, reclaim_b]
+      # ---- v0.31.0 (answers services.oracle.capacity_pdbs): the same capacity queries in up to 3 MORE PDBs of the
+      # CDB (DBA_ views only see their own container). One pair of receivers per slot; a slot is off while its env
+      # ORACLE_CAPACITY_PDB<n> is unset. Records carry `container` = the PDB name. Grants: the capacity views inside each PDB.
+      sql_query/oracle_capacity_pdb2:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_CAPACITY:-off}" == "on" && "${env:ORACLE_CAPACITY_PDB2:-none}" != "none"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_CAPACITY_PDB2:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 6h
+          timeout: 900s
+          queries: *capacity_queries
+      sql_query/oracle_capacity_files_pdb2:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_CAPACITY:-off}" == "on" && "${env:ORACLE_CAPACITY_PDB2:-none}" != "none"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_CAPACITY_PDB2:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 24h
+          timeout: 900s
+          queries: *capacity_files_queries
+      sql_query/oracle_capacity_pdb3:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_CAPACITY:-off}" == "on" && "${env:ORACLE_CAPACITY_PDB3:-none}" != "none"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_CAPACITY_PDB3:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 6h
+          timeout: 900s
+          queries: *capacity_queries
+      sql_query/oracle_capacity_files_pdb3:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_CAPACITY:-off}" == "on" && "${env:ORACLE_CAPACITY_PDB3:-none}" != "none"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_CAPACITY_PDB3:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 24h
+          timeout: 900s
+          queries: *capacity_files_queries
+      sql_query/oracle_capacity_pdb4:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_CAPACITY:-off}" == "on" && "${env:ORACLE_CAPACITY_PDB4:-none}" != "none"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_CAPACITY_PDB4:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 6h
+          timeout: 900s
+          queries: *capacity_queries
+      sql_query/oracle_capacity_files_pdb4:
+        rule: type == "hostport" && port == 1521 && host != "::1" && "${env:ORACLE_MON:-off}" == "on" && "${env:ORACLE_CAPACITY:-off}" == "on" && "${env:ORACLE_CAPACITY_PDB4:-none}" != "none"
+        config:
+          driver: oracle
+          host: localhost
+          port: 1521
+          database: ${env:ORACLE_CAPACITY_PDB4:-none}
+          username: ${env:ORACLE_MON_USER:-otel_mon}
+          password: "${env:ORACLE_MON_PASSWORD:-none}${env:FORCE_STRING:-}"
+          collection_interval: 24h
+          timeout: 900s
+          queries: *capacity_files_queries
 
 processors:
   resource_detection:

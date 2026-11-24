@@ -1,11 +1,13 @@
 package generate
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/NABIXcorp/auto-mon-collector/assets"
 	"github.com/NABIXcorp/auto-mon-collector/internal/detect"
 	"gopkg.in/yaml.v3"
 )
@@ -416,6 +418,54 @@ func TestOracleCapacity(t *testing.T) {
 	}
 	if err := (Answers{Services: map[string]Service{"tomcat": {Capacity: true}}}).Validate(); err == nil {
 		t.Error("capacity on tomcat must fail")
+	}
+}
+
+// Capacity in more PDBs (v0.31.0): slots 2..4 in host.env, the config has a receiver pair per slot reusing the queries.
+func TestOracleCapacityPDBs(t *testing.T) {
+	h := Host{Findings: []detect.Finding{oracleFinding()}}
+	o := Service{Service: "apppdb", User: "C##OTEL_MON", CDBService: "orcl", Capacity: true, CapacityPDBs: []string{"salespdb", "third"}}
+	out, err := Generate(h, Answers{Services: map[string]Service{"oracle": o}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := string(out.HostEnv)
+	if !strings.Contains(e, "ORACLE_CAPACITY_PDB2=salespdb\n") || !strings.Contains(e, "ORACLE_CAPACITY_PDB3=third\n") || strings.Contains(e, "PDB4") {
+		t.Errorf("host.env: %s", e)
+	}
+	for _, bad := range []Service{
+		{Service: "apppdb", User: "C##OTEL_MON", CapacityPDBs: []string{"x"}},                                // capacity off
+		{Service: "apppdb", User: "C##OTEL_MON", Capacity: true, CapacityPDBs: []string{"apppdb"}},           // same as service
+		{Service: "apppdb", User: "C##OTEL_MON", Capacity: true, CapacityPDBs: []string{"a", "b", "c", "d"}}, // too many
+		{Service: "apppdb", User: "C##OTEL_MON", Capacity: true, CapacityPDBs: []string{"bad$name"}},         // not a name
+		{Service: "orcl", User: "otel_mon", NonCDB: true, Capacity: true, CapacityPDBs: []string{"x"}},       // non-CDB
+	} {
+		if err := (Answers{Services: map[string]Service{"oracle": bad}}).Validate(); err == nil {
+			t.Errorf("must fail: %+v", bad)
+		}
+	}
+	// the base config: one pair of receivers per slot, each reusing the anchored query lists
+	var m map[string]any
+	if err := yaml.Unmarshal(assets.BaseConfig(), &m); err != nil {
+		t.Fatal(err)
+	}
+	rc := m["receivers"].(map[string]any)["receiver_creator/capacity"].(map[string]any)["receivers"].(map[string]any)
+	base := rc["sql_query/oracle_capacity"].(map[string]any)["config"].(map[string]any)["queries"].([]any)
+	files := rc["sql_query/oracle_capacity_files"].(map[string]any)["config"].(map[string]any)["queries"].([]any)
+	for n := 2; n <= maxCapacityPDBs+1; n++ {
+		for name, want := range map[string][]any{fmt.Sprintf("sql_query/oracle_capacity_pdb%d", n): base, fmt.Sprintf("sql_query/oracle_capacity_files_pdb%d", n): files} {
+			r, ok := rc[name].(map[string]any)
+			if !ok {
+				t.Fatalf("config.yaml: %s missing", name)
+			}
+			c := r["config"].(map[string]any)
+			if c["database"] != fmt.Sprintf("${env:ORACLE_CAPACITY_PDB%d:-none}", n) || len(c["queries"].([]any)) != len(want) {
+				t.Errorf("%s: database %v, %d queries (want %d)", name, c["database"], len(c["queries"].([]any)), len(want))
+			}
+			if !strings.Contains(r["rule"].(string), fmt.Sprintf(`"${env:ORACLE_CAPACITY_PDB%d:-none}" != "none"`, n)) {
+				t.Errorf("%s: rule %q", name, r["rule"])
+			}
+		}
 	}
 }
 

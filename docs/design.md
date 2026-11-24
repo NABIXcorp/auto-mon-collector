@@ -470,6 +470,10 @@ tables with many segments for few rows; partition segments start at 8 MB), `recy
 mark, `reclaim_b` = what a RESIZE could give back; own query, 900 s scrape timeout). v0.22.1: tablespace used / free from
 `DBA_TABLESPACE_USAGE_METRICS` (`DBA_FREE_SPACE` and `DBA_EXTENTS` were too slow for the monitoring user on a real PDB). Growth = difference between snapshots, computed by the reader.
 Oracle-maintained schemas are left out. Grants: single DBA_ views (listed in the config comment), no Diagnostics Pack.
+**More PDBs (v0.31.0):** `services.oracle.capacity_pdbs: [<service>, ...]` (at most 3, needs `capacity: true`, not on a
+non-CDB) runs the same two query lists (YAML anchors `capacity_queries` / `capacity_files_queries`) in each extra PDB:
+receivers `sql_query/oracle_capacity_pdb<n>` and `sql_query/oracle_capacity_files_pdb<n>` (n = 2..4), switched on by
+`ORACLE_CAPACITY_PDB<n>` in host.env. Records carry `container` = that PDB. The capacity grants are needed inside each PDB.
 
 `services.tomcat.time_zone` (optional): zone of the times in Tomcat's own log (they carry no offset). Default: the
 JVM's zone from the scan (`-Duser.timezone`, else the process's `TZ`), else the host's zone. A JVM in another zone
