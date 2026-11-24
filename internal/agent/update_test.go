@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -20,13 +21,24 @@ import (
 type lockedRun struct {
 	mu    sync.Mutex
 	calls []string
+	fail  string // a command with this prefix fails (recorded all the same)
 }
 
 func (f *lockedRun) run(name string, args ...string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, filepath.Base(name)+" "+strings.Join(args, " "))
+	c := filepath.Base(name) + " " + strings.Join(args, " ")
+	f.calls = append(f.calls, c)
+	if f.fail != "" && strings.HasPrefix(c, f.fail) {
+		return []byte("Unit not found."), errors.New("exit status 5")
+	}
 	return nil, nil
+}
+
+func (f *lockedRun) setFail(prefix string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = prefix
 }
 
 func (f *lockedRun) count(prefix string) int {
@@ -48,6 +60,12 @@ var dbProbe = generate.Probes{TCP: []generate.TCPProbe{{Name: "link_web_db", Hos
 // startAgent: a fake control plane, an enrolled agent with `policy` appended to its agent section.
 func startAgent(t *testing.T, policy, running string) (*agenttest.Server, string, *lockedRun) {
 	t.Helper()
+	return startAgentRun(t, policy, running, &lockedRun{})
+}
+
+// startAgentRun: startAgent with a given runner (e.g. one that fails a command from the first poll on).
+func startAgentRun(t *testing.T, policy, running string, f *lockedRun) (*agenttest.Server, string, *lockedRun) {
+	t.Helper()
 	cp := agenttest.New()
 	cp.Poll = 200 * time.Millisecond
 	srv := httptest.NewServer(cp)
@@ -60,7 +78,6 @@ func startAgent(t *testing.T, policy, running string) (*agenttest.Server, string
 	if err := agent.Enrol(context.Background(), pre, "app-1", agenttest.Token, os.Getuid(), os.Getgid(), nil); err != nil {
 		t.Fatal(err)
 	}
-	f := &lockedRun{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
