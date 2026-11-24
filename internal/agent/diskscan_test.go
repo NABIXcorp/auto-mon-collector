@@ -95,3 +95,25 @@ func TestDiskScanOff(t *testing.T) {
 		t.Errorf("inventory: disk_scan: %+v", invs)
 	}
 }
+
+// v0.31.1: a start that fails (the unit not linked yet, seen during an apply) is not a running scan: a console
+// request right after it starts the scan instead of answering "busy" for 11 min, and the daily start is not
+// repeated every poll.
+func TestDiskScanFailedStartIsNotBusy(t *testing.T) {
+	f := &lockedRun{fail: scanCmd}
+	cp, pre, _ := startAgentRun(t, "  disk_scan:\n    allow: true\n", "v0.29.0", f)
+	waitCount(t, "daily try", func() int { return f.count(scanCmd) }, 1)
+	time.Sleep(500 * time.Millisecond) // several polls: no new try before diskScanRetry
+	if n := f.count(scanCmd); n != 1 {
+		t.Fatalf("tries after a failed start: %d, want 1", n)
+	}
+	f.setFail("")
+	cp.PublishDiskScan("app-1", dbProbe, "scan-0123456789")
+	s := waitStatuses(t, cp, 1)[0]
+	if s.DiskScan == nil || s.DiskScan.Result != "started" {
+		t.Fatalf("request after a failed start: %+v", s.DiskScan)
+	}
+	if tr := diskscan.LoadTrigger(pre); tr.Reason != "request" || tr.ID != "scan-0123456789" {
+		t.Fatalf("trigger %+v", tr)
+	}
+}

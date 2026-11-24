@@ -135,6 +135,7 @@ type State struct {
 	DiskScanID      string `json:"disk_scan_id,omitempty"`
 	DiskScanStarted int64  `json:"disk_scan_started,omitempty"` // unix ms (= the trigger's at)
 	DiskScanSent    int64  `json:"disk_scan_sent,omitempty"`
+	DiskScanFailed  int64  `json:"disk_scan_failed,omitempty"` // v0.31.1: unix ms of the last automatic start that failed
 }
 
 // StateFile below the prefix.

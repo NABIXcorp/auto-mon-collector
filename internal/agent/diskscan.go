@@ -23,6 +23,7 @@ const (
 	diskScanDaily   = 24 * time.Hour
 	diskScanFullGap = 6 * time.Hour    // a full disk starts a scan at most every 6 h
 	diskScanBusy    = 11 * time.Minute // a started scan counts as running this long (the unit's timeout)
+	diskScanRetry   = 15 * time.Minute // a start that failed (e.g. the unit not linked yet) is tried again after this
 	diskScanFull    = 85.0             // percent
 )
 
@@ -115,7 +116,11 @@ func diskScanTick(ctx context.Context, cfg Config, cl *Client, allow bool, st *S
 		}
 	}
 	now := cfg.Now()
-	if !diskScanRunning(*st, trig, now) {
+	// v0.31.1: a failed start is not a running scan; it is retried after diskScanRetry (was: counted as started, so
+	// the console got "busy" for 11 min and the next try came 24 h later; seen when apply turned the switch on before
+	// the unit was linked)
+	retryWait := st.DiskScanFailed > st.DiskScanStarted && now.Sub(time.UnixMilli(st.DiskScanFailed)) < diskScanRetry
+	if !retryWait && !diskScanRunning(*st, trig, now) {
 		since := now.Sub(time.UnixMilli(st.DiskScanStarted))
 		reason := ""
 		if st.DiskScanStarted == 0 || since >= diskScanDaily {
@@ -129,14 +134,15 @@ func diskScanTick(ctx context.Context, cfg Config, cl *Client, allow bool, st *S
 		if reason != "" {
 			at := stamp(*st, now)
 			if err := startDiskScan(cfg.Prefix, cfg.Run, diskscan.Trigger{Reason: reason, At: at}); err != nil {
-				cfg.Log.Printf("agent: disk scan: %v", err)
+				cfg.Log.Printf("agent: disk scan: %v (tried again in %s)", err, diskScanRetry)
+				next.DiskScanFailed = at
 			} else {
 				cfg.Log.Printf("agent: disk scan started (%s)", reason)
+				next.DiskScanStarted = at
 			}
-			next.DiskScanStarted = at // also after a failure: tried again in 24 h, not every poll
 		}
 	}
-	if next.DiskScanSent != st.DiskScanSent || next.DiskScanStarted != st.DiskScanStarted {
+	if next.DiskScanSent != st.DiskScanSent || next.DiskScanStarted != st.DiskScanStarted || next.DiskScanFailed != st.DiskScanFailed {
 		if err := saveState(cfg.Prefix, next); err != nil {
 			cfg.Log.Printf("agent: %s: %v", StateFile, err)
 			return true
