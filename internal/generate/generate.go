@@ -107,6 +107,9 @@ func Generate(h Host, a Answers) (Output, error) {
 		}
 		if ans.Capacity { // v0.22.0: receiver_creator/capacity, against the service itself (DBA_ views are per container)
 			env = append(env, "ORACLE_CAPACITY=on")
+			for i, p := range ans.CapacityPDBs { // v0.31.0: slots 2..4 = the same queries in other PDBs
+				env = append(env, fmt.Sprintf("ORACLE_CAPACITY_PDB%d=%s", i+2, p))
+			}
 		}
 		if ans.SessionsCDB { // v0.30.0: sql_query/oracle_sessions_cdb in the root replaces the PDB's session snapshot
 			env = append(env, "ORACLE_SESSIONS_CDB=on")
