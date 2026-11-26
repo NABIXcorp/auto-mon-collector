@@ -6,11 +6,13 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+
+	"github.com/NABIXcorp/auto-mon-collector/internal/dockerinv"
 )
 
 // InventoryFile (below the prefix): the services of this host, written by plan / apply / update (root, 644), sent by
 // the agent to the control plane. It is a summary on an allowlist: service ids, ports, Oracle SIDs, Tomcat context
-// paths and bind addresses. No file paths, no environment, no process ids, no time stamps: the same host gives the
+// paths and bind addresses. No file paths, no environment, no process ids, no time stamps (except the docker section, v0.34.0): the same host gives the
 // same bytes, so an unchanged host shows no diff.
 const InventoryFile = "inventory.json"
 
@@ -44,11 +46,14 @@ type InventoryDoc struct {
 	Services  []InventoryService `json:"services"`
 	Listen    []InventorySocket  `json:"listen"`
 	Truncated bool               `json:"truncated,omitempty"` // more than maxSockets sockets
+	// Docker (v0.34.0, only with answers agent.docker.allow and a Docker state folder): the containers. Carries the
+	// scan time, so unlike the rest of the file it changes with every scan.
+	Docker *dockerinv.Inventory `json:"docker,omitempty"`
 }
 
 // Inventory builds inventory.json from the scan. enabled = the monitored service ids (Output.Enabled).
 func Inventory(h Host, enabled []string) []byte {
-	doc := InventoryDoc{Schema: InventorySchema, OS: h.OS, Services: []InventoryService{}, Listen: []InventorySocket{}}
+	doc := InventoryDoc{Schema: InventorySchema, OS: h.OS, Services: []InventoryService{}, Listen: []InventorySocket{}, Docker: h.Docker}
 	owner := map[int]string{}
 	for _, f := range h.Findings {
 		s := InventoryService{ID: f.ID, Monitored: slices.Contains(enabled, f.ID), // v0.33.0: nginx has no default profile

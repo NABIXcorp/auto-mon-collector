@@ -45,6 +45,11 @@
 //     agent.services_edit.allow) and "services_cp" ({"revision","set"}: the installed set, revision 0 = none). Send it
 //     only to agents that report services_edit true, never together with a new update, overlay set or allowlist
 //     overlay (one root job per document: those go first).
+//   - v0.34.0: the inventory "docker_allowed" (answers agent.docker.allow) and, inside "inventory", the "docker" section
+//     {"at","containers":[{id,name,image,project,service,working_dir,state,exit_code,health,restarts,started_at,
+//     finished_at}]} (at most 300; read by root's scan from the engine's state files, no socket). The agent serves
+//     container CPU / memory from the cgroups on 127.0.0.1:9479/metrics for the collector (DOCKER_MON=on). The inventory
+//     may be up to 256 KB. Nothing else changes in the protocol.
 package agent
 
 import (

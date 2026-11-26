@@ -79,6 +79,13 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > `services.redis.port`, `services.nginx {enabled, port, status_path}` (nginx `stub_status`, new collector receiver
 > `nginx`, off unless enabled), `services.<kind>.locked`. The inventory reports `services_edit` and `services_cp`. See
 > [docs/design.md](docs/design.md#switch-a-service-on-v0330-off-by-default).
+> v0.34.0: Docker containers, OFF by default (`answers.yaml agent.docker: {allow: true}`), without the Docker socket
+> or group. The service scan (root, read-only) reads `/var/lib/docker/containers/*/config.v2.json` into a `docker`
+> section of `inventory.json` (name, image, state, exit code, health, restarts, compose project / service / folder; no
+> environment, command or mounts; at most 300 containers). The agent reads the cgroup v2 files of each container every
+> 60 s and serves CPU and memory on `127.0.0.1:9479/metrics` (`docker_container_cpu_seconds_total`,
+> `docker_container_memory_bytes`, `docker_container_memory_limit_bytes`), which the collector scrapes when host.env has
+> `DOCKER_MON=on`. The inventory reports `docker_allowed`. See [docs/design.md](docs/design.md#docker-containers-v0340-off-by-default).
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and

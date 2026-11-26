@@ -201,6 +201,9 @@ type Inventory struct {
 	// ServicesCP (v0.33.0): the installed control-plane set (config/services.cp.yaml) with its revision; revision 0
 	// and an empty set = none
 	ServicesCP *generate.ServicesOverlay `json:"services_cp,omitempty"`
+	// DockerAllowed (v0.34.0): answers.yaml agent.docker.allow (the inventory carries the `docker` section, the
+	// reader serves container metrics on 127.0.0.1:9479)
+	DockerAllowed bool `json:"docker_allowed"`
 }
 
 // InvAddress: one IP of the host. Kind: private (RFC 1918, 100.64/10, fc00::/7) | public (any other global unicast).

@@ -438,6 +438,18 @@ receivers:
           endpoint: http://127.0.0.1:${env:NGINX_PORT:-80}${env:NGINX_STATUS_PATH:-/nginx_status}
           collection_interval: 60s
 
+      # Docker containers (v0.34.0): CPU / memory per container from the cgroups, served by monitoring-agent on
+      # 127.0.0.1:9479 (no Docker socket). Off unless DOCKER_MON=on in host.env (answers agent.docker.allow).
+      prometheus/docker:
+        rule: type == "hostport" && port == 9479 && host != "::1" && "${env:DOCKER_MON:-off}" == "on"
+        config:
+          config:
+            scrape_configs:
+              - job_name: docker
+                scrape_interval: 60s
+                static_configs:
+                  - targets: ["127.0.0.1:9479"]
+
       # Caddy: Prometheus metrics on the admin endpoint 127.0.0.1:2019/metrics.
       prometheus/caddy:
         rule: type == "hostport" && port == 2019 && host != "::1"

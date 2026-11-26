@@ -903,3 +903,49 @@ smoke run, automatic rollback).
   it writes `config/services.cp.yaml` (root 644; empty set = file removed) and runs `monitoring-agent update
   --no-fetch` (smoke run, automatic rollback; on failure the previous file is put back). Result in
   `agent/services-result.json` (applied | failed | rolled_back | refused), reported once as status `services`.
+
+### Docker containers (v0.34.0, OFF by default)
+
+Why: a Docker host can run many compose projects (one copy of an app per customer). Without the engine's API nobody
+sees which copy is down, unhealthy, restarting or using the memory. The usual agents read the Docker socket, which is
+root on the host: the collector user never gets the socket or the `docker` group. This feature needs neither.
+
+- **Host switch** (answers.yaml, root only; missing = off; read strictly: only `allow`, a bool):
+
+  ```yaml
+  agent:
+    docker:
+      allow: true
+  ```
+
+  With the switch on, host.env gets `DOCKER_MON=on` and the inventory reports `docker_allowed: true`.
+- **Names and states** (root, read-only, the existing service scan: `plan` / `apply` / `update` and the 15-min
+  `monitoring-agent scan`): reads `/var/lib/docker/containers/<id>/config.v2.json` (no socket, no `docker` command)
+  and writes the `docker` section of `inventory.json`: `{"at": <unix>, "containers": [ {id, name, image, project,
+  service, working_dir, state, exit_code, health, restarts, started_at, finished_at} ]}`. Only these fields are
+  copied: the name (without the leading `/`), `Config.Image`, the three labels `com.docker.compose.project`,
+  `.service`, `.project.working_dir` (empty for a container started by hand), `State` (running, paused, restarting,
+  dead, exit code, health status, started / finished time) and `RestartCount`. Never the environment, the command
+  line, the mounts or any other label. `state` is `running | exited | restarting | paused | created | dead` (Docker's
+  own order of checks); `finished_at` is 0 while a container runs. Sorted by name, at most 300 containers, strings
+  trimmed and cut to 200 bytes. A host without `/var/lib/docker/containers` (or one the scan cannot read) gets no
+  `docker` section and no error. `at` is the scan time, so with the switch on the file changes with every scan
+  (an inventory-only change restarts nothing); `inventory.json` may be up to 256 KB (was 48 KB).
+  The scan unit needs no change: it already reads other users' folders with `CAP_DAC_READ_SEARCH`.
+- **Numbers** (no root, inside the running agent): every 60 s the agent reads the world-readable cgroup v2 files of
+  each container, `/sys/fs/cgroup/system.slice/docker-<id>.scope/{cpu.stat,memory.current,memory.max}` (the systemd
+  cgroup driver; with the cgroupfs driver `/sys/fs/cgroup/docker/<id>/` for the ids of the scan), for the containers of
+  the newest `inventory.json` and any other `docker-*.scope` present, and serves them as Prometheus text on
+  `127.0.0.1:9479/metrics` (loopback only):
+  - `docker_container_cpu_seconds_total` (counter, `usage_usec` / 1e6),
+  - `docker_container_memory_bytes` (gauge, `memory.current`),
+  - `docker_container_memory_limit_bytes` (gauge, `memory.max`; no series when it says `max`),
+  - labels `container_id` (first 12 hex), `container_name`, `compose_project`, `compose_service` (from the newest
+    scan; a container not in it yet: name = the 12-hex id, project and service empty).
+  Without cgroup v2 (`/sys/fs/cgroup/cgroup.controllers` missing) it exports nothing and logs that once. The agent
+  unit needs no change: `ProtectSystem=strict` and `ProtectControlGroups=yes` leave `/sys/fs/cgroup` and the
+  inventory file readable, and `AF_INET` is allowed for the loopback listener.
+- **Collector**: the base config has a `receiver_creator/metrics` rule `prometheus/docker` for the host port 9479,
+  active only with `DOCKER_MON=on`; it scrapes `127.0.0.1:9479` every 60 s into the normal metrics pipeline.
+- **Inventory report**: top level `docker_allowed` (the switch); the file's `docker` section arrives inside
+  `inventory` like the services. Send nothing to hosts that do not report `docker_allowed: true`.

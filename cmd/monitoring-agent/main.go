@@ -16,12 +16,14 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/NABIXcorp/auto-mon-collector/assets"
 	"github.com/NABIXcorp/auto-mon-collector/internal/agent"
 	"github.com/NABIXcorp/auto-mon-collector/internal/ask"
 	"github.com/NABIXcorp/auto-mon-collector/internal/collector"
 	"github.com/NABIXcorp/auto-mon-collector/internal/detect"
+	"github.com/NABIXcorp/auto-mon-collector/internal/dockerinv"
 	"github.com/NABIXcorp/auto-mon-collector/internal/engine"
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 	"github.com/NABIXcorp/auto-mon-collector/internal/hostdir"
@@ -58,7 +60,7 @@ Usage:
         monitoring-diskscan; answers: agent.disk_scan.allow)
   monitoring-agent scan [--prefix DIR]
         the service scan again; rewrites only inventory.json when the services changed (run by the unit
-        monitoring-scan; answers: agent.rescan.allow)
+        monitoring-scan; answers: agent.rescan.allow; with agent.docker.allow it also lists the Docker containers)
   monitoring-agent uninstall [--yes] [--purge-data] [--purge-secrets] [--purge]
         check mode unless --yes
   monitoring-agent version
@@ -477,6 +479,9 @@ func desiredFrom(w io.Writer, a generate.Answers, detectPath, siteDir string, in
 
 // agentInputs (v0.13.0): with an agent section, the effective allowlist (template + host extras, printed) and the
 // probe list the agent applied last, so the generated Cloudprober files are the agent's.
+// dockerRoot: the Docker engine's state folder (a variable for tests).
+var dockerRoot = dockerinv.DefaultRoot
+
 func agentInputs(w io.Writer, h *generate.Host, a generate.Answers, in inputs) (*engine.Agent, error) {
 	if a.Agent == nil {
 		if in.allow != "" {
@@ -530,6 +535,16 @@ func agentInputs(w io.Writer, h *generate.Host, a generate.Answers, in inputs) (
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
+	}
+	if a.Agent.Docker.Allow {
+		// v0.34.0: root reads the container state files (names, states, compose labels; no socket, no environment)
+		h.Docker = dockerinv.Read(dockerRoot, time.Now())
+		if h.Docker == nil {
+			fmt.Fprintf(w, "  ok    agent: docker monitoring on (no %s/containers here: no docker section)\n", dockerRoot)
+		} else {
+			fmt.Fprintf(w, "  ok    agent: docker monitoring on (%d containers read; metrics from the cgroups on 127.0.0.1:%d)\n",
+				len(h.Docker.Containers), agent.DockerPort)
+		}
 	}
 	if a.Agent.DiskScan.Allow {
 		fmt.Fprintf(w, "  ok    agent: disk scan on (unit %s, read-only)\n", assets.DiskScanUnit)
