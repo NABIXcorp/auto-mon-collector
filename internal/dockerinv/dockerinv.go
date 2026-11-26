@@ -7,10 +7,12 @@ package dockerinv
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -41,7 +43,18 @@ type Container struct {
 	Restarts   int    `json:"restarts"`
 	StartedAt  int64  `json:"started_at"`  // unix seconds, 0 = never started
 	FinishedAt int64  `json:"finished_at"` // unix seconds, 0 = running or never finished
+	Ports      []Port `json:"ports"`       // published ports (v0.34.1+; NetworkSettings.Ports of config.v2.json)
 }
+
+// Port is one published port: host ip:port -> the container's port / protocol.
+type Port struct {
+	IP     string `json:"ip"`     // the host address it binds ("0.0.0.0", "::", "127.0.0.1")
+	Port   int    `json:"port"`   // the host port
+	Target int    `json:"target"` // the container's port
+	Proto  string `json:"proto"`  // tcp | udp | sctp
+}
+
+const maxPorts = 20
 
 // Inventory is the `docker` section of inventory.json.
 type Inventory struct {
@@ -74,7 +87,48 @@ type configV2 struct {
 			Status string `json:"Status"`
 		} `json:"Health"`
 	} `json:"State"`
-	RestartCount int `json:"RestartCount"`
+	RestartCount    int `json:"RestartCount"`
+	NetworkSettings struct {
+		Ports map[string][]struct {
+			HostIP   string `json:"HostIp"`
+			HostPort string `json:"HostPort"`
+		} `json:"Ports"`
+	} `json:"NetworkSettings"`
+}
+
+// portsOf: the published ports, sorted (host port, ip), at most maxPorts; exposed-only ports are left out.
+func portsOf(m map[string][]struct {
+	HostIP   string `json:"HostIp"`
+	HostPort string `json:"HostPort"`
+}) []Port {
+	out := []Port{}
+	for k, binds := range m {
+		tp, proto, ok := strings.Cut(k, "/")
+		target, err := strconv.Atoi(tp)
+		if !ok || err != nil || target <= 0 || target > 65535 || (proto != "tcp" && proto != "udp" && proto != "sctp") {
+			continue
+		}
+		for _, b := range binds {
+			hp, err := strconv.Atoi(b.HostPort)
+			if err != nil || hp <= 0 || hp > 65535 || net.ParseIP(b.HostIP) == nil {
+				continue
+			}
+			out = append(out, Port{IP: b.HostIP, Port: hp, Target: target, Proto: proto})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Port != out[j].Port {
+			return out[i].Port < out[j].Port
+		}
+		if out[i].Proto != out[j].Proto {
+			return out[i].Proto < out[j].Proto
+		}
+		return out[i].IP < out[j].IP
+	})
+	if len(out) > maxPorts {
+		out = out[:maxPorts]
+	}
+	return out
 }
 
 func clip(s string) string {
@@ -118,6 +172,7 @@ func parse(b []byte, dirID string) (Container, bool) {
 		Service:    clip(c.Config.Labels["com.docker.compose.service"]),
 		WorkingDir: clip(c.Config.Labels["com.docker.compose.project.working_dir"]),
 		ExitCode:   c.State.ExitCode,
+		Ports:      portsOf(c.NetworkSettings.Ports),
 		Restarts:   c.RestartCount,
 		StartedAt:  unixOf(c.State.StartedAt),
 		FinishedAt: unixOf(c.State.FinishedAt),

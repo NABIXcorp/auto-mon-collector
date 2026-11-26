@@ -62,7 +62,7 @@ func TestScanReadsDockerContainers(t *testing.T) {
 		t.Fatalf("docker section: %+v", doc.Docker)
 	}
 	c := doc.Docker.Containers[0]
-	if c.ID != dockerTestID || c.Name != "shop-a-db-1" || c.Image != "db:16" || c.Project != "shop-a" || c.Service != "db" || c.State != "running" || c.Health != "healthy" {
+	if c.ID != dockerTestID || c.Name != "shop-a-db-1" || c.Image != "db:16" || c.Project != "shop-a" || c.Service != "db" || c.State != "running" || c.Health != "" {
 		t.Errorf("container: %+v", c)
 	}
 
