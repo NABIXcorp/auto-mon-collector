@@ -144,6 +144,9 @@ type State struct {
 	// v0.33.0: the last service switch set handed to root and the last root result reported (services revisions)
 	ServicesRevision int64 `json:"services_revision,omitempty"`
 	ServicesReported int64 `json:"services_reported,omitempty"`
+	// v0.35.0: the last agent settings set handed to root and the last root result reported (settings revisions)
+	SettingsRevision int64 `json:"settings_revision,omitempty"`
+	SettingsReported int64 `json:"settings_reported,omitempty"`
 }
 
 // StateFile below the prefix.

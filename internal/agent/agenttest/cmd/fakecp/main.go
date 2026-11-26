@@ -1,7 +1,7 @@
 // Command fakecp runs the fake control plane for the CI end-to-end test (never released). It listens on 127.0.0.1,
 // writes its public key to -key-out and takes test commands on /_test/*:
 //
-//	POST /_test/publish  {"host","revision","probes",...,"tamper","other_key","expires_at","site"|"disk_scan"|"rescan"|"services"}  -> {"revision"}
+//	POST /_test/publish  {"host","revision","probes",...,"tamper","other_key","expires_at","site"|"disk_scan"|"rescan"|"services"|"settings"}  -> {"revision"}
 //	GET  /_test/status   reported statuses (JSON list)
 //	GET  /_test/diskscans  disk scan results received (JSON list)
 //	GET  /_test/inventories  inventories received (JSON list)
@@ -51,13 +51,20 @@ func main() {
 				Revision int64          `json:"revision"`
 				Set      map[string]any `json:"set"`
 			} `json:"services"`
+			// v0.35.0: agent settings ({"revision","set"})
+			Settings *struct {
+				Revision int64           `json:"revision"`
+				Set      map[string]bool `json:"set"`
+			} `json:"settings"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		var rev int64
-		if in.Services != nil {
+		if in.Settings != nil {
+			rev = s.PublishSettings(in.Host, in.Probes, in.Settings.Revision, in.Settings.Set, nil)
+		} else if in.Services != nil {
 			rev = s.PublishServices(in.Host, in.Probes, in.Services.Revision, in.Services.Set, nil)
 		} else if in.Rescan != nil {
 			rev = s.PublishRescan(in.Host, in.Probes, in.Rescan.ID)

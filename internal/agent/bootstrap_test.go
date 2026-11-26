@@ -89,3 +89,21 @@ func TestBundleDefaultsFromConsole(t *testing.T) {
 		t.Fatalf("%+v", b)
 	}
 }
+
+// v0.35.0: the bundle may carry the consent list for the agent settings; unknown keys fail the answers check
+func TestBundleSettingsAllow(t *testing.T) {
+	var b agent.Bundle
+	b.Agent.URL, b.Agent.ControlPlaneKey = "https://agent.example.com/agent/", "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	if a := b.Answers(); a.Agent.Settings.Allow != nil {
+		t.Errorf("no list: %+v", a.Agent.Settings)
+	}
+	b.Agent.SettingsAllow = []string{"disk_scan", "rescan"}
+	a := b.Answers()
+	if err := a.Validate(); err != nil || strings.Join(a.Agent.Settings.Allow, ",") != "disk_scan,rescan" {
+		t.Errorf("answers: %+v %v", a.Agent.Settings, err)
+	}
+	b.Agent.SettingsAllow = []string{"update"}
+	if a := b.Answers(); a.Validate() == nil {
+		t.Error("an unknown key was accepted")
+	}
+}

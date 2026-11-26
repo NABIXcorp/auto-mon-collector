@@ -140,6 +140,9 @@ func LoadAnswers(path string) (Answers, error) {
 	if err := dec.Decode(&a); err != nil {
 		return a, fmt.Errorf("%s: %w", path, err)
 	}
+	if a.Agent != nil {
+		a.Agent.pinned = pinnedIn(b) // v0.35.0: a switch written here is the answers' (settings.go)
+	}
 	return a, a.Validate()
 }
 

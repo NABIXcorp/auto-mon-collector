@@ -128,6 +128,10 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 		// v0.33.0: or the control plane's service switches (services.go)
 		sr := o.runServices(ctx, req)
 		return agent.UpdateResult{Result: sr.Result, Detail: sr.Detail, At: sr.At}
+	} else if err == nil && settingsJob(req) {
+		// v0.35.0: or the control plane's agent settings (settings.go)
+		sr := o.runSettings(req)
+		return agent.UpdateResult{Result: sr.Result, Detail: sr.Detail, At: sr.At}
 	}
 	doc, pol, last, err := o.verifyRequest(&res)
 	if errors.Is(err, errHandled) {
@@ -260,6 +264,8 @@ type record struct {
 	AllowRevision int64 `json:"allow_revision,omitempty"`
 	// v0.33.0: the last service switch set root handled
 	ServicesRevision int64 `json:"services_revision,omitempty"`
+	// v0.35.0: the last agent settings set root handled
+	SettingsRevision int64 `json:"settings_revision,omitempty"`
 	At               int64 `json:"at"`
 }
 
@@ -284,6 +290,11 @@ func (o *Options) loadRequest() (request, error) {
 	}
 	if a.Agent == nil {
 		return r, errors.New("answers.yaml has no agent section")
+	}
+	// v0.35.0: the switches as the control plane's installed settings make them (answers win; the copy still knows
+	// the keys the answers pin): a services / allowlist job checks the EFFECTIVE switch, like the agent did
+	if a, _, err = generate.EffectiveAnswers(a, o.Prefix); err != nil {
+		return r, err
 	}
 	r.answers = a
 	if a.ReleaseMirror != "" && generate.ValidMirror(a.ReleaseMirror) == nil {
@@ -321,7 +332,7 @@ func (o *Options) verifyRequest(res *agent.UpdateResult) (agent.Doc, generate.Ag
 	doc, last := req.doc, req.last
 	u := doc.Update
 	if u == nil {
-		return doc, none, last, errors.New("request: the signed document asks for no update (and no new overlay set, allowlist or service switches)")
+		return doc, none, last, errors.New("request: the signed document asks for no update (and no new overlay set, allowlist, service switches or settings)")
 	}
 	if !agent.ValidUpdateID(u.ID) {
 		return doc, none, last, errors.New("request: update id malformed")

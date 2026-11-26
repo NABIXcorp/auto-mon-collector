@@ -45,3 +45,18 @@ func TestInstallRefuses(t *testing.T) {
 		t.Errorf("installed host: %d %s", c, out)
 	}
 }
+
+// v0.35.0: a bad consent list is refused before anything is asked of the console
+func TestInstallSettingsAllowChecked(t *testing.T) {
+	old := installNeedRoot
+	installNeedRoot = false
+	defer func() { installNeedRoot = old }()
+	agentStdin = strings.NewReader(agenttest.Token + "\n")
+	defer func() { agentStdin = os.Stdin }()
+	var out, errb bytes.Buffer
+	c := run([]string{"install", "--console", "https://agent.example.com/agent/", "--token-stdin", "--prefix", t.TempDir(),
+		"--settings-allow", "disk_scan,update"}, &out, &errb)
+	if c != exitUsage || !strings.Contains(errb.String(), `--settings-allow: agent.settings.allow: unknown key "update"`) {
+		t.Errorf("%d %s%s", c, out.String(), errb.String())
+	}
+}
