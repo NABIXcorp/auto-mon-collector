@@ -232,6 +232,7 @@ func Run(ctx context.Context, cfg Config) error {
 		backoff, unauth = 0, 0
 		doc, refused, verr := Verify(raw, ed25519.PublicKey(cpKey), host, st.Revision, cfg.Now(), local.Allow)
 		status := Status{Revision: doc.Revision, Versions: cfg.Versions, Refused: refused}
+		deferred := false // v0.35.1: a root job waits for the running one: fetch this document again
 		var rej *Reject
 		switch {
 		case errors.As(verr, &rej):
@@ -256,7 +257,18 @@ func Run(ctx context.Context, cfg Config) error {
 				var svc *ServicesStatus
 				var stg *SettingsStatus
 				start := false
-				if u := doc.Update; u != nil && u.ID != st.UpdateID {
+				// v0.35.1: while the root unit still runs an earlier job, start no new one (a `systemctl start` of an
+				// active unit is a no-op, so the new request would be lost while its revision counts as handled).
+				// The revisions are not advanced: the next poll tries again.
+				busy := pendingRootJob(doc, st) && rootJobBusy(cfg.Run)
+				if busy {
+					// keep the old document revision: the next poll fetches this document again and retries
+					next.Revision, deferred = st.Revision, true
+					lg.Printf("agent: %s still runs an earlier job; the new root job waits for the next poll", UpdateUnit)
+				}
+				if busy {
+					// nothing: see above
+				} else if u := doc.Update; u != nil && u.ID != st.UpdateID {
 					us, ok := prepareUpdate(cfg.Prefix, local.Agent.Update, cfg.Versions[VersionKey], u, raw)
 					upd, start, next.UpdateID = &us, ok, u.ID
 				} else if s := doc.Site; s != nil && s.Revision != st.SiteRevision {
@@ -356,14 +368,14 @@ func Run(ctx context.Context, cfg Config) error {
 			}
 		}
 		replay := doc.Revision <= seen // a control plane that sends an old revision again: do not spin on it
-		if doc.Revision > seen && status.Result != "error" {
+		if doc.Revision > seen && status.Result != "error" && !deferred {
 			seen = doc.Revision // a rejected revision is not fetched again; an error is retried
 		}
 		lg.Printf("agent: revision %d %s: %s", doc.Revision, status.Result, status.Detail)
 		if err := cl.Report(ctx, status); err != nil && ctx.Err() == nil {
 			lg.Printf("agent: report: %v", err)
 		}
-		if status.Result == "error" || replay {
+		if status.Result == "error" || replay || deferred {
 			wait(0)
 		}
 	}
@@ -508,4 +520,22 @@ func HostName(prefix string) string {
 		return ""
 	}
 	return hostOf("", l)
+}
+
+// rootJobBusy: the root unit (update, overlay, allowlist, services, settings job) is running now.
+func rootJobBusy(run Runner) bool {
+	out, _ := run("systemctl", "is-active", UpdateUnit)
+	switch strings.TrimSpace(lastLine(out)) {
+	case "active", "activating", "deactivating", "reloading":
+		return true
+	}
+	return false
+}
+
+// pendingRootJob: the document carries a root job the agent has not handled yet.
+func pendingRootJob(doc Doc, st State) bool {
+	return (doc.Update != nil && doc.Update.ID != st.UpdateID) || (doc.Site != nil && doc.Site.Revision != st.SiteRevision) ||
+		(doc.Allow != nil && doc.Allow.Revision != st.AllowRevision) ||
+		(doc.Services != nil && doc.Services.Revision != st.ServicesRevision) ||
+		(doc.Settings != nil && doc.Settings.Revision != st.SettingsRevision)
 }

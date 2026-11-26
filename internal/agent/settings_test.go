@@ -121,6 +121,29 @@ func TestSettingsRequestHandedOnce(t *testing.T) {
 	}
 }
 
+// v0.35.1: a set that arrives while the root unit still runs an earlier job waits (not lost) and starts after it.
+func TestSettingsWaitWhileRootBusy(t *testing.T) {
+	f := &lockedRun{busy: true}
+	cp, _, _ := startAgentRun(t, settingsOn, "v0.35.0", f)
+	cp.PublishSettings("app-1", dbProbe, 2, map[string]bool{"services_edit": true}, nil)
+	time.Sleep(900 * time.Millisecond)
+	if n := f.count(startCmd); n != 0 {
+		t.Fatalf("root unit started while busy: %q", f.calls)
+	}
+	for _, s := range cp.Statuses() {
+		if s.Settings != nil {
+			t.Fatalf("settings handled while busy: %+v", s.Settings)
+		}
+	}
+	f.setBusy(false)
+	for i := 0; i < 100 && f.count(startCmd) == 0; i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := f.count(startCmd); n != 1 {
+		t.Fatalf("root unit starts after the earlier job: %d %q", n, f.calls)
+	}
+}
+
 func mustRead(t *testing.T, p string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(p)
