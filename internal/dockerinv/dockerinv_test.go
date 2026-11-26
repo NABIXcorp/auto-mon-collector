@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -71,8 +72,8 @@ func TestReadContainers(t *testing.T) {
 	started, _ := time.Parse(time.RFC3339, "2026-11-20T10:00:00Z")
 	web := got["shop-a-web-1"]
 	want := Container{ID: hexID(1), Name: "shop-a-web-1", Image: "shop/web:1.4", Project: "shop-a", Service: "web", WorkingDir: "/srv/shop-a",
-		State: "running", Health: "healthy", Restarts: 2, StartedAt: started.Unix()}
-	if web != want {
+		State: "running", Health: "", Restarts: 2, StartedAt: started.Unix(), Ports: []Port{}}
+	if !reflect.DeepEqual(web, want) {
 		t.Errorf("compose container:\n got %+v\nwant %+v", web, want)
 	}
 	if c := got["tool"]; c.Project != "" || c.Service != "" || c.WorkingDir != "" || c.State != "running" || c.Health != "" {
@@ -84,7 +85,7 @@ func TestReadContainers(t *testing.T) {
 	if c := got["job-1"]; c.State != "exited" || c.ExitCode != 1 {
 		t.Errorf("exited 1: %+v", c)
 	}
-	if c := got["loop"]; c.State != "restarting" || c.Health != "unhealthy" || c.Restarts != 9 || c.FinishedAt != 0 {
+	if c := got["loop"]; c.State != "restarting" || c.Health != "" || c.Restarts != 9 || c.FinishedAt != 0 {
 		t.Errorf("restarting: %+v", c)
 	}
 	if c := got["new"]; c.State != "created" || c.StartedAt != 0 || c.FinishedAt != 0 {
@@ -93,7 +94,7 @@ func TestReadContainers(t *testing.T) {
 	if c := got["gone"]; c.State != "dead" {
 		t.Errorf("dead: %+v", c)
 	}
-	if c := got["waiting"]; c.State != "paused" || c.Health != "starting" {
+	if c := got["waiting"]; c.State != "paused" || c.Health != "" {
 		t.Errorf("paused: %+v", c)
 	}
 }
@@ -156,5 +157,30 @@ func TestIDFromFolder(t *testing.T) {
 	inv := Read(root, time.Now())
 	if len(inv.Containers) != 1 || inv.Containers[0].ID != hexID(1) {
 		t.Errorf("%+v", inv.Containers)
+	}
+}
+
+// v0.34.1: published ports from NetworkSettings.Ports; exposed-only and bad entries are left out, sorted.
+func TestPortsOf(t *testing.T) {
+	b := []byte(`{"ID":"` + hexID(1) + `","Name":"/web","Config":{"Image":"x"},"State":{"Running":true},
+"NetworkSettings":{"Ports":{"8085/tcp":[{"HostIp":"::","HostPort":"8085"},{"HostIp":"0.0.0.0","HostPort":"8085"}],
+"9000/tcp":null,"53/udp":[{"HostIp":"127.0.0.1","HostPort":"5353"}],"x/tcp":[{"HostIp":"0.0.0.0","HostPort":"1"}],
+"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"nope"}]}}}`)
+	c, ok := parse(b, hexID(1))
+	if !ok {
+		t.Fatal("parse")
+	}
+	want := []Port{{IP: "127.0.0.1", Port: 5353, Target: 53, Proto: "udp"}, {IP: "0.0.0.0", Port: 8085, Target: 8085, Proto: "tcp"},
+		{IP: "::", Port: 8085, Target: 8085, Proto: "tcp"}}
+	if len(c.Ports) != len(want) {
+		t.Fatalf("ports %+v", c.Ports)
+	}
+	for i := range want {
+		if c.Ports[i] != want[i] {
+			t.Fatalf("port %d: %+v, want %+v", i, c.Ports[i], want[i])
+		}
+	}
+	if c2, _ := parse([]byte(`{"ID":"`+hexID(2)+`","Name":"/x","Config":{"Image":"x"},"State":{}}`), hexID(2)); c2.Ports == nil || len(c2.Ports) != 0 {
+		t.Fatalf("no ports = empty list: %+v", c2.Ports)
 	}
 }
