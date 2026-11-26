@@ -37,7 +37,7 @@ type Container struct {
 	// State: running | exited | restarting | paused | created | dead
 	State      string `json:"state"`
 	ExitCode   int    `json:"exit_code"`
-	Health     string `json:"health"` // healthy | unhealthy | starting | "" (no health check)
+	Health     string `json:"health"` // always "" since v0.34.1 (the file on disk holds a stale health; see below)
 	Restarts   int    `json:"restarts"`
 	StartedAt  int64  `json:"started_at"`  // unix seconds, 0 = never started
 	FinishedAt int64  `json:"finished_at"` // unix seconds, 0 = running or never finished
@@ -122,12 +122,9 @@ func parse(b []byte, dirID string) (Container, bool) {
 		StartedAt:  unixOf(c.State.StartedAt),
 		FinishedAt: unixOf(c.State.FinishedAt),
 	}
-	if c.State.Health != nil {
-		switch h := c.State.Health.Status; h {
-		case "healthy", "unhealthy", "starting":
-			out.Health = h
-		}
-	}
+	// Health is NOT read: Docker keeps the live health status in memory; config.v2.json holds the one of its last
+	// save (seen: "starting" on disk while `docker ps` said healthy for days). A stale "unhealthy" would raise a false
+	// problem, a stale "healthy" would hide a real one. Health stays "" until a live source exists.
 	// the order Docker itself uses for its status word
 	switch s := c.State; {
 	case s.Paused:
