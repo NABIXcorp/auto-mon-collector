@@ -30,6 +30,9 @@ type Bundle struct {
 		ControlPlaneKey string `json:"control_plane_key"`
 		UpdateAllow     bool   `json:"update_allow"`
 		SiteAllow       bool   `json:"site_allow"`
+		// SettingsAllow (v0.35.0): the consent list for the control plane's agent settings (answers
+		// agent.settings.allow; keys in generate.SettingKeys); empty = none. `install --settings-allow` replaces it.
+		SettingsAllow []string `json:"settings_allow,omitempty"`
 	} `json:"agent"`
 	Allow string `json:"allow"` // the project's agent allowlist template (YAML), "" = none
 	OTLP  struct {
@@ -102,6 +105,9 @@ func (b *Bundle) Answers() generate.Answers {
 		Agent: &generate.Agent{URL: b.Agent.URL, ControlPlaneKey: b.Agent.ControlPlaneKey}}
 	a.Agent.Update.Allow = b.Agent.UpdateAllow
 	a.Agent.Site.Allow = b.Agent.SiteAllow
+	if len(b.Agent.SettingsAllow) > 0 {
+		a.Agent.Settings.Allow = append([]string{}, b.Agent.SettingsAllow...)
+	}
 	return a
 }
 

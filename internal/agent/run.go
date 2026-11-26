@@ -52,6 +52,9 @@ type Local struct {
 	Allow    generate.Allow              // effective: template + answers extras + the control plane's overlay (v0.26.0)
 	Base     generate.Allow              // template + answers extras (what the overlay is checked against)
 	Services map[string]generate.Service // v0.33.0: the answers' services (a locked kind refuses a switch)
+	// v0.35.0: Agent above is EFFECTIVE (the answers + the control plane's installed settings, answers win; it still
+	// knows the keys the answers pin); SettingsCP is that installed set (revision 0 = none)
+	SettingsCP generate.SettingsOverlay
 }
 
 // LoadLocal reads <prefix>/answers.yaml, the project template <prefix>/config/agent-allow.yaml (if any) and the
@@ -65,6 +68,11 @@ func LoadLocal(prefix string) (Local, error) {
 	if a.Agent == nil {
 		return l, errors.New("answers.yaml has no agent section: the agent is not configured on this host")
 	}
+	// v0.35.0: the control plane's settings switch agent.* (the one rule: generate.EffectiveAgent)
+	a, sov, err := generate.EffectiveAnswers(a, prefix)
+	if err != nil {
+		return l, err
+	}
 	var tmpl generate.Allow
 	p := filepath.Join(prefix, filepath.FromSlash(generate.AllowFile))
 	if _, err := os.Stat(p); err == nil {
@@ -76,7 +84,7 @@ func LoadLocal(prefix string) (Local, error) {
 	if err != nil {
 		return l, err
 	}
-	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base, Services: a.Services}, nil
+	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base, Services: a.Services, SettingsCP: sov}, nil
 }
 
 func (c *Config) defaults() {
@@ -172,7 +180,7 @@ func Run(ctx context.Context, cfg Config) error {
 		host := hostOf(cfg.Host, local)
 		cl := &Client{Base: local.Agent.URL, Host: host, Key: key, HTTP: cfg.HTTP, Now: cfg.Now}
 		if !reportUpdateResult(ctx, cfg, cl, &st) || !reportSiteResult(ctx, cfg, cl, &st) || !reportAllowResult(ctx, cfg, cl, &st) ||
-			!reportServicesResult(ctx, cfg, cl, &st) {
+			!reportServicesResult(ctx, cfg, cl, &st) || !reportSettingsResult(ctx, cfg, cl, &st) {
 			return nil
 		}
 		if !diskScanTick(ctx, cfg, cl, local.Agent.DiskScan.Allow, &st) {
@@ -180,7 +188,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		rescanTick(cfg, local.Agent.Rescan.Allow, boot, &st)
 		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit, local.Agent.DiskScan.Allow, local.Agent.Rescan.Allow,
-			local.Agent.ServicesEdit.Allow, invServices(cfg.Prefix, local.Agent), local.Agent.Docker.Allow); sum != sentInv {
+			local.Agent.ServicesEdit.Allow, invServices(cfg.Prefix, local.Agent), local.Agent.Docker.Allow, localSettings(local)); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -246,6 +254,7 @@ func Run(ctx context.Context, cfg Config) error {
 				var site *SiteStatus
 				var alw *AllowStatus
 				var svc *ServicesStatus
+				var stg *SettingsStatus
 				start := false
 				if u := doc.Update; u != nil && u.ID != st.UpdateID {
 					us, ok := prepareUpdate(cfg.Prefix, local.Agent.Update, cfg.Versions[VersionKey], u, raw)
@@ -263,6 +272,11 @@ func Run(ctx context.Context, cfg Config) error {
 					// set or an allowlist overlay)
 					ss, ok := prepareServices(cfg.Prefix, local, sv, raw)
 					svc, start, next.ServicesRevision = &ss, ok, sv.Revision
+				} else if sg := doc.Settings; sg != nil && sg.Revision != st.SettingsRevision {
+					// v0.35.0: the agent settings, also one root job per document (after an update, an overlay set,
+					// an allowlist overlay or service switches)
+					gs, ok := prepareSettings(cfg.Prefix, local, sg, raw)
+					stg, start, next.SettingsRevision = &gs, ok, sg.Revision
 				}
 				// v0.29.0: a disk scan request is not a root job: handled with anything else, once per id
 				var dsc *DiskScanStatus
@@ -307,6 +321,10 @@ func Run(ctx context.Context, cfg Config) error {
 					ss := startServices(cfg.Run, *svc)
 					svc = &ss
 				}
+				if start && stg != nil {
+					gs := startSettings(cfg.Run, *stg)
+					stg = &gs
+				}
 				if dsc != nil {
 					status.DiskScan = dsc
 					lg.Printf("agent: disk scan request %s: %s: %s", dsc.ID, dsc.Result, dsc.Detail)
@@ -314,6 +332,10 @@ func Run(ctx context.Context, cfg Config) error {
 				if rsc != nil {
 					status.Rescan = rsc
 					lg.Printf("agent: service scan request %s: %s: %s", rsc.ID, rsc.Result, rsc.Detail)
+				}
+				if stg != nil {
+					status.Settings = stg
+					lg.Printf("agent: settings revision %d: %s: %s", stg.Revision, stg.Result, stg.Detail)
 				}
 				if svc != nil {
 					status.Services = svc
@@ -405,10 +427,14 @@ const maxInventory = 256 << 10
 // inventoryBody builds the inventory request and its hash. v0.32.0: services_at (the file's mtime) is part of the
 // body, so a scan that rewrote inventory.json is sent once even when only the time changed.
 func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit, diskScan, rescan bool,
-	servicesEdit bool, servicesCP *generate.ServicesOverlay, dockerAllowed bool) ([]byte, string) {
+	servicesEdit bool, servicesCP *generate.ServicesOverlay, dockerAllowed bool, settings invSettings) ([]byte, string) {
 	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
 		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}, Addresses: hostAddrs(),
-		DiskScan: diskScan, RescanAllowed: rescan, ServicesEdit: servicesEdit, ServicesCP: servicesCP, DockerAllowed: dockerAllowed}
+		DiskScan: diskScan, RescanAllowed: rescan, ServicesEdit: servicesEdit, ServicesCP: servicesCP, DockerAllowed: dockerAllowed,
+		SettingsEdit: settings.Edit, SettingsPinned: settings.Pinned, SettingsCP: settings.CP}
+	if inv.SettingsPinned == nil {
+		inv.SettingsPinned = []string{}
+	}
 	p := filepath.Join(prefix, generate.InventoryFile)
 	if fi, err := os.Stat(p); err == nil {
 		inv.ServicesAt = fi.ModTime().Unix() // v0.32.0

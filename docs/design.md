@@ -949,3 +949,47 @@ root on the host: the collector user never gets the socket or the `docker` group
   active only with `DOCKER_MON=on`; it scrapes `127.0.0.1:9479` every 60 s into the normal metrics pipeline.
 - **Inventory report**: top level `docker_allowed` (the switch); the file's `docker` section arrives inside
   `inventory` like the services. Send nothing to hosts that do not report `docker_allowed: true`.
+
+### Agent settings from the console (v0.35.0, OFF by default)
+
+Why: every `agent.<key>.allow` switch above is root's (answers.yaml) and off by default, so after an install somebody
+had to log in and edit the answers for each one. The host owner now writes ONCE which of them the console may switch;
+the console then turns them on and off through the same signed, root-checked path as the service switches.
+
+- **Consent** (answers.yaml, root only; missing or empty = the console sets nothing):
+
+  ```yaml
+  agent:
+    settings:
+      allow: [disk_scan, rescan, docker, services_edit, allow_edit]
+  ```
+
+  Keys: a FIXED list in the code (`generate.SettingKeys`): `allow_edit`, `disk_scan`, `docker`, `rescan`,
+  `services_edit`; each is the switch `agent.<key>.allow`. An unknown key in the list is an answers error. `install
+  --console` writes the list from `--settings-allow disk_scan,rescan,...` (`none` = empty) or, without the flag, from
+  the bootstrap bundle's `agent.settings_allow`.
+- **Pinned**: a key whose `agent.<key>.allow` answers.yaml writes itself (any value, also `false`) is the host
+  owner's: the console can never set it. A pin to `false` survives the rewrite of answers.yaml by apply (written back
+  as `allow: false`).
+- **Effective value** (one place, `generate.EffectiveAgent`, used by plan / apply / update, `scan`, `disk-scan`, the
+  agent and root's jobs): pinned = the answers' value; else the key in the consent list AND in the installed set = the
+  set's value; else off. answers.yaml is never edited, apply saves it as the owner wrote it.
+- **Flow:** the signed document carries `settings {revision, set {<key>: bool}}` = the console's COMPLETE set (a key
+  missing = not managed by the console; empty = remove the file), never together with a new update, overlay set,
+  allowlist overlay or service switches (one root job per document; those go first). The agent checks the consent,
+  the keys and the pins and hands a new revision to root (same request file and unit). Root re-verifies the request
+  (`self-update.json` keeps `settings_revision`), re-reads the answers and refuses the WHOLE set (result `refused`,
+  the detail names the key and why) when a key is unknown, not in the consent list or pinned. Otherwise it writes
+  `config/settings.cp.yaml` (root 644) and runs `monitoring-agent update --no-fetch` (smoke run, automatic rollback;
+  on failure the previous file is put back). Result in `agent/settings-result.json` (applied | failed | rolled_back |
+  refused), reported once as status `settings`.
+- **What a switch does** = what the same answers change does, through that `update`: `disk_scan` / `rescan` link or
+  unlink the units `monitoring-diskscan` / `monitoring-scan` and their polkit entries; `docker` sets `DOCKER_MON` and
+  the inventory's `docker` section (no group, no socket), the agent starts / stops its cgroup reader on its next poll;
+  `services_edit` / `allow_edit` only open the matching console jobs (their files are read only while the switch is
+  on). The agent re-reads the answers and the set every poll.
+- **Inventory**: `settings_edit` (the consent list, sorted; absent = no consent), `settings_pinned` (always; `[]` =
+  none), `settings_cp {revision, set}` (the installed set; revision 0 and `{}` = none; only with `settings_edit`). The
+  switches it already reports (`disk_scan`, `rescan_allowed`, `services_edit`, `docker_allowed`, `allow_edit.allow`)
+  are the effective values. Send a `settings` field only to agents that report `settings_edit` (v0.35.0+: an older
+  agent rejects the unknown field).

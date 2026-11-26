@@ -125,6 +125,7 @@ type Status struct {
 	DiskScan *DiskScanStatus   `json:"disk_scan,omitempty"` // v0.29.0: about a disk scan request
 	Rescan   *RescanStatus     `json:"rescan,omitempty"`    // v0.32.0: about a service re-scan request
 	Services *ServicesStatus   `json:"services,omitempty"`  // v0.33.0: about the service switches
+	Settings *SettingsStatus   `json:"settings,omitempty"`  // v0.35.0: about the agent settings
 	// v0.27.0: probes left out because the allowlist does not cover them (the others run)
 	Refused []generate.Refused `json:"refused,omitempty"`
 }
@@ -140,6 +141,14 @@ type AllowStatus struct {
 // ServicesStatus (v0.33.0) reports the service switches like AllowStatus: "started" / "refused" / "failed" from the
 // agent, then root's result once (applied | rolled_back | refused | failed).
 type ServicesStatus struct {
+	Revision int64  `json:"revision"`
+	Result   string `json:"result"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+// SettingsStatus (v0.35.0) reports the agent settings like ServicesStatus: "started" / "refused" / "failed" from
+// the agent, then root's result once (applied | rolled_back | refused | failed).
+type SettingsStatus struct {
 	Revision int64  `json:"revision"`
 	Result   string `json:"result"`
 	Detail   string `json:"detail,omitempty"`
@@ -204,6 +213,14 @@ type Inventory struct {
 	// DockerAllowed (v0.34.0): answers.yaml agent.docker.allow (the inventory carries the `docker` section, the
 	// reader serves container metrics on 127.0.0.1:9479)
 	DockerAllowed bool `json:"docker_allowed"`
+	// v0.35.0: the agent settings. SettingsEdit = answers.yaml agent.settings.allow (the keys the control plane may
+	// set; absent = no consent: send no settings). SettingsPinned = the keys answers.yaml sets itself (the control
+	// plane shows them locked; a set naming one is refused). SettingsCP = the installed set (config/settings.cp.yaml)
+	// with its revision; revision 0 and an empty set = none. The switches above (disk_scan, rescan_allowed,
+	// services_edit, docker_allowed, allow_edit.allow) are the EFFECTIVE values (answers + the installed set).
+	SettingsEdit   []string                  `json:"settings_edit,omitempty"`
+	SettingsPinned []string                  `json:"settings_pinned"`
+	SettingsCP     *generate.SettingsOverlay `json:"settings_cp,omitempty"`
 }
 
 // InvAddress: one IP of the host. Kind: private (RFC 1918, 100.64/10, fc00::/7) | public (any other global unicast).
@@ -269,6 +286,11 @@ func (c *Client) Report(ctx context.Context, s Status) error {
 		v := *s.Services
 		v.Detail = v.Detail[:500]
 		s.Services = &v
+	}
+	if s.Settings != nil && len(s.Settings.Detail) > 500 {
+		v := *s.Settings
+		v.Detail = v.Detail[:500]
+		s.Settings = &v
 	}
 	if s.Update != nil && len(s.Update.Detail) > 500 {
 		u := *s.Update

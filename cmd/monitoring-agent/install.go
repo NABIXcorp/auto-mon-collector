@@ -26,6 +26,7 @@ import (
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/agent"
 	"github.com/NABIXcorp/auto-mon-collector/internal/engine"
+	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
 	"github.com/NABIXcorp/auto-mon-collector/internal/sysexec"
 )
 
@@ -46,6 +47,9 @@ func installCmd(args []string, stdout, stderr io.Writer) int {
 	detectFile := fs.String("detect-json", "", "")
 	collectorFile := fs.String("collector-file", "", "")
 	noSmoke := fs.Bool("no-smoke", false, "")
+	// v0.35.0: the host owner's consent for the control plane's agent settings (answers agent.settings.allow), e.g.
+	// "disk_scan,rescan"; "none" = no consent; not given = the console's bundle decides
+	settingsAllow := fs.String("settings-allow", "", "")
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		return exitUsage
@@ -53,6 +57,10 @@ func installCmd(args []string, stdout, stderr io.Writer) int {
 	fail := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "monitoring-agent install: "+format+"\n", a...)
 		return exitUsage
+	}
+	consentKeys, err := generate.ParseSettingsAllow(*settingsAllow)
+	if err != nil {
+		return fail("--settings-allow: %v", err)
 	}
 	if !*tokenStdin {
 		return fail("give the one-time token on stdin with --token-stdin (never as an argument)")
@@ -89,12 +97,20 @@ func installCmd(args []string, stdout, stderr io.Writer) int {
 		return fail("%v", err)
 	}
 	a := b.Answers()
+	if *settingsAllow != "" {
+		a.Agent.Settings.Allow = consentKeys
+	}
 	if err := a.Validate(); err != nil {
 		return fail("the console's answers: %v", err)
 	}
 	fmt.Fprintf(stdout, "console: project %s, host %s; data -> %s (gateway token, not shown)\n", b.Project, b.HostName, b.OTLP.Endpoint)
 	fmt.Fprintf(stdout, "console: remote updates %s, collector overlays %s, release mirror %s\n",
 		onOff(b.Agent.UpdateAllow), onOff(b.Agent.SiteAllow), orGitHub(b.ReleaseMirror))
+	consent := "none"
+	if len(a.Agent.Settings.Allow) > 0 {
+		consent = strings.Join(a.Agent.Settings.Allow, ", ")
+	}
+	fmt.Fprintf(stdout, "console: agent settings it may switch: %s\n", consent)
 
 	tmp, err := os.MkdirTemp("", "monitoring-install-")
 	if err != nil {

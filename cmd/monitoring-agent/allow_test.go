@@ -131,3 +131,43 @@ func TestAgentInputsWithTheServiceSwitches(t *testing.T) {
 		}
 	}
 }
+
+// v0.35.0: plan / apply / update read the control plane's settings (within agent.settings.allow, answers win): the
+// engine gets the effective switches (units), the answers saved by apply stay the host owner's
+func TestBuildWithTheControlPlaneSettings(t *testing.T) {
+	prefix := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(prefix, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ov, _ := generate.MarshalSettingsOverlay(generate.SettingsOverlay{Revision: 2, Set: generate.SettingsSet{"rescan": true, "disk_scan": true}})
+	if err := os.WriteFile(filepath.Join(prefix, filepath.FromSlash(generate.SettingsFile)), ov, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ans := filepath.Join(t.TempDir(), "answers.yaml")
+	body := "agent:\n  url: https://agent.example.com/agent/\n  control_plane_key: \"ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"\n" +
+		"  disk_scan:\n    allow: false\n  settings:\n    allow: [rescan, disk_scan]\n"
+	if err := os.WriteFile(ans, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := generate.LoadAnswers(ans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	d, err := build(&out, generate.Host{}, a, "", inputs{prefix: prefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Agent == nil || !d.Agent.Rescan || d.Agent.DiskScan {
+		t.Errorf("engine switches: %+v (rescan from the set, disk_scan pinned off)", d.Agent)
+	}
+	if !strings.Contains(out.String(), "the control plane's settings (config/settings.cp.yaml, revision 2): disk_scan on, rescan on") {
+		t.Errorf("plan output: %s", out.String())
+	}
+	if strings.Contains(string(d.Answers), "rescan:") || !strings.Contains(string(d.Answers), "disk_scan:\n    allow: false") {
+		t.Errorf("saved answers are not the owner's:\n%s", d.Answers)
+	}
+	if a.Agent.Rescan.Allow {
+		t.Error("the caller's answers were changed")
+	}
+}

@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
 	"time"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/diskscan"
@@ -25,7 +24,7 @@ func diskScanCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
 	}
-	a, err := generate.LoadAnswers(filepath.Join(*prefix, "answers.yaml"))
+	a, err := generate.LoadEffectiveAnswers(*prefix) // v0.35.0: + the control plane's settings
 	if err != nil {
 		fmt.Fprintf(stderr, "disk-scan: %v\n", err)
 		return exitPlan

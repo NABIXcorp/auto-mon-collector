@@ -112,6 +112,19 @@ func (s *Server) PublishServices(host string, p generate.Probes, rev int64, set 
 	return s.publish(host, 0, p, 0, false, false, x)
 }
 
+// PublishSettings (v0.35.0) signs a newer document for host that also carries the agent settings (set: key -> bool;
+// nil = empty) and the extra fields given (e.g. "update" or "services").
+func (s *Server) PublishSettings(host string, p generate.Probes, rev int64, set map[string]bool, extra map[string]any) int64 {
+	if set == nil {
+		set = map[string]bool{}
+	}
+	x := map[string]any{"settings": map[string]any{"revision": rev, "set": set}}
+	for k, v := range extra {
+		x[k] = v
+	}
+	return s.publish(host, 0, p, 0, false, false, x)
+}
+
 func (s *Server) publish(host string, rev int64, p generate.Probes, expires int64, tamper, otherKey bool, extra map[string]any) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()

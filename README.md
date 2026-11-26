@@ -86,6 +86,15 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > 60 s and serves CPU and memory on `127.0.0.1:9479/metrics` (`docker_container_cpu_seconds_total`,
 > `docker_container_memory_bytes`, `docker_container_memory_limit_bytes`), which the collector scrapes when host.env has
 > `DOCKER_MON=on`. The inventory reports `docker_allowed`. See [docs/design.md](docs/design.md#docker-containers-v0340-off-by-default).
+> v0.35.0: agent settings from the console, OFF by default. The host owner writes once which `agent.<key>.allow`
+> switches the console may set (`answers.yaml agent.settings: {allow: [disk_scan, rescan, docker, services_edit,
+> allow_edit]}`; new hosts: `monitoring-agent install --console URL --token-stdin --settings-allow disk_scan,rescan`).
+> The signed `settings {revision, set {key: bool}}` becomes `config/settings.cp.yaml` through `monitoring-agent update`
+> (units, polkit rule, generator gates; smoke run, automatic rollback). Answers win: a switch written in answers.yaml
+> (pinned, also `allow: false`) is never set by the console, and a set naming it, an unknown key or a key outside the
+> list is refused whole. The inventory reports `settings_edit`, `settings_pinned`, `settings_cp`, and the switches it
+> already reports are now the effective values. Needs the control plane to send `settings` only to v0.35.0+ agents. See
+> [docs/design.md](docs/design.md#agent-settings-from-the-console-v0350-off-by-default).
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and

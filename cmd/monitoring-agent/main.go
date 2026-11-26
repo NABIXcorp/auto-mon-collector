@@ -34,9 +34,11 @@ import (
 const usage = `monitoring-agent: host discovery installer and agent for monitoring-collector (OpenTelemetry)
 
 Usage:
-  monitoring-agent install --console URL --token-stdin [--yes] [--host NAME]
+  monitoring-agent install --console URL --token-stdin [--yes] [--host NAME] [--settings-allow KEYS]
         a new host in one step: the console's settings for it (one-time token from the console), plan,
-        apply + start after "yes", then enrol the agent
+        apply + start after "yes", then enrol the agent. --settings-allow disk_scan,rescan,... = which agent
+        switches the console may turn on / off (answers agent.settings.allow; "none" = none; not given = the
+        console's bundle decides). Keys: allow_edit, disk_scan, docker, rescan, services_edit
   monitoring-agent plan  --answers FILE [flags]
         detect + generate + diff + validate + smoke run; changes nothing
   monitoring-agent apply --answers FILE [--start] [flags]
@@ -556,11 +558,21 @@ func agentInputs(w io.Writer, h *generate.Host, a generate.Answers, in inputs) (
 }
 
 func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string, in inputs) (engine.Desired, error) {
-	ag, err := agentInputs(w, &h, a, in)
+	// v0.35.0: the control plane's agent settings (config/settings.cp.yaml, written by root's settings job) switch
+	// agent.* on / off within answers.yaml agent.settings.allow (answers win). Everything below uses the effective
+	// copy (units, ACLs, the generator's gates); answers.yaml is saved as the host owner wrote it.
+	eff, sov, err := generate.EffectiveAnswers(a, in.prefix)
 	if err != nil {
 		return engine.Desired{}, err
 	}
-	g, err := generate.Generate(h, a)
+	if len(sov.Set) > 0 {
+		fmt.Fprintf(w, "  ok    agent: the control plane's settings (%s, revision %d): %s\n", generate.SettingsFile, sov.Revision, sov.Set)
+	}
+	ag, err := agentInputs(w, &h, eff, in)
+	if err != nil {
+		return engine.Desired{}, err
+	}
+	g, err := generate.Generate(h, eff)
 	if err != nil {
 		return engine.Desired{}, err
 	}

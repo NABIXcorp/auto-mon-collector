@@ -45,6 +45,13 @@ type Agent struct {
 	// command, no mounts) and the agent export their CPU / memory from the cgroups? No Docker socket, no docker
 	// group. Read ONLY from answers.yaml (root), like Update.
 	Docker AgentDocker `yaml:"docker,omitempty"`
+	// Settings (v0.35.0): which of the switches above (SettingKeys) the control plane may set
+	// (config/settings.cp.yaml). Read ONLY from answers.yaml (root), like Update. A switch written here stays the
+	// answers' (pinned). See settings.go.
+	Settings AgentSettings `yaml:"settings,omitempty"`
+
+	// pinned (v0.35.0): the setting keys answers.yaml writes itself (LoadAnswers; nil = answers built in code)
+	pinned map[string]bool
 }
 
 // AgentDocker is the host owner's switch for Docker container monitoring (internal/dockerinv). Default: off.
@@ -290,6 +297,9 @@ func (a *Agent) validate() error {
 		return err
 	}
 	if err := a.DiskScan.validate(); err != nil {
+		return err
+	}
+	if err := a.Settings.validate(); err != nil {
 		return err
 	}
 	return a.Allow.validate()

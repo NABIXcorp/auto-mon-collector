@@ -50,6 +50,19 @@
 //     finished_at}]} (at most 300; read by root's scan from the engine's state files, no socket). The agent serves
 //     container CPU / memory from the cgroups on 127.0.0.1:9479/metrics for the collector (DOCKER_MON=on). The inventory
 //     may be up to 256 KB. Nothing else changes in the protocol.
+//   - v0.35.0: the document may carry "settings":{"revision":N,"set":{"disk_scan":true,"rescan":false,...}} (the
+//     control plane's COMPLETE agent settings: keys in generate.SettingKeys only = allow_edit, disk_scan, docker,
+//     rescan, services_edit, each the switch agent.<key>.allow; a key missing from the set = not managed by the
+//     control plane; an empty set removes them). Root refuses the WHOLE set when a key is unknown, not in answers
+//     agent.settings.allow, or pinned (answers.yaml writes agent.<key>.allow itself). The status may carry
+//     "settings":{"revision","result","detail"} (started | refused | failed from the agent, then root's applied |
+//     rolled_back | refused | failed once); the inventory "settings_edit" (answers agent.settings.allow, sorted;
+//     absent = no consent), "settings_pinned" (always, [] = none) and "settings_cp" ({"revision","set"}: the installed
+//     set, revision 0 = none; only with settings_edit). The switches the inventory already reports (disk_scan,
+//     rescan_allowed, services_edit, docker_allowed, allow_edit.allow) are the EFFECTIVE values. An agent before
+//     v0.35.0 rejects a document with "settings" (unknown field): send it only to agents that report settings_edit,
+//     never together with a new update, overlay set, allowlist overlay or service switches (one root job per
+//     document: those go first).
 package agent
 
 import (
@@ -164,6 +177,7 @@ type Doc struct {
 	DiskScan *DiskScanRequest          `json:"disk_scan,omitempty"` // v0.29.0: "scan the disks now" (an id only)
 	Rescan   *RescanRequest            `json:"rescan,omitempty"`    // v0.32.0: "scan the services now" (an id only)
 	Services *generate.ServicesOverlay `json:"services,omitempty"`  // v0.33.0: the control plane's service switches (nil = none)
+	Settings *generate.SettingsOverlay `json:"settings,omitempty"`  // v0.35.0: the control plane's agent settings (nil = none)
 	Sig      string                    `json:"sig"`
 }
 
