@@ -41,6 +41,15 @@ type Agent struct {
 	// ServicesEdit (v0.33.0): may the control plane switch a found service on (config/services.cp.yaml: a FIXED list
 	// of kinds that need no login)? Read ONLY from answers.yaml (root), like Update. See servicesedit.go.
 	ServicesEdit AgentServicesEdit `yaml:"services_edit,omitempty"`
+	// Docker (v0.34.0): may the scan list this host's containers (names, states, compose project: no environment, no
+	// command, no mounts) and the agent export their CPU / memory from the cgroups? No Docker socket, no docker
+	// group. Read ONLY from answers.yaml (root), like Update.
+	Docker AgentDocker `yaml:"docker,omitempty"`
+}
+
+// AgentDocker is the host owner's switch for Docker container monitoring (internal/dockerinv). Default: off.
+type AgentDocker struct {
+	Allow bool `yaml:"allow,omitempty"` // false (default) = no docker section in inventory.json, no metrics, DOCKER_MON unset
 }
 
 // AgentRescan is the host owner's switch for the periodic service re-scan (`monitoring-agent scan`). Default: off.

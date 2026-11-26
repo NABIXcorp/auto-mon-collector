@@ -10,7 +10,7 @@ import (
 // v0.25.0: the inventory carries the effective allowlist; empty lists are [] (not null) so "none" differs from
 // "an older agent that does not send it"
 func TestInventoryAllow(t *testing.T) {
-	body, _ := inventoryBody(t.TempDir(), nil, 3, false, false, generate.Allow{Domains: []string{"*.example.com"}, Ports: []int{443}, MaxProbes: 30, MinIntervalS: 15}, generate.AgentAllowEdit{}, false, false, false, nil)
+	body, _ := inventoryBody(t.TempDir(), nil, 3, false, false, generate.Allow{Domains: []string{"*.example.com"}, Ports: []int{443}, MaxProbes: 30, MinIntervalS: 15}, generate.AgentAllowEdit{}, false, false, false, nil, false)
 	var inv struct {
 		Allow *struct {
 			Domains  []string `json:"domains"`

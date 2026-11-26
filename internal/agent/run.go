@@ -38,6 +38,10 @@ type Config struct {
 	NotEnrolledWait time.Duration // 15 s
 	MaxBackoff      time.Duration // 5 min
 	UnauthRetry     time.Duration // 12 s: one quick retry after the FIRST 401 (v0.14.0)
+	// v0.34.0 (docker metrics): the cgroup root, the listen address and the refresh time
+	DockerCgroup string        // /sys/fs/cgroup
+	DockerAddr   string        // 127.0.0.1:9479
+	DockerEvery  time.Duration // 60 s
 }
 
 // Local is the host owner's side: answers (own probes + agent section) and the effective allowlist.
@@ -139,6 +143,8 @@ func Run(ctx context.Context, cfg Config) error {
 	unauth := 0       // 401s in a row
 	sentInv := ""     // hash of the last inventory the control plane took (or refused): sent again only when it changes
 	boot := cfg.Now() // v0.32.0: the first poll of this process starts a service scan
+	var dk dockerExporter
+	defer dk.stop()
 	for ctx.Err() == nil {
 		local, err := LoadLocal(cfg.Prefix)
 		if err != nil {
@@ -156,6 +162,7 @@ func Run(ctx context.Context, cfg Config) error {
 			}
 			continue
 		}
+		dk.set(ctx, cfg, local.Agent.Docker.Allow)                 // v0.34.0: cgroup numbers for the collector
 		cpKey, _ := generate.ParseKey(local.Agent.ControlPlaneKey) // validated with the answers
 		st, err := LoadState(cfg.Prefix)
 		if err != nil {
@@ -173,7 +180,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		rescanTick(cfg, local.Agent.Rescan.Allow, boot, &st)
 		if body, sum := inventoryBody(cfg.Prefix, cfg.Versions, st.Revision, local.Agent.Update.Allow, local.Agent.Site.Allow, local.Allow, local.Agent.AllowEdit, local.Agent.DiskScan.Allow, local.Agent.Rescan.Allow,
-			local.Agent.ServicesEdit.Allow, invServices(cfg.Prefix, local.Agent)); sum != sentInv {
+			local.Agent.ServicesEdit.Allow, invServices(cfg.Prefix, local.Agent), local.Agent.Docker.Allow); sum != sentInv {
 			var refused *RefusedError
 			switch err := cl.SendInventory(ctx, body); {
 			case err == nil:
@@ -392,15 +399,16 @@ func invAllow(a generate.Allow) *InvAllow {
 }
 
 // maxInventory: a larger inventory.json is not sent (the control plane caps request bodies).
-const maxInventory = 48 << 10
+// v0.34.0: 256 KB (up to 300 containers in the docker section).
+const maxInventory = 256 << 10
 
 // inventoryBody builds the inventory request and its hash. v0.32.0: services_at (the file's mtime) is part of the
 // body, so a scan that rewrote inventory.json is sent once even when only the time changed.
 func inventoryBody(prefix string, versions map[string]string, revision int64, updateAllowed, siteAllowed bool, allow generate.Allow, edit generate.AgentAllowEdit, diskScan, rescan bool,
-	servicesEdit bool, servicesCP *generate.ServicesOverlay) ([]byte, string) {
+	servicesEdit bool, servicesCP *generate.ServicesOverlay, dockerAllowed bool) ([]byte, string) {
 	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
 		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}, Addresses: hostAddrs(),
-		DiskScan: diskScan, RescanAllowed: rescan, ServicesEdit: servicesEdit, ServicesCP: servicesCP}
+		DiskScan: diskScan, RescanAllowed: rescan, ServicesEdit: servicesEdit, ServicesCP: servicesCP, DockerAllowed: dockerAllowed}
 	p := filepath.Join(prefix, generate.InventoryFile)
 	if fi, err := os.Stat(p); err == nil {
 		inv.ServicesAt = fi.ModTime().Unix() // v0.32.0

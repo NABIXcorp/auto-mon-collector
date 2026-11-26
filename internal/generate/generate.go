@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/detect"
+	"github.com/NABIXcorp/auto-mon-collector/internal/dockerinv"
 )
 
 // Host is the detection input: findings + facts the templates need.
@@ -23,6 +24,9 @@ type Host struct {
 	// ServicesCP (v0.33.0, only with answers agent.services_edit.allow): the control plane's service switches
 	// (<prefix>/config/services.cp.yaml), merged over the answers by EffectiveServices (answers win)
 	ServicesCP ServicesSet
+	// Docker (v0.34.0, only with answers agent.docker.allow): the containers read by root's scan (nil = no Docker
+	// state folder found)
+	Docker *dockerinv.Inventory
 }
 
 // Output is the generated host part plus what the operator should confirm.
@@ -233,6 +237,12 @@ func Generate(h Host, a Answers) (Output, error) {
 		netconn = append(netconn, port)
 	}
 
+	// ---- Docker containers (v0.34.0): the agent serves cgroup numbers on 127.0.0.1:9479, the collector scrapes them
+	// only with this switch (receiver_creator rule prometheus/docker in config.yaml)
+	if a.Agent != nil && a.Agent.Docker.Allow {
+		env = append(env, "DOCKER_MON=on")
+	}
+
 	// ---- seen services without a profile still count for connection statistics (e.g. nginx 443)
 	for _, fd := range h.Findings {
 		if fd.ID == "nginx" {
@@ -343,6 +353,9 @@ func Generate(h Host, a Answers) (Output, error) {
 		e.WriteString(kv + "\n")
 	}
 	out.HostEnv = []byte(e.String())
+	if !(a.Agent != nil && a.Agent.Docker.Allow) {
+		h.Docker = nil // the switch is root's: no section without it
+	}
 	out.Inventory = Inventory(h, out.Enabled)
 	return out, nil
 }
