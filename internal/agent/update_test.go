@@ -22,6 +22,7 @@ type lockedRun struct {
 	mu    sync.Mutex
 	calls []string
 	fail  string // a command with this prefix fails (recorded all the same)
+	busy  bool   // `systemctl is-active` says the root unit runs
 }
 
 func (f *lockedRun) run(name string, args ...string) ([]byte, error) {
@@ -32,7 +33,19 @@ func (f *lockedRun) run(name string, args ...string) ([]byte, error) {
 	if f.fail != "" && strings.HasPrefix(c, f.fail) {
 		return []byte("Unit not found."), errors.New("exit status 5")
 	}
+	if strings.HasPrefix(c, "systemctl is-active") {
+		if f.busy {
+			return []byte("active"), nil
+		}
+		return []byte("inactive"), errors.New("exit status 3")
+	}
 	return nil, nil
+}
+
+func (f *lockedRun) setBusy(b bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.busy = b
 }
 
 func (f *lockedRun) setFail(prefix string) {
