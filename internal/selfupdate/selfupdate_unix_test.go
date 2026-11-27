@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/agent"
 	"github.com/NABIXcorp/auto-mon-collector/internal/lockfile"
@@ -54,7 +55,10 @@ func TestSelfUpdateAnswersMustBeRootOnly(t *testing.T) {
 func TestSelfUpdateWaitsForNoOtherRun(t *testing.T) {
 	e := newEnv(t, "  update:\n    allow: true\n")
 	e.request(nil, nil)
-	l, err := lockfile.Acquire(e.prefix) // a `monitoring-agent apply` is running
+	old := rootJobLockWait
+	defer func() { rootJobLockWait = old }()
+	rootJobLockWait = 1500 * time.Millisecond
+	l, err := lockfile.Acquire(e.prefix) // a `monitoring-agent apply` is running (longer than the wait)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,5 +78,19 @@ func TestSelfUpdateWaitsForNoOtherRun(t *testing.T) {
 	}
 	if res := e.run(); res.Result != "ok" {
 		t.Errorf("after the other run finished: %+v", res)
+	}
+}
+
+// v0.37.1: a short run (the periodic re-scan) holding the lock makes the root job wait, not refuse.
+func TestSelfUpdateWaitsForShortRun(t *testing.T) {
+	e := newEnv(t, "  update:\n    allow: true\n")
+	e.request(nil, nil)
+	l, err := lockfile.Acquire(e.prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { time.Sleep(1500 * time.Millisecond); l.Release() }()
+	if res := e.run(); res.Result != "ok" {
+		t.Fatalf("waited for the short run: %+v", res)
 	}
 }

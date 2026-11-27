@@ -77,6 +77,10 @@ type Options struct {
 }
 
 // Run does one self-update and returns the result it also wrote to <prefix>/agent/update-result.json.
+// rootJobLockWait (v0.37.1): how long a root job waits for the installation lock when a short periodic job (re-scan,
+// disk scan) or a hand-run apply holds it, before it reports "refused". A var for tests.
+var rootJobLockWait = 5 * time.Minute
+
 func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 	o.defaults()
 	res.From = o.Running
@@ -148,7 +152,7 @@ func Run(ctx context.Context, o Options) (res agent.UpdateResult) {
 		return set("refused", "%v", err)
 	}
 	// no `monitoring-agent apply` / `update` at the same time (the unit itself never runs twice at once: oneshot)
-	lk, err := lockfile.Acquire(o.Prefix)
+	lk, err := lockfile.AcquireWait(o.Prefix, rootJobLockWait)
 	if err != nil {
 		return set("refused", "%v", err)
 	}

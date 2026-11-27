@@ -79,7 +79,7 @@ func (o *Options) runServices(ctx context.Context, r request) (res agent.Service
 			return set("refused", "%v", err)
 		}
 	}
-	lk, err := lockfile.Acquire(o.Prefix)
+	lk, err := lockfile.AcquireWait(o.Prefix, rootJobLockWait)
 	if err != nil {
 		return set("refused", "%v", err)
 	}

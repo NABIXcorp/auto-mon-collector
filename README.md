@@ -102,6 +102,8 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > write themselves is pinned. The inventory reports `settings_cp.values` and `settings_values` (the effective values);
 > the bootstrap request carries the installer `version`. See
 > [docs/design.md](docs/design.md#agent-settings-with-values-v0360).
+> v0.37.1: a root job from the console (update, overlays, allowlist, services, settings) waits up to 5 minutes for the
+> installation lock instead of refusing at once when a short run (the periodic re-scan, the disk scan, an `apply`) holds it.
 > v0.37.0: sealed passwords from the console. Consent keys `oracle_password` and `redis_password`. Root makes an X25519
 > key pair at install / update (`secrets/settings.key` root 600, `config/settings.pub`); the inventory reports
 > `settings_seal_key`, `settings_passwords` (`set` / `not set`) and `settings_cp.passwords` (`{key: id}`). The console
