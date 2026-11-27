@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 )
 
 func TestBusyAndRelease(t *testing.T) {
@@ -67,4 +68,22 @@ func TestInheritedLock(t *testing.T) {
 	if cmd.Run() == nil {
 		t.Error("a foreign fd 3 was accepted as the lock")
 	}
+}
+
+// AcquireWait gets the lock once the holder releases it, and gives up with ErrBusy after max.
+func TestAcquireWait(t *testing.T) {
+	dir := t.TempDir()
+	a, err := Acquire(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireWait(dir, 1500*time.Millisecond); !errors.Is(err, ErrBusy) {
+		t.Fatalf("held: %v", err)
+	}
+	go func() { time.Sleep(1500 * time.Millisecond); a.Release() }()
+	b, err := AcquireWait(dir, 10*time.Second)
+	if err != nil {
+		t.Fatalf("after release: %v", err)
+	}
+	b.Release()
 }

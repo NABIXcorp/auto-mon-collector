@@ -53,7 +53,7 @@ func (o *Options) runSite(ctx context.Context, r request) (res agent.SiteResult)
 	if err := generate.CheckSite(s.Files); err != nil {
 		return set("refused", "%v", err)
 	}
-	lk, err := lockfile.Acquire(o.Prefix)
+	lk, err := lockfile.AcquireWait(o.Prefix, rootJobLockWait)
 	if err != nil {
 		return set("refused", "%v", err)
 	}

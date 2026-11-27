@@ -87,7 +87,7 @@ func (o *Options) runSettings(r request) (res agent.SettingsResult) {
 			return set("refused", "%v", err)
 		}
 	}
-	lk, err := lockfile.Acquire(o.Prefix)
+	lk, err := lockfile.AcquireWait(o.Prefix, rootJobLockWait)
 	if err != nil {
 		return set("refused", "%v", err)
 	}
