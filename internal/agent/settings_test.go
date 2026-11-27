@@ -182,3 +182,58 @@ func TestSettingsRequestRefusedByTheAgent(t *testing.T) {
 		})
 	}
 }
+
+// v0.36.0: values travel in the signed document; an unknown group does not reject the document (the probes go on),
+// the agent refuses the set; the inventory reports the effective values and the installed values
+func TestSettingsValuesFromTheConsole(t *testing.T) {
+	cp, pre, f := startAgent(t, "  settings:\n    allow: [checks, tomcat]\nservices:\n  tomcat:\n    time_zone: UTC\n", "v0.36.0")
+	set := func(rev int, v map[string]any) map[string]any {
+		return map[string]any{"settings": map[string]any{"revision": rev, "set": map[string]bool{}, "values": v}}
+	}
+	checks := map[string]any{"http": []any{map[string]any{"url": "https://app.example.com/", "comment": "app"}}, "tcp": []any{}}
+	rev := cp.PublishSettings("app-1", dbProbe, 0, nil, set(1, map[string]any{"checks": checks}))
+	s := waitStatuses(t, cp, 1)[0]
+	if s.Result != "applied" || s.Revision != rev || s.Settings == nil || s.Settings.Result != "started" || f.count(startCmd) != 1 {
+		t.Fatalf("values: %+v %+v %q", s, s.Settings, f.calls)
+	}
+	for _, c := range []struct {
+		v      map[string]any
+		detail string
+	}{
+		{map[string]any{"checks": checks, "redis": map[string]any{}}, "redis: unknown group"},
+		{map[string]any{"tomcat": map[string]any{"logs": []any{}, "time_zone": "", "login_path": ""}}, "tomcat is pinned"},
+		{map[string]any{"checks": map[string]any{"http": []any{map[string]any{"url": "https://u:p@app.example.com/"}}, "tcp": []any{}}}, "contains credentials"},
+	} {
+		n := len(cp.Statuses())
+		cp.PublishSettings("app-1", dbProbe, 0, nil, set(2+n, c.v))
+		s := waitStatuses(t, cp, n+1)[n]
+		if s.Result != "applied" || s.Settings == nil || s.Settings.Result != "refused" || !strings.Contains(s.Settings.Detail, c.detail) {
+			t.Errorf("%s: %+v %+v", c.detail, s, s.Settings)
+		}
+	}
+	if f.count(startCmd) != 1 {
+		t.Errorf("a refused set started root: %q", f.calls)
+	}
+	// root installed checks: the inventory shows the installed values and the effective ones
+	ov := generate.SettingsOverlay{Revision: 1, Set: generate.SettingsSet{}, Values: &generate.SettingsValues{Checks: &generate.ChecksValue{
+		HTTP: []generate.HTTPCheck{{URL: "https://app.example.com/", Comment: "app"}}, TCP: []generate.TCPCheck{}}}}
+	b, _ := generate.MarshalSettingsOverlay(ov)
+	if err := os.WriteFile(filepath.Join(pre, filepath.FromSlash(generate.SettingsFile)), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seen, last := false, ""
+	for i := 0; i < 100 && !seen; i++ {
+		invs, _ := cp.Inventories()
+		for _, inv := range invs {
+			b, _ := json.Marshal(map[string]any{"cp": inv.SettingsCP, "values": inv.SettingsValues, "pinned": inv.SettingsPinned})
+			last = string(b)
+			seen = seen || last == `{"cp":{"revision":1,"set":{},"values":{"checks":{"http":[{"url":"https://app.example.com/","comment":"app"}],"tcp":[]}}},`+
+				`"pinned":["tomcat"],"values":{"checks":{"http":[{"url":"https://app.example.com/","comment":"app"}],"tcp":[]},`+
+				`"oracle":{"service":"","user":"","capacity":false,"capacity_pdbs":[]},"tomcat":{"logs":[],"time_zone":"UTC","login_path":""}}}`
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !seen {
+		t.Errorf("inventory never carried the values: %s", last)
+	}
+}

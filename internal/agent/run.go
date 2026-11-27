@@ -55,6 +55,10 @@ type Local struct {
 	// v0.35.0: Agent above is EFFECTIVE (the answers + the control plane's installed settings, answers win; it still
 	// knows the keys the answers pin); SettingsCP is that installed set (revision 0 = none)
 	SettingsCP generate.SettingsOverlay
+	// v0.36.0: Answers = answers.yaml as written (the settings checks need the owner's values and pins, not the
+	// effective copy); Values = the effective values of the settings groups (inventory settings_values)
+	Answers generate.Answers
+	Values  generate.SettingsValues
 }
 
 // LoadLocal reads <prefix>/answers.yaml, the project template <prefix>/config/agent-allow.yaml (if any) and the
@@ -69,6 +73,7 @@ func LoadLocal(prefix string) (Local, error) {
 		return l, errors.New("answers.yaml has no agent section: the agent is not configured on this host")
 	}
 	// v0.35.0: the control plane's settings switch agent.* (the one rule: generate.EffectiveAgent)
+	raw := a
 	a, sov, err := generate.EffectiveAnswers(a, prefix)
 	if err != nil {
 		return l, err
@@ -84,7 +89,8 @@ func LoadLocal(prefix string) (Local, error) {
 	if err != nil {
 		return l, err
 	}
-	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base, Services: a.Services, SettingsCP: sov}, nil
+	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base, Services: a.Services, SettingsCP: sov,
+		Answers: raw, Values: generate.SettingsValuesOf(a)}, nil
 }
 
 func (c *Config) defaults() {
@@ -443,7 +449,7 @@ func inventoryBody(prefix string, versions map[string]string, revision int64, up
 	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
 		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}, Addresses: hostAddrs(),
 		DiskScan: diskScan, RescanAllowed: rescan, ServicesEdit: servicesEdit, ServicesCP: servicesCP, DockerAllowed: dockerAllowed,
-		SettingsEdit: settings.Edit, SettingsPinned: settings.Pinned, SettingsCP: settings.CP}
+		SettingsEdit: settings.Edit, SettingsPinned: settings.Pinned, SettingsCP: settings.CP, SettingsValues: settings.Values}
 	if inv.SettingsPinned == nil {
 		inv.SettingsPinned = []string{}
 	}

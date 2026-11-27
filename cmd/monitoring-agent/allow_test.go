@@ -171,3 +171,45 @@ func TestBuildWithTheControlPlaneSettings(t *testing.T) {
 		t.Error("the caller's answers were changed")
 	}
 }
+
+// v0.36.0: the groups' values reach the generated configuration; an installed set the answers make invalid stops
+// the plan with a clear reason (the console sends a new set, or the owner removes the file)
+func TestBuildWithTheControlPlaneValues(t *testing.T) {
+	prefix := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(prefix, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(o *generate.OracleValue) {
+		ov, _ := generate.MarshalSettingsOverlay(generate.SettingsOverlay{Revision: 3, Set: generate.SettingsSet{},
+			Values: &generate.SettingsValues{Checks: &generate.ChecksValue{HTTP: []generate.HTTPCheck{{URL: "https://app.example.com/health"}}}, Oracle: o}})
+		if err := os.WriteFile(filepath.Join(prefix, filepath.FromSlash(generate.SettingsFile)), ov, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(nil)
+	ans := filepath.Join(t.TempDir(), "answers.yaml")
+	body := "agent:\n  url: https://agent.example.com/agent/\n  control_plane_key: \"ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"\n" +
+		"  settings:\n    allow: [checks, oracle]\nservices:\n  oracle:\n    non_cdb: true\n"
+	if err := os.WriteFile(ans, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := generate.LoadAnswers(ans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	d, err := build(&out, generate.Host{}, a, "", inputs{prefix: prefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(d.HostYAML)+string(d.HostEnv), "https://app.example.com/health") {
+		t.Errorf("the check is not in the generated configuration:\n%s\n%s", d.HostYAML, d.HostEnv)
+	}
+	if !strings.Contains(out.String(), "revision 3): values of checks") || strings.Contains(string(d.Answers), "app.example.com") {
+		t.Errorf("plan output / saved answers:\n%s\n%s", out.String(), d.Answers)
+	}
+	write(&generate.OracleValue{Service: "ORCL", User: "C##MON"})
+	if _, err := build(&out, generate.Host{}, a, "", inputs{prefix: prefix}); err == nil || !strings.Contains(err.Error(), "non_cdb with a common user") {
+		t.Errorf("invalid effective answers: %v", err)
+	}
+}

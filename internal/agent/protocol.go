@@ -63,6 +63,16 @@
 //     v0.35.0 rejects a document with "settings" (unknown field): send it only to agents that report settings_edit,
 //     never together with a new update, overlay set, allowlist overlay or service switches (one root job per
 //     document: those go first).
+//   - v0.36.0: settings WITH VALUES. New consent keys (groups) checks, oracle, tomcat; "settings" may carry
+//     "values":{"checks":{"http":[{"url","comment"}],"tcp":[{"endpoint","comment"}]},"oracle":{"service","user",
+//     "capacity","capacity_pdbs"},"tomcat":{"logs","time_zone","login_path"}}: a group present = the console's COMPLETE
+//     value of that group (replaces the answers' fields of the group; empty lists / "" = none), missing / null = not
+//     managed. The WHOLE set is refused when a group is unknown or malformed (the rest of the document goes on), not
+//     in agent.settings.allow, pinned (answers.yaml writes a field of the group with a value), or when the effective
+//     answers fail the answers validation. The inventory: "settings_cp" carries "values" ({} = none),
+//     "settings_pinned" may list groups, and "settings_values" (only with settings_edit) = the EFFECTIVE values of
+//     the three groups (every group and list present). The bootstrap request carries "version" (this binary's).
+//     An agent before v0.36.0 rejects a document whose settings carry "values": send values only to v0.36.0+.
 package agent
 
 import (

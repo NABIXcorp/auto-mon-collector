@@ -109,14 +109,14 @@ var logPathRE = regexp.MustCompile(`^(-|/[A-Za-z0-9_./*?\[\]{},+@%=:-]{1,255})$`
 
 // HTTPCheck is one up check. URLs are labels used by alerts and dashboards: keep them stable.
 type HTTPCheck struct {
-	URL     string `yaml:"url"`
-	Comment string `yaml:"comment,omitempty"`
+	URL     string `yaml:"url" json:"url"`
+	Comment string `yaml:"comment,omitempty" json:"comment"` // json (v0.36.0): the settings group "checks"
 }
 
 // TCPCheck is one connect check to another host. The endpoint is a label used by dashboards: keep it stable.
 type TCPCheck struct {
-	Endpoint string `yaml:"endpoint"`
-	Comment  string `yaml:"comment,omitempty"`
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
+	Comment  string `yaml:"comment,omitempty" json:"comment"`
 }
 
 // tcpEndpointRE: host:port with a DNS name or an IPv4 address, or [IPv6]:port. No scheme, no path.
@@ -142,6 +142,9 @@ func LoadAnswers(path string) (Answers, error) {
 	}
 	if a.Agent != nil {
 		a.Agent.pinned = pinnedIn(b) // v0.35.0: a switch written here is the answers' (settings.go)
+		for _, g := range SettingGroups {
+			a.Agent.pinned[g] = groupWritten(a, g) // v0.36.0: a group written here too (settingsvalues.go)
+		}
 	}
 	return a, a.Validate()
 }

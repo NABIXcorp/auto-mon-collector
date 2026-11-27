@@ -993,3 +993,35 @@ the console then turns them on and off through the same signed, root-checked pat
   switches it already reports (`disk_scan`, `rescan_allowed`, `services_edit`, `docker_allowed`, `allow_edit.allow`)
   are the effective values. Send a `settings` field only to agents that report `settings_edit` (v0.35.0+: an older
   agent rejects the unknown field).
+
+### Agent settings with values (v0.36.0)
+
+Why: the switches were not enough to leave a host alone after the install: the HTTP / TCP checks, the Oracle service,
+user and capacity, and the Tomcat log files were still answers.yaml edits by hand. They are now three more consent
+keys, each a GROUP the console sets as a whole.
+
+- **Consent keys** (`generate.SettingGroups`, in the same `agent.settings.allow` list as the switches):
+  `checks` = `checks.http[]` + `checks.tcp[]`; `oracle` = `services.oracle.{service, user, capacity, capacity_pdbs}`;
+  `tomcat` = `services.tomcat.{logs, time_zone, login_path}`.
+- **Pinned** (answers win): `checks` when answers.yaml has any http or tcp check; `oracle` / `tomcat` when answers.yaml
+  sets any field of the group to a value (not empty / not false). Reported in `settings_pinned` like a switch. Fields
+  outside a group (Oracle `non_cdb`, `cdb_service`, `enabled`, ...) always come from the answers / the scan.
+- **Wire / file format**: `settings {revision, set {...}, values {checks {http [{url, comment}], tcp [{endpoint,
+  comment}]}, oracle {service, user, capacity, capacity_pdbs}, tomcat {logs, time_zone, login_path}}}`. A group
+  present = the console's COMPLETE value (empty lists / `""` = none); missing or `null` = not managed. The same
+  `values` is written to `config/settings.cp.yaml`.
+- **Effective answers** (`generate.ApplySettings`, through `EffectiveAnswers`: plan / apply / update / scan / the
+  agent / root see the same) = the answers with the values of the consented, unpinned groups. answers.yaml is never
+  edited. `plan` / `update` stop with a clear reason when the effective answers are not valid (e.g. the owner later
+  wrote `non_cdb: true` while the console's Oracle user is a common `C##` user).
+- **Check** (`generate.CheckSettings`, the agent and root): the WHOLE set is refused when a group is unknown or does
+  not decode (unknown field), is not in the consent list, is pinned, or when the effective answers fail the normal
+  answers validation (same messages as a hand-written answers.yaml). An unknown group does not reject the signed
+  document: the probes and the other parts go on.
+- **Inventory**: `settings_cp.values` (the installed values; `{}` = none), `settings_values` (only with
+  `settings_edit`) = the EFFECTIVE values of the three groups, every group and list present (no secret in them: a
+  check URL with user info is refused).
+- **Bootstrap**: the request body carries `"version"` (this binary's version), so the console sends only consent
+  keys this installer knows (an older one refuses an unknown key in the answers).
+- Old agents: a document whose `settings` carries `values` is rejected by an agent before v0.36.0 (unknown field):
+  the console sends values only to v0.36.0+. A switches-only set is accepted as before.

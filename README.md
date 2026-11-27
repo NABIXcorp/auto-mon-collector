@@ -95,6 +95,13 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > list is refused whole. The inventory reports `settings_edit`, `settings_pinned`, `settings_cp`, and the switches it
 > already reports are now the effective values. Needs the control plane to send `settings` only to v0.35.0+ agents. See
 > [docs/design.md](docs/design.md#agent-settings-from-the-console-v0350-off-by-default).
+> v0.36.0: agent settings WITH VALUES. Three more consent keys, each a group the console sets as a whole: `checks`
+> (`checks.http[]` + `checks.tcp[]`), `oracle` (`services.oracle.{service, user, capacity, capacity_pdbs}`), `tomcat`
+> (`services.tomcat.{logs, time_zone, login_path}`). The signed `settings` gains `values`; the effective answers
+> (answers + values) must pass the normal answers validation, else the whole set is refused. A group the answers
+> write themselves is pinned. The inventory reports `settings_cp.values` and `settings_values` (the effective values);
+> the bootstrap request carries the installer `version`. See
+> [docs/design.md](docs/design.md#agent-settings-with-values-v0360).
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and

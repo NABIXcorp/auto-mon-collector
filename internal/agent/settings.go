@@ -54,7 +54,7 @@ func prepareSettings(prefix string, local Local, sv *generate.SettingsOverlay, r
 		st.Result, st.Detail = "refused", "settings revision must be above 0"
 		return st, false
 	}
-	if err := generate.CheckSettingsSet(sv.Set, &local.Agent); err != nil {
+	if err := generate.CheckSettings(*sv, local.Answers); err != nil {
 		st.Result, st.Detail = "refused", err.Error()
 		return st, false
 	}
@@ -114,6 +114,7 @@ type invSettings struct {
 	Edit   []string                  // answers agent.settings.allow (nil = no consent)
 	Pinned []string                  // never nil
 	CP     *generate.SettingsOverlay // nil = no consent
+	Values *generate.SettingsValues  // v0.36.0: the effective values (nil = no consent)
 }
 
 // localSettings: the inventory's settings part from the host owner's side (Local.Agent keeps the pinned keys).
@@ -128,6 +129,11 @@ func localSettings(l Local) invSettings {
 	if cp.Set == nil {
 		cp.Set = generate.SettingsSet{}
 	}
+	if cp.Values == nil {
+		cp.Values = &generate.SettingsValues{}
+	}
 	s.CP = &cp
+	v := l.Values
+	s.Values = &v
 	return s
 }
