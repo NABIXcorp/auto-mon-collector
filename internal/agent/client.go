@@ -218,12 +218,26 @@ type Inventory struct {
 	// plane shows them locked; a set naming one is refused). SettingsCP = the installed set (config/settings.cp.yaml)
 	// with its revision; revision 0 and an empty set = none. The switches above (disk_scan, rescan_allowed,
 	// services_edit, docker_allowed, allow_edit.allow) are the EFFECTIVE values (answers + the installed set).
-	SettingsEdit   []string                  `json:"settings_edit,omitempty"`
-	SettingsPinned []string                  `json:"settings_pinned"`
-	SettingsCP     *generate.SettingsOverlay `json:"settings_cp,omitempty"`
+	SettingsEdit   []string       `json:"settings_edit,omitempty"`
+	SettingsPinned []string       `json:"settings_pinned"`
+	SettingsCP     *InvSettingsCP `json:"settings_cp,omitempty"`
 	// v0.36.0: SettingsValues = the EFFECTIVE values of the groups checks / oracle / tomcat (answers + the installed
 	// set; every group and list present), only with settings_edit; settings_cp carries "values" ({} = none)
 	SettingsValues *generate.SettingsValues `json:"settings_values,omitempty"`
+	// v0.37.0 (only with settings_edit): SettingsSealKey = the host's public key for sealed passwords (standard
+	// base64 of 32 bytes; absent = no key yet); SettingsPasswords = {"<key>": "set" | "not set"} for every password
+	// key (whether secrets/collector.env has a non-empty line; root writes it, never the value)
+	SettingsSealKey   string            `json:"settings_seal_key,omitempty"`
+	SettingsPasswords map[string]string `json:"settings_passwords,omitempty"`
+}
+
+// InvSettingsCP: the installed settings set as the inventory sends it (settings_cp). Passwords (v0.37.0) = {key: id}
+// of the passwords root wrote ({} = none): never the blob, never the value.
+type InvSettingsCP struct {
+	Revision  int64                    `json:"revision"`
+	Set       generate.SettingsSet     `json:"set"`
+	Values    *generate.SettingsValues `json:"values,omitempty"`
+	Passwords map[string]string        `json:"passwords"`
 }
 
 // InvAddress: one IP of the host. Kind: private (RFC 1918, 100.64/10, fc00::/7) | public (any other global unicast).

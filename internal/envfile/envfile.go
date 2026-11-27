@@ -68,3 +68,41 @@ func Format(keys []string, env map[string]string) ([]byte, error) {
 	}
 	return b.Bytes(), nil
 }
+
+// Set (v0.37.0) returns b with KEY='value': the first assignment of key is replaced in place, later ones are
+// dropped, other lines (comments, other keys) stay as they are; no assignment = a new last line. The value is
+// checked like Format; errors never hold it.
+func Set(b []byte, key, value string) ([]byte, error) {
+	if bytes.Contains(b, []byte("\r")) {
+		return nil, fmt.Errorf("Windows line endings (CR) are not allowed")
+	}
+	line, err := Format([]string{key}, map[string]string{key: value})
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	done := false
+	lines := strings.SplitAfter(string(b), "\n")
+	for _, l := range lines {
+		if l == "" {
+			continue
+		}
+		t := strings.TrimSpace(l)
+		k, _, ok := strings.Cut(t, "=")
+		if ok && t[0] != '#' && t[0] != ';' && strings.TrimSpace(strings.TrimPrefix(k, "export ")) == key {
+			if !done {
+				out.Write(line)
+				done = true
+			}
+			continue
+		}
+		out.WriteString(l)
+		if !strings.HasSuffix(l, "\n") {
+			out.WriteByte('\n')
+		}
+	}
+	if !done {
+		out.Write(line)
+	}
+	return out.Bytes(), nil
+}

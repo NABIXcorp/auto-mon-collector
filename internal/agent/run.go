@@ -59,6 +59,10 @@ type Local struct {
 	// effective copy); Values = the effective values of the settings groups (inventory settings_values)
 	Answers generate.Answers
 	Values  generate.SettingsValues
+	// v0.37.0: SealKey = config/settings.pub ("" = no key yet); Passwords = config/settings-passwords.json (root's
+	// "set" / "not set" per password key; nil = no file)
+	SealKey   string
+	Passwords map[string]string
 }
 
 // LoadLocal reads <prefix>/answers.yaml, the project template <prefix>/config/agent-allow.yaml (if any) and the
@@ -89,8 +93,12 @@ func LoadLocal(prefix string) (Local, error) {
 	if err != nil {
 		return l, err
 	}
-	return Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base, Services: a.Services, SettingsCP: sov,
-		Answers: raw, Values: generate.SettingsValuesOf(a)}, nil
+	l = Local{HostName: a.HostName, Probes: a.Probes, Agent: *a.Agent, Allow: eff, Base: base, Services: a.Services, SettingsCP: sov,
+		Answers: raw, Values: generate.SettingsValuesOf(a)}
+	// v0.37.0: what root wrote for sealed passwords (an unreadable file = not reported)
+	l.SealKey, _ = generate.LoadSealPub(prefix)
+	l.Passwords, _ = generate.LoadPasswordState(prefix)
+	return l, nil
 }
 
 func (c *Config) defaults() {
@@ -449,7 +457,8 @@ func inventoryBody(prefix string, versions map[string]string, revision int64, up
 	inv := Inventory{Versions: versions, Revision: revision, Services: json.RawMessage("null"), UpdateAllowed: updateAllowed, SiteAllowed: siteAllowed,
 		Allow: invAllow(allow), AllowEdit: &InvAllowEdit{Allow: edit.Allow, Ping: edit.Ping, MaxProbes: edit.MaxProbes}, Addresses: hostAddrs(),
 		DiskScan: diskScan, RescanAllowed: rescan, ServicesEdit: servicesEdit, ServicesCP: servicesCP, DockerAllowed: dockerAllowed,
-		SettingsEdit: settings.Edit, SettingsPinned: settings.Pinned, SettingsCP: settings.CP, SettingsValues: settings.Values}
+		SettingsEdit: settings.Edit, SettingsPinned: settings.Pinned, SettingsCP: settings.CP, SettingsValues: settings.Values,
+		SettingsSealKey: settings.SealKey, SettingsPasswords: settings.Passwords}
 	if inv.SettingsPinned == nil {
 		inv.SettingsPinned = []string{}
 	}

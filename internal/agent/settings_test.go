@@ -227,7 +227,7 @@ func TestSettingsValuesFromTheConsole(t *testing.T) {
 		for _, inv := range invs {
 			b, _ := json.Marshal(map[string]any{"cp": inv.SettingsCP, "values": inv.SettingsValues, "pinned": inv.SettingsPinned})
 			last = string(b)
-			seen = seen || last == `{"cp":{"revision":1,"set":{},"values":{"checks":{"http":[{"url":"https://app.example.com/","comment":"app"}],"tcp":[]}}},`+
+			seen = seen || last == `{"cp":{"revision":1,"set":{},"values":{"checks":{"http":[{"url":"https://app.example.com/","comment":"app"}],"tcp":[]}},"passwords":{}},`+
 				`"pinned":["tomcat"],"values":{"checks":{"http":[{"url":"https://app.example.com/","comment":"app"}],"tcp":[]},`+
 				`"oracle":{"service":"","user":"","capacity":false,"capacity_pdbs":[]},"tomcat":{"logs":[],"time_zone":"UTC","login_path":""}}}`
 		}
@@ -235,5 +235,54 @@ func TestSettingsValuesFromTheConsole(t *testing.T) {
 	}
 	if !seen {
 		t.Errorf("inventory never carried the values: %s", last)
+	}
+}
+
+// v0.37.0: sealed passwords travel in the signed document (the agent checks the shape, root opens them); the
+// inventory reports the host's public key, "set / not set" and the installed ids
+func TestSettingsPasswordsInventory(t *testing.T) {
+	cp, pre, f := startAgent(t, "  settings:\n    allow: [oracle_password]\n", "v0.37.0")
+	blob := base64.StdEncoding.EncodeToString(make([]byte, 61))
+	pw := func(rev int, id, sealed string) map[string]any {
+		return map[string]any{"settings": map[string]any{"revision": rev, "set": map[string]bool{},
+			"passwords": map[string]any{"oracle_password": map[string]any{"id": id, "sealed": sealed}}}}
+	}
+	cp.PublishSettings("app-1", dbProbe, 0, nil, pw(1, "pw-1", blob))
+	if s := waitStatuses(t, cp, 1)[0]; s.Settings == nil || s.Settings.Result != "started" || f.count(startCmd) != 1 {
+		t.Fatalf("password set: %+v %+v", s, s.Settings)
+	}
+	cp.PublishSettings("app-1", dbProbe, 0, nil, pw(2, "pw-1", "not base64"))
+	if s := waitStatuses(t, cp, 2)[1]; s.Settings == nil || s.Settings.Result != "refused" || !strings.Contains(s.Settings.Detail, "malformed") {
+		t.Fatalf("bad blob: %+v %+v", s, s.Settings)
+	}
+	// what root wrote
+	if _, err := os.Stat(filepath.Join(pre, "secrets")); os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Join(pre, "secrets"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(pre, "secrets", "collector.env"), []byte("ORACLE_MON_PASSWORD='x'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := generate.SealHousekeeping(pre); err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := generate.LoadSealPub(pre)
+	ov, _ := generate.MarshalSettingsOverlay(generate.SettingsOverlay{Revision: 1, Set: generate.SettingsSet{}, PasswordIDs: map[string]string{"oracle_password": "pw-1"}})
+	if err := os.WriteFile(filepath.Join(pre, filepath.FromSlash(generate.SettingsFile)), ov, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seen, last := false, ""
+	for i := 0; i < 100 && !seen; i++ {
+		invs, _ := cp.Inventories()
+		for _, inv := range invs {
+			b, _ := json.Marshal(map[string]any{"cp": inv.SettingsCP.Passwords, "key": inv.SettingsSealKey, "state": inv.SettingsPasswords})
+			last = string(b)
+			seen = seen || last == `{"cp":{"oracle_password":"pw-1"},"key":"`+pub+`","state":{"oracle_password":"set","redis_password":"not set"}}`
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !seen || pub == "" {
+		t.Errorf("inventory: %s (key %q)", last, pub)
 	}
 }

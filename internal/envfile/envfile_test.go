@@ -60,3 +60,22 @@ func TestFormatRoundTrip(t *testing.T) {
 		t.Error("quote in value must be rejected")
 	}
 }
+
+func TestSet(t *testing.T) {
+	in := "# secrets\nOO_AUTH='Basic x'\nREDIS_PASSWORD=old\nexport REDIS_PASSWORD='older'\nOO_ENDPOINT=https://x"
+	got, err := Set([]byte(in), "REDIS_PASSWORD", "n3w pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# secrets\nOO_AUTH='Basic x'\nREDIS_PASSWORD='n3w pass'\nOO_ENDPOINT=https://x\n"
+	if string(got) != want {
+		t.Errorf("replace:\n%q\nwant\n%q", got, want)
+	}
+	got, _ = Set(got, "ORACLE_MON_PASSWORD", "p")
+	if env, err := Parse(got); err != nil || env["ORACLE_MON_PASSWORD"] != "p" || env["REDIS_PASSWORD"] != "n3w pass" || env["OO_AUTH"] != "Basic x" {
+		t.Errorf("append: %v %q", err, got)
+	}
+	if _, err := Set(nil, "REDIS_PASSWORD", "it's"); err == nil || strings.Contains(err.Error(), "it's") {
+		t.Errorf("quote: %v", err)
+	}
+}
