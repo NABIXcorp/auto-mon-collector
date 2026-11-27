@@ -221,6 +221,9 @@ type Inventory struct {
 	SettingsEdit   []string                  `json:"settings_edit,omitempty"`
 	SettingsPinned []string                  `json:"settings_pinned"`
 	SettingsCP     *generate.SettingsOverlay `json:"settings_cp,omitempty"`
+	// v0.36.0: SettingsValues = the EFFECTIVE values of the groups checks / oracle / tomcat (answers + the installed
+	// set; every group and list present), only with settings_edit; settings_cp carries "values" ({} = none)
+	SettingsValues *generate.SettingsValues `json:"settings_values,omitempty"`
 }
 
 // InvAddress: one IP of the host. Kind: private (RFC 1918, 100.64/10, fc00::/7) | public (any other global unicast).

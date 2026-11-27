@@ -565,8 +565,14 @@ func build(w io.Writer, h generate.Host, a generate.Answers, siteDir string, in 
 	if err != nil {
 		return engine.Desired{}, err
 	}
-	if len(sov.Set) > 0 {
-		fmt.Fprintf(w, "  ok    agent: the control plane's settings (%s, revision %d): %s\n", generate.SettingsFile, sov.Revision, sov.Set)
+	if !sov.Empty() {
+		fmt.Fprintf(w, "  ok    agent: the control plane's settings (%s, revision %d): %s\n", generate.SettingsFile, sov.Revision, sov)
+		// v0.36.0: the groups' values replace answers fields: the result must be valid answers (root checked it
+		// before writing the file; an answers change since then may conflict)
+		if err := eff.Validate(); err != nil {
+			return engine.Desired{}, fmt.Errorf("the answers with the control plane's settings (%s) are not valid: %w "+
+				"(send new settings from the console, or remove the file)", generate.SettingsFile, err)
+		}
 	}
 	ag, err := agentInputs(w, &h, eff, in)
 	if err != nil {

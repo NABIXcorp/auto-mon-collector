@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/generate"
+	"github.com/NABIXcorp/auto-mon-collector/internal/version"
 )
 
 // Bundle is the control plane's answer to a bootstrap request.
@@ -125,7 +126,8 @@ func Bootstrap(ctx context.Context, base, host, token string, httpc *http.Client
 	if httpc == nil {
 		httpc = &http.Client{Timeout: 30 * time.Second}
 	}
-	body, _ := json.Marshal(map[string]string{"host": host, "token": strings.TrimSpace(token)})
+	// v0.36.0: + this installer's version, so the console sends only consent keys this version knows
+	body, _ := json.Marshal(map[string]string{"host": host, "token": strings.TrimSpace(token), "version": version.Version})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"v1/bootstrap", bytes.NewReader(body))
 	if err != nil {
 		return b, err

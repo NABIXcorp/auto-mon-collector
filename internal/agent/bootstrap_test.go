@@ -8,6 +8,7 @@ import (
 
 	"github.com/NABIXcorp/auto-mon-collector/internal/agent"
 	"github.com/NABIXcorp/auto-mon-collector/internal/agent/agenttest"
+	"github.com/NABIXcorp/auto-mon-collector/internal/version"
 )
 
 func TestBootstrap(t *testing.T) {
@@ -31,6 +32,9 @@ func TestBootstrap(t *testing.T) {
 	}
 	if s := b.Secrets(); s["OO_AUTH"] != "Bearer smo_test" || s["OO_ENDPOINT"] == "" {
 		t.Fatalf("secrets keys: %d", len(s))
+	}
+	if v := cp.BootstrapVersion(); v != version.Version || v == "" {
+		t.Errorf("bootstrap request version: %q", v)
 	}
 	if cp.Enrolled("vm-web-01") {
 		t.Fatal("bootstrap used the token up")

@@ -186,3 +186,62 @@ func TestServicesEditSwitchedOnBySettings(t *testing.T) {
 		t.Fatalf("with the setting: %+v\n%s", res, e.out.String())
 	}
 }
+
+// v0.36.0: settings with values: written to the file, the effective answers checked; a bad group refuses the set
+func TestSettingsValues(t *testing.T) {
+	const groups = "  settings:\n    allow: [checks, oracle, rescan]\n"
+	values := func(rev, doc int, v map[string]any) func(map[string]any) {
+		return func(d map[string]any) {
+			settingsDoc(rev, map[string]bool{"rescan": true})(d)
+			d["settings"].(map[string]any)["values"] = v
+			d["revision"] = doc
+		}
+	}
+	checks := map[string]any{"http": []any{map[string]any{"url": "https://app.example.com/health", "comment": "app"}}, "tcp": []any{}}
+	e := newEnv(t, groups+"services:\n  oracle:\n    non_cdb: true\n")
+	if err := os.MkdirAll(filepath.Join(e.prefix, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.request(values(5, 7, map[string]any{"checks": checks, "oracle": map[string]any{"service": "ORCL", "user": "otel_mon", "capacity": true, "capacity_pdbs": []any{}}}), nil)
+	if res, seen := e.settingsRun("update: done\n", nil); res.Result != "applied" || !strings.Contains(seen, "https://app.example.com/health") || !strings.Contains(seen, "otel_mon") {
+		t.Fatalf("applied: %+v %q\n%s", res, seen, e.out.String())
+	}
+	eff, err := generate.LoadEffectiveAnswers(e.prefix)
+	if err != nil || len(eff.Checks.HTTP) != 1 || eff.Services["oracle"].User != "otel_mon" || !eff.Services["oracle"].NonCDB {
+		t.Errorf("effective: %v %+v %+v", err, eff.Checks, eff.Services)
+	}
+	if strings.Contains(e.read("answers.yaml"), "otel_mon") {
+		t.Error("answers.yaml was edited")
+	}
+	before := e.read(generate.SettingsFile)
+	cases := []struct {
+		name   string
+		v      map[string]any
+		detail string
+	}{
+		{"unknown group", map[string]any{"checks": checks, "postgres": map[string]any{}}, "postgres: unknown group"},
+		{"not consented", map[string]any{"tomcat": map[string]any{"logs": []any{}, "time_zone": "UTC", "login_path": ""}}, "tomcat is not in answers.yaml agent.settings.allow"},
+		{"effective answers not valid", map[string]any{"oracle": map[string]any{"service": "ORCL", "user": "C##MON", "capacity": false, "capacity_pdbs": []any{}}}, "non_cdb with a common user"},
+		{"unknown field", map[string]any{"checks": map[string]any{"http": []any{}, "tcp": []any{}, "icmp": []any{}}}, `unknown field "icmp"`},
+	}
+	for i, c := range cases {
+		e.calls = nil
+		e.request(values(6+i, 8+i, c.v), nil)
+		res, _ := e.settingsRun("update: done\n", nil)
+		if r := e.settingsResult(); res.Result != "refused" || !strings.Contains(r.Detail, c.detail) || len(e.calls) != 0 {
+			t.Errorf("%s: %+v %+v %q", c.name, res, r, e.calls)
+		}
+		if e.read(generate.SettingsFile) != before {
+			t.Errorf("%s: the installed set changed", c.name)
+		}
+	}
+	// a pinned group: the answers write checks
+	p := newEnv(t, groups+"checks:\n  http:\n    - url: https://own.example.com/\n")
+	if err := os.MkdirAll(filepath.Join(p.prefix, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p.request(values(1, 7, map[string]any{"checks": checks}), nil)
+	if res, _ := p.settingsRun("", nil); res.Result != "refused" || !strings.Contains(p.settingsResult().Detail, "checks is pinned") {
+		t.Errorf("pinned: %+v %+v", res, p.settingsResult())
+	}
+}

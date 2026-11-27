@@ -50,13 +50,14 @@ func (o *Options) runSettings(r request) (res agent.SettingsResult) {
 		res.Result, res.Detail = result, fmt.Sprintf(format, args...)
 		return res
 	}
-	if err := generate.CheckSettingsSet(sv.Set, r.answers.Agent); err != nil {
+	// v0.36.0: the switches and the groups' values; the effective answers must pass the answers validation
+	if err := generate.CheckSettings(*sv, r.raw); err != nil {
 		return set("refused", "%v", err)
 	}
 	var data []byte // nil = remove the set
-	if len(sv.Set) > 0 {
+	if !sv.Empty() {
 		var err error
-		if data, err = generate.MarshalSettingsOverlay(generate.SettingsOverlay{Revision: sv.Revision, Set: sv.Set}); err != nil {
+		if data, err = generate.MarshalSettingsOverlay(generate.SettingsOverlay{Revision: sv.Revision, Set: sv.Set, Values: sv.Values}); err != nil {
 			return set("refused", "%v", err)
 		}
 	}
@@ -82,7 +83,7 @@ func (o *Options) runSettings(r request) (res agent.SettingsResult) {
 		}
 		return set("failed", "nothing changed: write %s: %v", generate.SettingsFile, err)
 	}
-	what := "written (" + sv.Set.String() + ")"
+	what := "written (" + sv.String() + ")"
 	if data == nil {
 		what = "removed (empty set)"
 	}

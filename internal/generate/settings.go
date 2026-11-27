@@ -33,6 +33,18 @@ import (
 // SettingKeys: the only switches the control plane may set (a FIXED list, sorted). Each is agent.<key>.allow.
 var SettingKeys = []string{"allow_edit", "disk_scan", "docker", "rescan", "services_edit"}
 
+// SettingGroups (v0.36.0): consent keys for settings WITH VALUES; a group is one key and the console sends its
+// COMPLETE value (SettingsValues): checks = checks.http[] + checks.tcp[]; oracle = services.oracle.{service, user,
+// capacity, capacity_pdbs}; tomcat = services.tomcat.{logs, time_zone, login_path}. A FIXED list, sorted.
+var SettingGroups = []string{"checks", "oracle", "tomcat"}
+
+// ConsentKeys: every key answers.yaml agent.settings.allow may list (switches + groups), sorted.
+var ConsentKeys = func() []string {
+	out := append(append([]string{}, SettingKeys...), SettingGroups...)
+	sort.Strings(out)
+	return out
+}()
+
 // SettingsFile is the installed set (root 644, written by `monitoring-agent self-update`).
 const SettingsFile = "config/settings.cp.yaml"
 
@@ -44,8 +56,8 @@ type AgentSettings struct {
 func (s AgentSettings) validate() error {
 	seen := map[string]bool{}
 	for _, k := range s.Allow {
-		if !slices.Contains(SettingKeys, k) {
-			return fmt.Errorf("agent.settings.allow: unknown key %q (known: %s)", k, strings.Join(SettingKeys, ", "))
+		if !slices.Contains(ConsentKeys, k) {
+			return fmt.Errorf("agent.settings.allow: unknown key %q (known: %s)", k, strings.Join(ConsentKeys, ", "))
 		}
 		if seen[k] {
 			return fmt.Errorf("agent.settings.allow: %q twice", k)
@@ -85,6 +97,26 @@ type SettingsSet map[string]bool
 type SettingsOverlay struct {
 	Revision int64       `yaml:"revision" json:"revision"`
 	Set      SettingsSet `yaml:"set" json:"set"`
+	// Values (v0.36.0): the console's values of the groups (nil = none)
+	Values *SettingsValues `yaml:"values,omitempty" json:"values,omitempty"`
+}
+
+// Empty: nothing to install (no switch, no group).
+func (ov SettingsOverlay) Empty() bool { return len(ov.Set) == 0 && ov.Values.Groups() == nil }
+
+// String: the switches and the groups (plan output).
+func (ov SettingsOverlay) String() string {
+	parts := []string{}
+	if len(ov.Set) > 0 {
+		parts = append(parts, ov.Set.String())
+	}
+	if g := ov.Values.Groups(); g != nil {
+		parts = append(parts, "values of "+strings.Join(g, ", "))
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, "; ")
 }
 
 // Keys: the set's keys, sorted.
@@ -146,11 +178,16 @@ func (ag *Agent) IsPinned(k string) bool {
 	return p != nil && *p
 }
 
-// Pinned: the setting keys answers.yaml sets itself (sorted; never nil).
+// Pinned: the consent keys answers.yaml sets itself (sorted; never nil). v0.36.0: groups too, when the section
+// knows them (loaded by LoadAnswers or an effective copy; answers built in code: switches only).
 func (ag *Agent) Pinned() []string {
 	out := []string{}
-	for _, k := range SettingKeys {
-		if ag.IsPinned(k) {
+	for _, k := range ConsentKeys {
+		if slices.Contains(SettingGroups, k) {
+			if ag.pinned[k] {
+				out = append(out, k)
+			}
+		} else if ag.IsPinned(k) {
 			out = append(out, k)
 		}
 	}
@@ -184,6 +221,9 @@ func EffectiveAgent(ag Agent, s SettingsSet) Agent {
 	pinned := map[string]bool{}
 	for _, k := range SettingKeys {
 		pinned[k] = ag.IsPinned(k)
+	}
+	for _, g := range SettingGroups { // v0.36.0: the group pins the section knows stay
+		pinned[g] = ag.pinned[g]
 	}
 	out := ag
 	out.pinned = pinned
@@ -238,7 +278,8 @@ func LocalSettings(ag *Agent, prefix string) (SettingsOverlay, error) {
 	return LoadSettingsOverlay(filepath.Join(prefix, filepath.FromSlash(SettingsFile)))
 }
 
-// EffectiveAnswers: a with the installed settings below prefix applied to its agent section (EffectiveAgent). The
+// EffectiveAnswers: a with the installed settings below prefix applied (ApplySettings: the switches of its agent
+// section, v0.36.0 also the groups' values). The
 // answers given are not changed (apply saves THEM as answers.yaml, never the effective copy). ov = the installed set
 // as read (revision 0 = none).
 func EffectiveAnswers(a Answers, prefix string) (Answers, SettingsOverlay, error) {
@@ -249,9 +290,7 @@ func EffectiveAnswers(a Answers, prefix string) (Answers, SettingsOverlay, error
 	if err != nil {
 		return a, ov, err
 	}
-	eff := EffectiveAgent(*a.Agent, ov.Set)
-	a.Agent = &eff
-	return a, ov, nil
+	return ApplySettings(a, ov), ov, nil
 }
 
 // LoadEffectiveAnswers: <prefix>/answers.yaml with the installed settings applied (EffectiveAnswers).

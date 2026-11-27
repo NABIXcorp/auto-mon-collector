@@ -43,6 +43,15 @@ type Server struct {
 	scans    [][]byte // v0.29.0: disk scan results received
 	wake     chan struct{}
 	refuse   int // answer the next N signed requests with 401 (a proxy re-sending an old request after a restart)
+	// v0.36.0: the version the last bootstrap request carried
+	bootVersion string
+}
+
+// BootstrapVersion: the installer version the last bootstrap request carried ("" = none).
+func (s *Server) BootstrapVersion() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bootVersion
 }
 
 // Refuse401 makes the next n signed requests fail with 401 ("nonce reused" after a control-plane restart).
@@ -200,14 +209,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/agent/v1/bootstrap": // checks the token, does not use it up (the enrolment does)
 		var in struct {
-			Host  string `json:"host"`
-			Token string `json:"token"`
+			Host    string `json:"host"`
+			Token   string `json:"token"`
+			Version string `json:"version"` // v0.36.0
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Token != Token || in.Host == "" {
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "token not valid for this host"})
 			return
 		}
+		s.mu.Lock()
+		s.bootVersion = in.Version
+		s.mu.Unlock()
 		otlp := s.OTLP
 		if otlp == "" {
 			otlp = "http://127.0.0.1:4320"

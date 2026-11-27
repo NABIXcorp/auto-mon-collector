@@ -273,6 +273,7 @@ type record struct {
 type request struct {
 	doc     agent.Doc
 	answers generate.Answers
+	raw     generate.Answers // v0.36.0: answers.yaml as written (the settings check needs the owner's values and pins)
 	last    record
 }
 
@@ -291,6 +292,7 @@ func (o *Options) loadRequest() (request, error) {
 	if a.Agent == nil {
 		return r, errors.New("answers.yaml has no agent section")
 	}
+	r.raw = a
 	// v0.35.0: the switches as the control plane's installed settings make them (answers win; the copy still knows
 	// the keys the answers pin): a services / allowlist job checks the EFFECTIVE switch, like the agent did
 	if a, _, err = generate.EffectiveAnswers(a, o.Prefix); err != nil {
