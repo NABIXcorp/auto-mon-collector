@@ -652,13 +652,14 @@ jobs:
           # on -> root writes config/settings.cp.yaml (root 644) and runs update: the scan unit is linked and in the polkit
           # rule (what an answers change does), answers.yaml untouched, the inventory reports settings_edit /
           # settings_pinned / settings_cp and rescan_allowed true; an empty set removes the file and unlinks the unit.
+          # v0.36.0: agent.yaml has http checks, so the group `checks` is pinned too (settings_pinned lists it).
           { cat agent.yaml; printf '  settings:\n    allow: [rescan, disk_scan, docker]\n'; } > agent-st.yaml
           sudo $ma apply --answers agent-st.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --start --no-smoke > st0.txt || { cat st0.txt; die "apply with agent.settings failed"; }
           stres() { curl -fsS http://127.0.0.1:18091/_test/status | python3 -c 'import json,sys; r=[s["settings"] for s in json.load(sys.stdin) if s.get("settings")]; print(*((r[-1]["revision"], r[-1]["result"], r[-1].get("detail","")) if r else ("none",)))'; }
           waitst() { for i in $(seq 1 180); do stres | grep -q "^$1 $2" && return 0; sleep 1; done; stres; sudo journalctl -u monitoring-update -n 40 --no-pager; die "settings $1: no result $2"; }
           stinv() { curl -fsS http://127.0.0.1:18091/_test/inventories | python3 -c 'import json,sys; r=json.load(sys.stdin) or [{}]; x=r[-1]; c=x.get("settings_cp") or {}; print(",".join(x.get("settings_edit") or []), ",".join(x.get("settings_pinned") or []), c.get("revision"), sorted(k for k,v in (c.get("set") or {}).items() if v), x.get("rescan_allowed"))'; }
-          for i in $(seq 1 60); do stinv | grep -q '^disk_scan,docker,rescan disk_scan 0 \[\] False$' && break; sleep 1; done
-          stinv | grep -q '^disk_scan,docker,rescan disk_scan 0 \[\] False$' || die "inventory lacks settings_edit / settings_pinned / an empty settings_cp: $(stinv)"
+          for i in $(seq 1 60); do stinv | grep -q '^disk_scan,docker,rescan checks,disk_scan 0 \[\] False$' && break; sleep 1; done
+          stinv | grep -q '^disk_scan,docker,rescan checks,disk_scan 0 \[\] False$' || die "inventory lacks settings_edit / settings_pinned / an empty settings_cp: $(stinv)"
           publish "{\"host\":\"$host\",$P,\"settings\":{\"revision\":1,\"set\":{\"rescan\":true,\"disk_scan\":false}}}"
           waitst 1 refused
           stres | grep -q 'disk_scan is pinned' || die "pinned refusal without the reason: $(stres)"
@@ -675,8 +676,8 @@ jobs:
           sudo grep -q '"monitoring-scan.service"' /etc/polkit-1/rules.d/50-monitoring-agent.rules || die "polkit rule lacks the scan unit"
           sudo grep -q 'rescan:' /opt/monitoring/answers.yaml && die "the set was merged into answers.yaml"
           sudo grep -q 'disk_scan:' /opt/monitoring/answers.yaml || die "answers.yaml lost the disk_scan pin"
-          for i in $(seq 1 90); do stinv | grep -q "^disk_scan,docker,rescan disk_scan 3 \['rescan'\] True$" && break; sleep 1; done
-          stinv | grep -q "^disk_scan,docker,rescan disk_scan 3 \['rescan'\] True$" || die "inventory lacks the installed set / the effective switch: $(stinv)"
+          for i in $(seq 1 90); do stinv | grep -q "^disk_scan,docker,rescan checks,disk_scan 3 \['rescan'\] True$" && break; sleep 1; done
+          stinv | grep -q "^disk_scan,docker,rescan checks,disk_scan 3 \['rescan'\] True$" || die "inventory lacks the installed set / the effective switch: $(stinv)"
           sudo $ma plan --answers agent-st.yaml --detect-json $td/detect.json --site-dir site-upd --agent-allow allow.yaml --no-smoke | tee st1.txt
           must "the control plane's settings (config/settings.cp.yaml, revision 3): rescan on" st1.txt
           must 'service re-scan on (unit monitoring-scan' st1.txt
