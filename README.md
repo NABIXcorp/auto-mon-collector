@@ -102,6 +102,13 @@ signed release as the agent. Before v0.19.0: the official `otelcol-contrib` plus
 > write themselves is pinned. The inventory reports `settings_cp.values` and `settings_values` (the effective values);
 > the bootstrap request carries the installer `version`. See
 > [docs/design.md](docs/design.md#agent-settings-with-values-v0360).
+> v0.37.0: sealed passwords from the console. Consent keys `oracle_password` and `redis_password`. Root makes an X25519
+> key pair at install / update (`secrets/settings.key` root 600, `config/settings.pub`); the inventory reports
+> `settings_seal_key`, `settings_passwords` (`set` / `not set`) and `settings_cp.passwords` (`{key: id}`). The console
+> seals a password to the host key (X25519 + SHA-256 + AES-256-GCM, the key name bound in the AAD) and sends
+> `settings.passwords {key: {id, sealed}}`; only root opens it, writes `secrets/collector.env` (backup first, restored
+> on rollback) and runs `update --restart`. The value is never stored outside collector.env and never printed. See
+> [docs/design.md](docs/design.md#sealed-passwords-from-the-console-v0370).
 > v0.21.1: an older collector user (e.g. from the collector's own package, home /home/otelcol-contrib) is moved
 > too (it is the recorded user or owns data/), but kept: it only loses the ACL entries and groups the installer gave it.
 > v0.21.0: the Unix users follow the standard: `monitoring` (collector + prober, was `otelcol-contrib`) and

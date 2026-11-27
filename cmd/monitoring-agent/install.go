@@ -167,6 +167,7 @@ func installCmd(args []string, stdout, stderr io.Writer) int {
 	if res.Failures > 0 {
 		return exitPlan
 	}
+	sealHousekeeping(stdout, *prefix, d) // v0.37.0: the key pair for sealed passwords
 
 	uid, gid := -1, -1
 	if installNeedRoot {

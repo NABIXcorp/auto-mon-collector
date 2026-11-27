@@ -38,9 +38,9 @@ var SettingKeys = []string{"allow_edit", "disk_scan", "docker", "rescan", "servi
 // capacity, capacity_pdbs}; tomcat = services.tomcat.{logs, time_zone, login_path}. A FIXED list, sorted.
 var SettingGroups = []string{"checks", "oracle", "tomcat"}
 
-// ConsentKeys: every key answers.yaml agent.settings.allow may list (switches + groups), sorted.
+// ConsentKeys: every key answers.yaml agent.settings.allow may list (switches + groups + v0.37.0 passwords), sorted.
 var ConsentKeys = func() []string {
-	out := append(append([]string{}, SettingKeys...), SettingGroups...)
+	out := append(append(append([]string{}, SettingKeys...), SettingGroups...), PasswordKeys...)
 	sort.Strings(out)
 	return out
 }()
@@ -99,10 +99,32 @@ type SettingsOverlay struct {
 	Set      SettingsSet `yaml:"set" json:"set"`
 	// Values (v0.36.0): the console's values of the groups (nil = none)
 	Values *SettingsValues `yaml:"values,omitempty" json:"values,omitempty"`
+	// Passwords (v0.37.0, the signed document only): {key: {id, sealed}}; a key missing = not managed (the env
+	// value is left as it is). Never written to the file.
+	Passwords map[string]SealedPassword `yaml:"-" json:"passwords,omitempty"`
+	// PasswordIDs (v0.37.0, the file only): {key: id} of the passwords root wrote (never the blob, never the value)
+	PasswordIDs map[string]string `yaml:"passwords,omitempty" json:"-"`
 }
 
-// Empty: nothing to install (no switch, no group).
-func (ov SettingsOverlay) Empty() bool { return len(ov.Set) == 0 && ov.Values.Groups() == nil }
+// Empty: nothing to install (no switch, no group, no password).
+func (ov SettingsOverlay) Empty() bool {
+	return len(ov.Set) == 0 && ov.Values.Groups() == nil && len(ov.Passwords) == 0 && len(ov.PasswordIDs) == 0
+}
+
+// passwordKeys: the password keys of the document or of the file, sorted.
+func (ov SettingsOverlay) passwordKeys() []string {
+	var out []string
+	for k := range ov.Passwords {
+		out = append(out, k)
+	}
+	for k := range ov.PasswordIDs {
+		if _, ok := ov.Passwords[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // String: the switches and the groups (plan output).
 func (ov SettingsOverlay) String() string {
@@ -112,6 +134,9 @@ func (ov SettingsOverlay) String() string {
 	}
 	if g := ov.Values.Groups(); g != nil {
 		parts = append(parts, "values of "+strings.Join(g, ", "))
+	}
+	if p := ov.passwordKeys(); p != nil {
+		parts = append(parts, "passwords "+strings.Join(p, ", "))
 	}
 	if len(parts) == 0 {
 		return "none"
@@ -254,6 +279,11 @@ func LoadSettingsOverlay(path string) (SettingsOverlay, error) {
 	}
 	if err := ov.Set.shape(); err != nil {
 		return ov, fmt.Errorf("%s: %w", path, err)
+	}
+	for k, id := range ov.PasswordIDs { // v0.37.0
+		if !slices.Contains(PasswordKeys, k) || !ValidPasswordID(id) {
+			return ov, fmt.Errorf("%s: passwords: %q: unknown key or bad id", path, k)
+		}
 	}
 	return ov, nil
 }

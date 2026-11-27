@@ -42,6 +42,7 @@ func TestUpdate(t *testing.T) {
 		{name: "failures: nothing applied", plan: engine.Result{Failures: 1, Changes: 2}, code: exitPlan, runs: 1, inOut: "nothing was changed"},
 		{name: "not installed", missing: true, code: exitUsage, runs: 0},
 		{name: "only VERSION: apply without restart", plan: engine.Result{Changes: 1, NoRestart: true}, code: exitOK, runs: 2, inOut: "NOT restarted"},
+		{name: "--restart: no change, still apply + start (a new password)", extra: []string{"--restart"}, plan: engine.Result{}, code: exitOK, runs: 2},
 		{name: "--plan, only VERSION", extra: []string{"--plan"}, plan: engine.Result{Changes: 1, NoRestart: true}, code: exitOK, runs: 1, inOut: "no restart"},
 	}
 	for _, c := range cases {

@@ -272,7 +272,26 @@ func planApply(apply bool, args []string, stdout, stderr io.Writer) int {
 	if res.Failures > 0 {
 		return exitPlan
 	}
+	if opts.Apply {
+		sealHousekeeping(stdout, *prefix, d)
+	}
 	return exitOK
+}
+
+// sealHousekeeping (v0.37.0, root, after apply / update / install of a host with an agent): the settings key pair
+// for sealed passwords when it is missing, and the "set / not set" file the agent reports (never a value).
+func sealHousekeeping(w io.Writer, prefix string, d engine.Desired) {
+	if d.Agent == nil {
+		return
+	}
+	msg, err := generate.SealHousekeeping(prefix)
+	if err != nil {
+		fmt.Fprintf(w, "  WARN  %v\n", err)
+		return
+	}
+	if msg != "" {
+		fmt.Fprintf(w, "  ok    %s\n", msg)
+	}
 }
 
 // update: the one-liner for a new release. Inputs come from the installation itself (<prefix>/answers.yaml,
@@ -290,6 +309,9 @@ func update(args []string, stdout, stderr io.Writer) int {
 	collectorFile := fs.String("collector-file", "", "")
 	noSmoke := fs.Bool("no-smoke", false, "")
 	noRollback := fs.Bool("no-rollback", false, "")
+	// v0.37.0: apply + restart even when no file changed (root's settings job after it wrote a password into
+	// secrets/collector.env: the units must read it)
+	restart := fs.Bool("restart", false, "")
 	// v0.23.0: the new site.d to use instead of the installed one (root's overlay job stages it; not for people:
 	// to change site.d by hand use plan / apply --site-dir)
 	siteFrom := fs.String("site-dir", "", "")
@@ -353,7 +375,10 @@ func update(args []string, stdout, stderr io.Writer) int {
 	case res.Failures > 0:
 		fmt.Fprintln(stdout, "\nupdate: the plan has failures: nothing was changed.")
 		return exitPlan
-	case res.Changes == 0:
+	case res.Changes == 0 && !*restart:
+		if !*planOnly {
+			sealHousekeeping(stdout, *prefix, d)
+		}
 		fmt.Fprintln(stdout, "\nupdate: up to date: nothing to change, nothing restarted.")
 		return exitOK
 	case *planOnly && res.NoRestart:
@@ -365,9 +390,9 @@ func update(args []string, stdout, stderr io.Writer) int {
 	}
 	// only VERSION / inventory.json differ: the running collector already has this configuration -> write them, do
 	// not restart (a restart resets cumulative counters for nothing)
-	opts.Apply, opts.Start = true, !res.NoRestart
+	opts.Apply, opts.Start = true, !res.NoRestart || *restart
 	opts.Smoke = false // the identical configuration passed the smoke run seconds ago
-	noRestart := res.NoRestart
+	noRestart := res.NoRestart && !*restart
 	if res, err = runEngine(ctx, opts, d); err != nil {
 		fmt.Fprintf(stderr, "monitoring-agent update: %v\n", err)
 		return exitUsage
@@ -375,6 +400,7 @@ func update(args []string, stdout, stderr io.Writer) int {
 	if res.Failures > 0 || res.RolledBack {
 		return exitPlan
 	}
+	sealHousekeeping(stdout, *prefix, d)
 	if noRestart {
 		fmt.Fprintln(stdout, "\nupdate: only the installer version / the service inventory changed: written, collector NOT restarted.")
 	}

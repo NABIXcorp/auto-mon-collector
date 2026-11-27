@@ -73,6 +73,16 @@
 //     "settings_pinned" may list groups, and "settings_values" (only with settings_edit) = the EFFECTIVE values of
 //     the three groups (every group and list present). The bootstrap request carries "version" (this binary's).
 //     An agent before v0.36.0 rejects a document whose settings carry "values": send values only to v0.36.0+.
+//   - v0.37.0: sealed passwords. New consent keys oracle_password (-> ORACLE_MON_PASSWORD) and redis_password (->
+//     REDIS_PASSWORD), never pinned; "settings" may carry "passwords":{"<key>":{"id":"<1..64 [A-Za-z0-9_-]>",
+//     "sealed":"<blob>"}} (a key missing = not managed: the env value stays). blob = standard base64 of
+//     eph_pub[32] || nonce[12] || AES-256-GCM(k, plain, aad = "amc-seal-v1|" + key), k = SHA-256("amc-seal-v1" ||
+//     X25519(eph_priv, host_pub) || eph_pub || host_pub) (generate.Seal / Open; plain 1..256 bytes without NUL, CR,
+//     LF, '). Root opens a password with a new id, writes collector.env (backup, rollback) and runs the update with
+//     --restart; the file and the inventory keep only {key: id}. The inventory (with settings_edit):
+//     "settings_seal_key" (the host's X25519 public key, standard base64; absent = no key yet), "settings_passwords"
+//     {"<key>": "set" | "not set"} for every password key, "settings_cp.passwords" {key: id} ({} = none). An agent
+//     before v0.37.0 rejects a document whose settings carry "passwords": send them only to v0.37.0+.
 package agent
 
 import (

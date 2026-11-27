@@ -2,6 +2,8 @@ package selfupdate
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"os"
@@ -243,5 +245,108 @@ func TestSettingsValues(t *testing.T) {
 	p.request(values(1, 7, map[string]any{"checks": checks}), nil)
 	if res, _ := p.settingsRun("", nil); res.Result != "refused" || !strings.Contains(p.settingsResult().Detail, "checks is pinned") {
 		t.Errorf("pinned: %+v %+v", res, p.settingsResult())
+	}
+}
+
+// v0.37.0: sealed passwords: root opens a new one, writes collector.env (backup first), records only the id, runs
+// the update with --restart; the same id is not opened again; a failed update puts collector.env back
+func TestSettingsPasswords(t *testing.T) {
+	const secret = "Pa55-w0rd!"
+	e := newEnv(t, "  settings:\n    allow: [oracle_password, redis_password, rescan]\n")
+	if err := os.MkdirAll(filepath.Join(e.prefix, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(e.prefix, "secrets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const envBefore = "OO_AUTH='Basic abc'\nORACLE_MON_PASSWORD='old'\n"
+	e.write("secrets/collector.env", envBefore, 0o600)
+	pwDoc := func(rev, doc int, pw map[string]any) func(map[string]any) {
+		return func(d map[string]any) {
+			settingsDoc(rev, map[string]bool{})(d)
+			d["settings"].(map[string]any)["passwords"] = pw
+			d["revision"] = doc
+		}
+	}
+	var envSeen string
+	run := func(out string, fail error) (agent.UpdateResult, []string) {
+		var calls []string
+		res := Run(context.Background(), Options{
+			Prefix: e.prefix, Host: "app-1.example.com", Running: "v0.37.0", Arch: "amd64", RootUID: os.Getuid(),
+			Now: func() time.Time { return time.Unix(testNow, 0) }, Out: &e.out,
+			Run: func(lock *os.File, name string, args ...string) ([]byte, error) {
+				calls = append(calls, filepath.Base(name)+" "+strings.Join(args, " "))
+				if len(args) > 0 && args[0] == "update" {
+					envSeen = e.read("secrets/collector.env")
+					return []byte(out), fail
+				}
+				return nil, nil
+			},
+		})
+		return res, calls
+	}
+	// no key pair yet: refused, nothing written
+	other, _ := ecdh.X25519().GenerateKey(rand.Reader)
+	early, _ := generate.Seal(other.PublicKey().Bytes(), "oracle_password", []byte(secret))
+	e.request(pwDoc(1, 7, map[string]any{"oracle_password": map[string]any{"id": "pw-1", "sealed": early}}), nil)
+	if res, calls := run("update: done\n", nil); res.Result != "refused" || !strings.Contains(e.settingsResult().Detail, "no settings key pair") || len(calls) != 0 {
+		t.Fatalf("no key: %+v %q", e.settingsResult(), calls)
+	}
+	if _, err := generate.EnsureSealKey(e.prefix); err != nil {
+		t.Fatal(err)
+	}
+	priv, _ := generate.LoadSealPriv(e.prefix)
+	pub := priv.PublicKey().Bytes()
+	// sealed to another key / for another slot: refused
+	wrongSlot, _ := generate.Seal(pub, "redis_password", []byte(secret))
+	for i, b := range []string{early, wrongSlot} {
+		e.request(pwDoc(2+i, 8+i, map[string]any{"oracle_password": map[string]any{"id": "pw-1", "sealed": b}}), nil)
+		if res, calls := run("update: done\n", nil); res.Result != "refused" || !strings.Contains(e.settingsResult().Detail, "cannot open") || len(calls) != 0 {
+			t.Errorf("blob %d: %+v %q", i, e.settingsResult(), calls)
+		}
+	}
+	if e.read("secrets/collector.env") != envBefore {
+		t.Fatal("collector.env changed by a refused set")
+	}
+	// a good one
+	good, _ := generate.Seal(pub, "oracle_password", []byte(secret))
+	e.request(pwDoc(5, 11, map[string]any{"oracle_password": map[string]any{"id": "pw-1", "sealed": good}}), nil)
+	res, calls := run("update: done\n", nil)
+	if res.Result != "applied" || len(calls) != 1 || !strings.HasSuffix(calls[0], "--no-fetch --restart") {
+		t.Fatalf("applied: %+v %q\n%s", res, calls, e.out.String())
+	}
+	if !strings.Contains(envSeen, "ORACLE_MON_PASSWORD='"+secret+"'") || !strings.Contains(envSeen, "OO_AUTH='Basic abc'") {
+		t.Errorf("collector.env as `update` saw it: %q", envSeen)
+	}
+	if e.read(envBackup) != envBefore {
+		t.Errorf("backup: %q", e.read(envBackup))
+	}
+	file := e.read(generate.SettingsFile)
+	if !strings.Contains(file, "oracle_password: pw-1") || strings.Contains(file, good) || strings.Contains(file, secret) {
+		t.Errorf("settings file: %q", file)
+	}
+	if st, _ := generate.LoadPasswordState(e.prefix); st["oracle_password"] != "set" || st["redis_password"] != "not set" {
+		t.Errorf("state: %v", st)
+	}
+	if strings.Contains(e.out.String(), secret) || strings.Contains(e.read(agent.SettingsResultFile), secret) {
+		t.Error("the value was printed")
+	}
+	// the same id again (even sealed to an old key): not opened, no --restart
+	e.request(pwDoc(6, 12, map[string]any{"oracle_password": map[string]any{"id": "pw-1", "sealed": early}}), nil)
+	if res, calls := run("update: done\n", nil); res.Result != "applied" || len(calls) != 1 || strings.Contains(calls[0], "--restart") {
+		t.Errorf("same id: %+v %q", res, calls)
+	}
+	// a new one whose update fails: collector.env, the file and the units go back
+	afterGood := e.read("secrets/collector.env")
+	fileBefore := e.read(generate.SettingsFile)
+	r2, _ := generate.Seal(pub, "redis_password", []byte("r3dis"))
+	e.request(pwDoc(7, 13, map[string]any{"oracle_password": map[string]any{"id": "pw-1", "sealed": early},
+		"redis_password": map[string]any{"id": "pw-2", "sealed": r2}}), nil)
+	res, calls = run("\nROLLED BACK: 1 failure(s), 0 warning(s). The new configuration is NOT active.\n", errors.New("exit 3"))
+	if res.Result != "rolled_back" || len(calls) != 2 || calls[1] != "systemctl try-restart monitoring-collector.service" {
+		t.Fatalf("rolled back: %+v %q\n%s", res, calls, e.out.String())
+	}
+	if !strings.Contains(envSeen, "REDIS_PASSWORD='r3dis'") || e.read("secrets/collector.env") != afterGood || e.read(generate.SettingsFile) != fileBefore {
+		t.Errorf("not restored: env %q file %q", e.read("secrets/collector.env"), e.read(generate.SettingsFile))
 	}
 }

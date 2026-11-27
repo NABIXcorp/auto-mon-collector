@@ -197,6 +197,23 @@ func CheckSettings(ov SettingsOverlay, raw Answers) error {
 	if err := CheckSettingsSet(ov.Set, raw.Agent); err != nil {
 		return err
 	}
+	// v0.37.0: passwords: known key, consented, an id, a blob of the right shape (root opens it: Open)
+	for _, k := range ov.passwordKeys() {
+		p, ok := ov.Passwords[k]
+		switch {
+		case !slices.Contains(PasswordKeys, k):
+			return fmt.Errorf("settings: unknown password key %q (known: %s)", k, strings.Join(PasswordKeys, ", "))
+		case !raw.Agent.Settings.Allows(k):
+			return fmt.Errorf("settings: %s is not in answers.yaml agent.settings.allow on this host", k)
+		case !ok:
+			continue // the file's id only
+		case !ValidPasswordID(p.ID):
+			return fmt.Errorf("settings: %s: id must be 1..64 of A-Z a-z 0-9 _ -", k)
+		}
+		if err := checkSealedShape(p.Sealed); err != nil {
+			return fmt.Errorf("settings: %s: %v", k, err)
+		}
+	}
 	v := ov.Values
 	if v == nil {
 		return nil

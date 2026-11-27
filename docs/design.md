@@ -1025,3 +1025,31 @@ keys, each a GROUP the console sets as a whole.
   keys this installer knows (an older one refuses an unknown key in the answers).
 - Old agents: a document whose `settings` carries `values` is rejected by an agent before v0.36.0 (unknown field):
   the console sends values only to v0.36.0+. A switches-only set is accepted as before.
+
+### Sealed passwords from the console (v0.37.0)
+
+Why: the Oracle and Redis monitoring passwords were the last thing that still needed a root login after an install.
+They now come from the console, sealed end to end: the agent user, the console's database and every log hold only a
+blob that only root on this host can open.
+
+- **Consent keys** `oracle_password` (-> `ORACLE_MON_PASSWORD`) and `redis_password` (-> `REDIS_PASSWORD`) in
+  `secrets/collector.env` (`generate.PasswordKeys` / `PasswordEnv`). Never pinned (answers hold no secrets).
+- **Host key**: root makes an X25519 key pair after `install`, `apply` and `update` of a host with an agent section
+  when it is missing: `secrets/settings.key` (root 600, standard base64 of the 32 raw bytes), `config/settings.pub`
+  (644, standard base64). Losing it = a new pair at the next update; the console sends the passwords again.
+- **Seal** (stdlib only, `generate.Seal` / `generate.Open`): `blob = base64(eph_pub[32] || nonce[12] ||
+  AES-256-GCM(k, plain, aad = "amc-seal-v1|" + key))`, `k = SHA-256("amc-seal-v1" || X25519(eph_priv, host_pub) ||
+  eph_pub || host_pub)`, key = the consent key (`oracle_password`): a blob cannot be opened for another slot. Plain:
+  1..256 bytes, no NUL / CR / LF / `'`. Test vector in `internal/generate/seal_test.go` (`TestSealVector`).
+- **Document**: `settings.passwords {"<key>": {"id": "<1..64 [A-Za-z0-9_-]>", "sealed": "<blob>"}}`; a key missing =
+  not managed (the env line stays as it is). The agent checks key, consent, id and blob shape; root opens every
+  password whose id differs from the installed one (the same id = written before, not opened again), writes the env
+  lines (`secrets/collector.env.before-settings` = the backup, root 600), records only `{key: id}` in
+  `config/settings.cp.yaml` and runs `monitoring-agent update --no-fetch --restart` (`--restart` = apply and restart
+  even when no configuration file changed). A failed update puts collector.env and the set back and restarts the
+  collector with the previous values. The blob is not written to settings.cp.yaml (it stays only in the signed
+  request file, which only the agent and root can read).
+- **Set / not set**: the agent cannot read collector.env, so root writes `config/settings-passwords.json`
+  (`{"<key>": "set" | "not set"}`, never a value) after install / apply / update and after each settings job.
+- **Inventory** (with `settings_edit`): `settings_seal_key`, `settings_passwords`, `settings_cp.passwords` (`{key:
+  id}`, `{}` = none). An agent before v0.37.0 rejects a document whose settings carry `passwords`.

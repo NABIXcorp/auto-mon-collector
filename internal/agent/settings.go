@@ -111,10 +111,13 @@ func reportSettingsResult(ctx context.Context, cfg Config, cl *Client, st *State
 
 // invSettings: the settings part of the inventory.
 type invSettings struct {
-	Edit   []string                  // answers agent.settings.allow (nil = no consent)
-	Pinned []string                  // never nil
-	CP     *generate.SettingsOverlay // nil = no consent
-	Values *generate.SettingsValues  // v0.36.0: the effective values (nil = no consent)
+	Edit   []string                 // answers agent.settings.allow (nil = no consent)
+	Pinned []string                 // never nil
+	CP     *InvSettingsCP           // nil = no consent
+	Values *generate.SettingsValues // v0.36.0: the effective values (nil = no consent)
+	// v0.37.0 (only with consent)
+	SealKey   string
+	Passwords map[string]string
 }
 
 // localSettings: the inventory's settings part from the host owner's side (Local.Agent keeps the pinned keys).
@@ -125,15 +128,19 @@ func localSettings(l Local) invSettings {
 	}
 	s.Edit = append([]string{}, l.Agent.Settings.Allow...)
 	sort.Strings(s.Edit)
-	cp := l.SettingsCP
+	cp := InvSettingsCP{Revision: l.SettingsCP.Revision, Set: l.SettingsCP.Set, Values: l.SettingsCP.Values, Passwords: map[string]string{}}
 	if cp.Set == nil {
 		cp.Set = generate.SettingsSet{}
 	}
 	if cp.Values == nil {
 		cp.Values = &generate.SettingsValues{}
 	}
+	for k, id := range l.SettingsCP.PasswordIDs {
+		cp.Passwords[k] = id
+	}
 	s.CP = &cp
 	v := l.Values
 	s.Values = &v
+	s.SealKey, s.Passwords = l.SealKey, l.Passwords
 	return s
 }
